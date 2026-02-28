@@ -1,0 +1,308 @@
+const fs = require('fs');
+const path = require('path');
+const { query } = require('../database/connection');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+
+/**
+ * IMAGE SERVICE
+ * 
+ * Handles product image fetching and storage.
+ * 
+ * Flow:
+ * 1. Search for product image via SerpAPI (Google Images wrapper)
+ * 2. Download the image
+ * 3. Upload to Cloudflare R2 (remote storage with CDN)
+ * 4. Save the public R2 URL to products.image_url
+ * 
+ * Env vars:
+ *   SERPAPI_KEY - SerpAPI key (primary, wraps Google Images)
+ *   R2_ACCOUNT_ID - Cloudflare account ID
+ *   R2_ACCESS_KEY_ID - R2 API token access key
+ *   R2_SECRET_ACCESS_KEY - R2 API token secret key
+ *   R2_BUCKET_NAME - R2 bucket name (e.g., petfood-images)
+ *   R2_PUBLIC_URL - R2 public bucket URL (e.g., https://pub-xxxxx.r2.dev)
+ */
+
+class ImageService {
+  constructor() {
+    this.serpApiKey = process.env.SERPAPI_KEY;
+    // Google as fallback
+    this.googleApiKey = process.env.GOOGLE_SEARCH_API_KEY;
+    this.searchEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
+
+    // Cloudflare R2
+    this.r2BucketName = process.env.R2_BUCKET_NAME;
+    this.r2PublicUrl = process.env.R2_PUBLIC_URL;
+    this.r2Client = null;
+
+    if (process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY) {
+      this.r2Client = new S3Client({
+        region: 'auto',
+        endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+        credentials: {
+          accessKeyId: process.env.R2_ACCESS_KEY_ID,
+          secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+        },
+      });
+      console.log('☁️  [R2] Cloudflare R2 configured');
+    } else {
+      console.log('⚠️  [R2] Cloudflare R2 not configured — images will be saved locally');
+    }
+  }
+
+  // ─── IMAGE SEARCH ───────────────────────────────────────────
+
+  /**
+   * Search for a product image
+   * Priority: SerpAPI → Google Custom Search
+   */
+  async searchProductImage(productName, brand) {
+    if (this.serpApiKey) {
+      return this.searchViaSerpApi(productName, brand);
+    }
+    if (this.googleApiKey && this.searchEngineId) {
+      return this.searchViaGoogle(productName, brand);
+    }
+    console.log('⚠️ No image search API configured (set SERPAPI_KEY or GOOGLE_SEARCH_API_KEY)');
+    return null;
+  }
+
+  /**
+   * SerpAPI - Google Images wrapper (primary)
+   */
+  async searchViaSerpApi(productName, brand) {
+    const searchQuery = `${brand || ''} ${productName} pet food product`.trim();
+    const url = `https://serpapi.com/search.json?` +
+      `api_key=${this.serpApiKey}&` +
+      `engine=google_images&` +
+      `q=${encodeURIComponent(searchQuery)}&` +
+      `num=1`;
+
+    try {
+      console.log(`🔍 [SerpAPI] Searching: "${searchQuery}"`);
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(10000)
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        console.error(`❌ [SerpAPI] HTTP ${response.status}: ${errText.slice(0, 200)}`);
+        return null;
+      }
+
+      const data = await response.json();
+
+      if (data.images_results && data.images_results.length > 0) {
+        const imageUrl = data.images_results[0].original;
+        console.log(`✅ [SerpAPI] Found: ${imageUrl}`);
+        return imageUrl;
+      }
+
+      console.log(`⚠️ [SerpAPI] No results for: "${searchQuery}"`);
+      return null;
+    } catch (error) {
+      console.error(`❌ [SerpAPI] Error:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Google Custom Search API (fallback)
+   */
+  async searchViaGoogle(productName, brand) {
+    const searchQuery = `${brand || ''} ${productName} pet food`.trim();
+    const url = `https://www.googleapis.com/customsearch/v1?` +
+      `key=${this.googleApiKey}&` +
+      `cx=${this.searchEngineId}&` +
+      `q=${encodeURIComponent(searchQuery)}&` +
+      `searchType=image&` +
+      `num=1&` +
+      `imgSize=medium&` +
+      `safe=active`;
+
+    try {
+      console.log(`🔍 [Google Image Search] Searching: "${searchQuery}"`);
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.items && data.items.length > 0) {
+        const imageUrl = data.items[0].link;
+        console.log(`✅ [Google Image Search] Found: ${imageUrl}`);
+        return imageUrl;
+      }
+
+      console.log(`⚠️ [Google Image Search] No results for: "${searchQuery}"`);
+      return null;
+    } catch (error) {
+      console.error(`❌ [Google Image Search] Error:`, error.message);
+      return null;
+    }
+  }
+
+  // ─── IMAGE STORAGE (R2 with local fallback) ─────────────────
+
+  /**
+   * Download an image from URL, upload to R2, return public URL
+   * Falls back to local storage if R2 is not configured
+   */
+  async downloadAndSave(imageUrl, productId) {
+    try {
+      console.log(`📥 [Image] Downloading: ${imageUrl}`);
+      const response = await fetch(imageUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; PetFoodAnalyzer/1.0)',
+        },
+        signal: AbortSignal.timeout(10000)
+      });
+
+      if (!response.ok) {
+        console.log(`⚠️ [Image] HTTP ${response.status} for: ${imageUrl}`);
+        return null;
+      }
+
+      const contentType = response.headers.get('content-type') || 'image/jpeg';
+      let ext = '.jpg';
+      if (contentType.includes('png')) ext = '.png';
+      else if (contentType.includes('webp')) ext = '.webp';
+      else if (contentType.includes('gif')) ext = '.gif';
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+
+      // Validate it's actually an image
+      if (buffer.length < 100) {
+        console.log(`⚠️ [Image] File too small (${buffer.length} bytes), skipping`);
+        return null;
+      }
+
+      const filename = `products/${productId}${ext}`;
+
+      // Upload to R2 if configured, otherwise save locally
+      if (this.r2Client) {
+        return await this.uploadToR2(buffer, filename, contentType);
+      } else {
+        return await this.saveLocally(buffer, `${productId}${ext}`);
+      }
+    } catch (error) {
+      console.error(`❌ [Image] Download error:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Upload image buffer to Cloudflare R2
+   * @returns {string} Public URL
+   */
+  async uploadToR2(buffer, key, contentType) {
+    try {
+      await this.r2Client.send(new PutObjectCommand({
+        Bucket: this.r2BucketName,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType,
+      }));
+
+      const publicUrl = `${this.r2PublicUrl}/${key}`;
+      console.log(`☁️  [R2] Uploaded: ${publicUrl} (${(buffer.length / 1024).toFixed(1)}KB)`);
+      return publicUrl;
+    } catch (error) {
+      console.error(`❌ [R2] Upload error:`, error.message);
+      // Fall back to local storage
+      const filename = key.split('/').pop();
+      return await this.saveLocally(buffer, filename);
+    }
+  }
+
+  /**
+   * Save image locally (fallback when R2 is not configured)
+   */
+  async saveLocally(buffer, filename) {
+    const dir = path.join(__dirname, '../../public/products');
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const filepath = path.join(dir, filename);
+    fs.writeFileSync(filepath, buffer);
+    console.log(`💾 [Local] Saved: ${filename} (${(buffer.length / 1024).toFixed(1)}KB)`);
+    return `/images/products/${filename}`;
+  }
+
+  /**
+   * Save a user-uploaded image (from label scan)
+   */
+  async saveUserImage(imageBuffer, productId, mimeType = 'image/jpeg') {
+    try {
+      let ext = '.jpg';
+      if (mimeType.includes('png')) ext = '.png';
+      else if (mimeType.includes('webp')) ext = '.webp';
+
+      const filename = `products/${productId}${ext}`;
+
+      if (this.r2Client) {
+        return await this.uploadToR2(imageBuffer, filename, mimeType);
+      } else {
+        return await this.saveLocally(imageBuffer, `${productId}${ext}`);
+      }
+    } catch (error) {
+      console.error(`❌ [User Image] Error:`, error.message);
+      return null;
+    }
+  }
+
+  // ─── FULL FLOW ──────────────────────────────────────────────
+
+  /**
+   * Full flow: Find, download, upload to R2, save URL to DB
+   */
+  async fetchAndSaveProductImage(productId, productName, brand) {
+    // Check if image already exists
+    const existingUrl = await this.getExistingImageUrl(productId);
+    if (existingUrl) {
+      console.log(`⚡ [Image] Already have image for product ${productId}`);
+      return existingUrl;
+    }
+
+    // Search for image
+    const sourceUrl = await this.searchProductImage(productName, brand);
+    if (!sourceUrl) return null;
+
+    // Download and upload to R2
+    const publicUrl = await this.downloadAndSave(sourceUrl, productId);
+    if (!publicUrl) return null;
+
+    // Update product in DB
+    await this.updateProductImageUrl(productId, publicUrl);
+    return publicUrl;
+  }
+
+  /**
+   * Check if we already have an image for this product
+   */
+  async getExistingImageUrl(productId) {
+    try {
+      const [product] = await query(
+        'SELECT image_url FROM products WHERE id = ? AND image_url IS NOT NULL AND image_url != ""',
+        [productId]
+      );
+      return product?.image_url || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Update the image_url column in the products table
+   */
+  async updateProductImageUrl(productId, imageUrl) {
+    try {
+      await query(
+        'UPDATE products SET image_url = ? WHERE id = ?',
+        [imageUrl, productId]
+      );
+      console.log(`✅ [Image DB] Updated image_url for product ${productId}`);
+    } catch (error) {
+      console.error(`❌ [Image DB] Error updating:`, error.message);
+    }
+  }
+}
+
+module.exports = new ImageService();

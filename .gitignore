@@ -1,0 +1,15 @@
+# Backend
+backend/node_modules/
+backend/.env
+backend/public/products/
+*.log
+
+# iOS
+ios/PetFoodAnalyzer.xcodeproj/xcuserdata/
+ios/PetFoodAnalyzer.xcodeproj/project.xcworkspace/xcuserdata/
+ios/*.xcuserstate
+ios/DerivedData/
+
+# General
+.DS_Store
+*.swp

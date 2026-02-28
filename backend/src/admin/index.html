@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PetFood Analyzer - Admin</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --success: #3fb950;
+      --warning: #d29922;
+      --danger: #f85149;
+    }
+    
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem;
+    }
+    
+    h1 { 
+      font-size: 1.75rem; 
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, var(--accent), #a371f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    .subtitle { color: var(--text-muted); margin-bottom: 2rem; }
+    
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      text-align: center;
+    }
+    
+    .stat-value { font-size: 2rem; font-weight: bold; color: var(--accent); }
+    .stat-label { font-size: 0.85rem; color: var(--text-muted); }
+    
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    
+    h2 { font-size: 1.25rem; }
+    
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+    }
+    
+    .tab {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    
+    .tab.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+    
+    .ingredient-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    
+    .ingredient-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+    
+    .ingredient-info { flex: 1; }
+    .ingredient-name { font-weight: 600; font-size: 1.1rem; }
+    .ingredient-meta { font-size: 0.85rem; color: var(--text-muted); }
+    
+    .occurrence-badge {
+      background: var(--accent);
+      color: white;
+      padding: 0.25rem 0.75rem;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    
+    .actions { display: flex; gap: 0.5rem; }
+    
+    button {
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: opacity 0.2s;
+    }
+    
+    button:hover { opacity: 0.8; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-success { background: var(--success); color: white; }
+    .btn-danger { background: var(--danger); color: white; }
+    .btn-secondary { background: var(--border); color: var(--text); }
+    
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.8);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    
+    .modal-overlay.active { display: flex; }
+    
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      width: 90%;
+      max-width: 600px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    
+    .modal h3 { margin-bottom: 1rem; }
+    
+    .form-group { margin-bottom: 1rem; }
+    .form-group label { display: block; margin-bottom: 0.25rem; color: var(--text-muted); font-size: 0.85rem; }
+    
+    .form-group input, .form-group select, .form-group textarea {
+      width: 100%;
+      padding: 0.5rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    
+    .form-group textarea { resize: vertical; min-height: 80px; }
+    
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    
+    .ai-suggestion {
+      background: var(--bg);
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+    
+    .ai-suggestion h4 { color: var(--accent); margin-bottom: 0.5rem; font-size: 0.9rem; }
+    .ai-suggestion p { font-size: 0.85rem; color: var(--text-muted); }
+    
+    .confidence { 
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .confidence.high { background: var(--success); color: white; }
+    .confidence.medium { background: var(--warning); color: black; }
+    .confidence.low { background: var(--danger); color: white; }
+    
+    .modal-actions {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: flex-end;
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+    }
+    
+    .loading { text-align: center; padding: 2rem; color: var(--text-muted); }
+    .empty { text-align: center; padding: 3rem; color: var(--text-muted); }
+    
+    .tag {
+      display: inline-block;
+      background: var(--border);
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      margin-right: 0.25rem;
+      margin-bottom: 0.25rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>🐾 PetFood Analyzer Admin</h1>
+  <p class="subtitle">Manage ingredients database and review unknowns</p>
+
+  <div class="stats" id="stats">
+    <div class="stat-card">
+      <div class="stat-value" id="stat-ingredients">-</div>
+      <div class="stat-label">Ingredients</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-products">-</div>
+      <div class="stat-label">Products</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-pending">-</div>
+      <div class="stat-label">Pending Review</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-scans">-</div>
+      <div class="stat-label">Total Scans</div>
+    </div>
+  </div>
+
+  <div class="section-header">
+    <h2>Unknown Ingredients</h2>
+    <div class="tabs">
+      <button class="tab active" data-status="pending">Pending</button>
+      <button class="tab" data-status="added">Added</button>
+      <button class="tab" data-status="ignored">Ignored</button>
+    </div>
+  </div>
+
+  <div class="ingredient-list" id="ingredient-list">
+    <div class="loading">Loading...</div>
+  </div>
+
+  <!-- Review Modal -->
+  <div class="modal-overlay" id="modal">
+    <div class="modal">
+      <h3>Review Ingredient</h3>
+      
+      <div class="ai-suggestion" id="ai-suggestion" style="display:none;">
+        <h4>🤖 AI Suggestion <span class="confidence" id="ai-confidence">-</span></h4>
+        <p id="ai-reasoning">-</p>
+      </div>
+
+      <form id="review-form">
+        <input type="hidden" id="unknown-id">
+        
+        <div class="form-group">
+          <label>Ingredient Name</label>
+          <input type="text" id="form-name" required>
+        </div>
+        
+        <div class="form-row">
+          <div class="form-group">
+            <label>Category</label>
+            <select id="form-category">
+              <option value="protein">Protein</option>
+              <option value="carbohydrate">Carbohydrate</option>
+              <option value="fat">Fat</option>
+              <option value="fiber">Fiber</option>
+              <option value="vitamin">Vitamin</option>
+              <option value="mineral">Mineral</option>
+              <option value="preservative">Preservative</option>
+              <option value="additive">Additive</option>
+              <option value="flavor">Flavor</option>
+              <option value="filler">Filler</option>
+              <option value="other" selected>Other</option>
+            </select>
+          </div>
+          
+          <div class="form-group">
+            <label>Base Risk Score (0-100)</label>
+            <input type="number" id="form-risk" min="0" max="100" value="15">
+          </div>
+        </div>
+        
+        <div class="form-row">
+          <div class="form-group">
+            <label>Dog Risk Modifier</label>
+            <input type="number" id="form-dog-mod" min="0.1" max="5" step="0.1" value="1.0">
+          </div>
+          
+          <div class="form-group">
+            <label>Cat Risk Modifier</label>
+            <input type="number" id="form-cat-mod" min="0.1" max="5" step="0.1" value="1.0">
+          </div>
+        </div>
+        
+        <div class="form-group">
+          <label>Tags (comma-separated)</label>
+          <input type="text" id="form-tags" placeholder="natural, beneficial">
+        </div>
+        
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="form-description" placeholder="Brief description of the ingredient..."></textarea>
+        </div>
+        
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" onclick="closeModal()">Cancel</button>
+          <button type="button" class="btn-danger" onclick="ignoreIngredient()">Ignore</button>
+          <button type="button" class="btn-primary" onclick="getSuggestion()">🤖 Get AI Suggestion</button>
+          <button type="submit" class="btn-success">✓ Approve & Add</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const API = '/api/admin';
+    let currentStatus = 'pending';
+
+    // Load stats
+    async function loadStats() {
+      try {
+        const res = await fetch(`${API}/stats`);
+        const data = await res.json();
+        document.getElementById('stat-ingredients').textContent = data.ingredients;
+        document.getElementById('stat-products').textContent = data.products;
+        document.getElementById('stat-pending').textContent = data.unknownPending;
+        document.getElementById('stat-scans').textContent = data.totalScans;
+      } catch (e) {
+        console.error('Failed to load stats:', e);
+      }
+    }
+
+    // Load unknown ingredients
+    async function loadUnknowns(status = 'pending') {
+      currentStatus = status;
+      const list = document.getElementById('ingredient-list');
+      list.innerHTML = '<div class="loading">Loading...</div>';
+      
+      // Update tabs
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelector(`.tab[data-status="${status}"]`).classList.add('active');
+
+      try {
+        const res = await fetch(`${API}/unknown-ingredients?status=${status}&limit=100`);
+        const data = await res.json();
+        
+        if (data.unknowns.length === 0) {
+          list.innerHTML = '<div class="empty">No ingredients found</div>';
+          return;
+        }
+
+        list.innerHTML = data.unknowns.map(u => `
+          <div class="ingredient-card">
+            <div class="ingredient-info">
+              <div class="ingredient-name">${escapeHtml(u.normalized_name)}</div>
+              <div class="ingredient-meta">
+                Raw: "${escapeHtml(u.raw_name)}" • 
+                First seen: ${new Date(u.first_seen).toLocaleDateString()}
+              </div>
+            </div>
+            <span class="occurrence-badge">${u.occurrence_count}×</span>
+            <div class="actions">
+              ${status === 'pending' ? `
+                <button class="btn-primary" onclick="openReview('${u.id}', '${escapeHtml(u.normalized_name)}')">Review</button>
+              ` : ''}
+            </div>
+          </div>
+        `).join('');
+      } catch (e) {
+        list.innerHTML = '<div class="empty">Failed to load ingredients</div>';
+        console.error(e);
+      }
+    }
+
+    // Open review modal
+    function openReview(id, name) {
+      document.getElementById('unknown-id').value = id;
+      document.getElementById('form-name').value = name;
+      document.getElementById('form-risk').value = 15;
+      document.getElementById('form-dog-mod').value = 1.0;
+      document.getElementById('form-cat-mod').value = 1.0;
+      document.getElementById('form-tags').value = '';
+      document.getElementById('form-description').value = '';
+      document.getElementById('form-category').value = 'other';
+      document.getElementById('ai-suggestion').style.display = 'none';
+      document.getElementById('modal').classList.add('active');
+    }
+
+    function closeModal() {
+      document.getElementById('modal').classList.remove('active');
+    }
+
+    // Get AI suggestion
+    async function getSuggestion() {
+      const id = document.getElementById('unknown-id').value;
+      const btn = event.target;
+      btn.disabled = true;
+      btn.textContent = 'Analyzing...';
+
+      try {
+        const res = await fetch(`${API}/unknown-ingredients/${id}/suggest`, { method: 'POST' });
+        const data = await res.json();
+        const s = data.suggestion;
+        
+        // Fill form with suggestion
+        document.getElementById('form-name').value = s.name || document.getElementById('form-name').value;
+        document.getElementById('form-category').value = s.category || 'other';
+        document.getElementById('form-risk').value = s.baseRiskScore || 15;
+        document.getElementById('form-dog-mod').value = s.dogRiskModifier || 1.0;
+        document.getElementById('form-cat-mod').value = s.catRiskModifier || 1.0;
+        document.getElementById('form-tags').value = (s.tags || []).join(', ');
+        document.getElementById('form-description').value = s.description || '';
+        
+        // Show AI suggestion box
+        const suggestionBox = document.getElementById('ai-suggestion');
+        suggestionBox.style.display = 'block';
+        document.getElementById('ai-reasoning').textContent = s.reasoning || 'No reasoning provided';
+        const conf = document.getElementById('ai-confidence');
+        conf.textContent = s.confidence || 'unknown';
+        conf.className = 'confidence ' + (s.confidence || 'low');
+        
+      } catch (e) {
+        alert('Failed to get AI suggestion');
+        console.error(e);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🤖 Get AI Suggestion';
+      }
+    }
+
+    // Approve and add ingredient
+    document.getElementById('review-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = document.getElementById('unknown-id').value;
+      
+      const tags = document.getElementById('form-tags').value
+        .split(',')
+        .map(t => t.trim())
+        .filter(t => t);
+
+      try {
+        const res = await fetch(`${API}/unknown-ingredients/${id}/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: document.getElementById('form-name').value,
+            category: document.getElementById('form-category').value,
+            baseRiskScore: parseInt(document.getElementById('form-risk').value),
+            dogModifier: parseFloat(document.getElementById('form-dog-mod').value),
+            catModifier: parseFloat(document.getElementById('form-cat-mod').value),
+            tags,
+            description: document.getElementById('form-description').value
+          })
+        });
+
+        if (res.ok) {
+          closeModal();
+          loadUnknowns(currentStatus);
+          loadStats();
+        } else {
+          const err = await res.json();
+          alert('Failed: ' + (err.error || 'Unknown error'));
+        }
+      } catch (e) {
+        alert('Failed to add ingredient');
+        console.error(e);
+      }
+    });
+
+    // Ignore ingredient
+    async function ignoreIngredient() {
+      const id = document.getElementById('unknown-id').value;
+      const reason = prompt('Reason for ignoring (optional):');
+      
+      try {
+        await fetch(`${API}/unknown-ingredients/${id}/ignore`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason })
+        });
+        closeModal();
+        loadUnknowns(currentStatus);
+        loadStats();
+      } catch (e) {
+        alert('Failed to ignore ingredient');
+      }
+    }
+
+    // Tab click handlers
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => loadUnknowns(tab.dataset.status));
+    });
+
+    // Escape HTML
+    function escapeHtml(str) {
+      return str.replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      })[c]);
+    }
+
+    // Initial load
+    loadStats();
+    loadUnknowns('pending');
+  </script>
+</body>
+</html>
+

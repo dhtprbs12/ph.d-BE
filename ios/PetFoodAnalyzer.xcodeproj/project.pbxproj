@@ -1,0 +1,558 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 63;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0F990056E6D51A2FE70FEFD4 /* FoodCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BC0D73AC90B2CA4FBDE46B3 /* FoodCheckView.swift */; };
+		178D00C17E4BAA8AE3AE1A6A /* ProductService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E44D2F2CEFC2C83FE2C0C9D /* ProductService.swift */; };
+		1DF2CAEE80E0759099D1E37D /* OfflineBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25FBA22E5EEEBA8ECBBC77AC /* OfflineBanner.swift */; };
+		29D2BC65A3EA98D4E4E5A512 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B0C2BDE76002FEB702279C5 /* SettingsView.swift */; };
+		2F40CC8E0E4C5A956C0DE326 /* ErrorStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9419A79C1DF89A714F6C774E /* ErrorStateView.swift */; };
+		32FA55E0BEF5E475EE4C0216 /* PetService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF255E5287883E00427FB07D /* PetService.swift */; };
+		3B4149C0BE0ADC88E8E1AD9E /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 120365C52EB3B840282D85BE /* HomeView.swift */; };
+		47F5B62C5DEC5D6E923AEE03 /* PetsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49611169D4ABFA4FDDF6EE82 /* PetsView.swift */; };
+		4EC3FDCF44F686C8D5AE863B /* PrivacyPolicyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77AA3B5C427ECA01BF13A314 /* PrivacyPolicyView.swift */; };
+		623E1ECAC683E6AE135B56E4 /* ProductSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDDE964C225280253C49E3FD /* ProductSearchView.swift */; };
+		6A00A0192F35B416737D9E19 /* ScanService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D744A8F287170D3C9CAC092 /* ScanService.swift */; };
+		6E1A3DF3954F7A376E3D87A5 /* LabelScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1538C98954368F56800376F2 /* LabelScanView.swift */; };
+		6FE23FB31302A06DCD3CB8B2 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA07AE523E2E010E006D27D7 /* NetworkMonitor.swift */; };
+		7352A49F9EE53E54CC306CA7 /* PetAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FC17D17306E43DCF585372 /* PetAvatarView.swift */; };
+		7895D3F51F21B92A2E01C54B /* APIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F333ED4437C45882B7CFE5 /* APIService.swift */; };
+		792464C895EB7C01F0531F48 /* PetFoodAnalyzerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5042506E1523B0636FFE71A /* PetFoodAnalyzerApp.swift */; };
+		7EC22C2FA130DB977474819E /* ShareCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00CF2E29475DAC980DB27ADE /* ShareCardView.swift */; };
+		85E41E02C34EA2CDBD905CA3 /* EditPetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3BB80578F8D09030AA946CC /* EditPetView.swift */; };
+		93135F4F8A1ED4DE75BE5DFE /* HowWeAnalyzeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17C3CAF583C06A57F95E37AC /* HowWeAnalyzeView.swift */; };
+		9CE7C9AF60B965240F7DC550 /* KeyboardToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 256ABC78A298464A54D4C187 /* KeyboardToolbar.swift */; };
+		9D4CCB054B7EF3EE0CFCE2B9 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53051FA46AE4EDE25312870D /* AppConfig.swift */; };
+		A1726EAC55B66797EE742623 /* ResultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCB43A2E95940D5A9447FC01 /* ResultView.swift */; };
+		BAC567F66D9E09F14D7E96E7 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66A756B7797E91CEBCF12D03 /* Models.swift */; };
+		BD333AAB4BF5056AD0130254 /* TermsOfServiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 717E0853B14FA81427AF9F49 /* TermsOfServiceView.swift */; };
+		C895956A31ECDECF9058E141 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F21D0519BE9F6DF859F8972A /* HistoryView.swift */; };
+		D55234C50A1385EBC17F64A1 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85D911EA47F989207D58586B /* AppTheme.swift */; };
+		E1D4CB11C5DAC712B4A67240 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1702EE0DCB5C1AA33394E84 /* ContentView.swift */; };
+		EB8AB8F71B664D93322B307E /* TwoStepScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1397748BBE4572B178521576 /* TwoStepScanView.swift */; };
+		EEC0BEBB788B603A2F07FE5C /* AddPetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACAC382C4A1297ADEC9BE302 /* AddPetView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		00CF2E29475DAC980DB27ADE /* ShareCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareCardView.swift; sourceTree = "<group>"; };
+		120365C52EB3B840282D85BE /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		1397748BBE4572B178521576 /* TwoStepScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TwoStepScanView.swift; sourceTree = "<group>"; };
+		1538C98954368F56800376F2 /* LabelScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelScanView.swift; sourceTree = "<group>"; };
+		17C3CAF583C06A57F95E37AC /* HowWeAnalyzeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HowWeAnalyzeView.swift; sourceTree = "<group>"; };
+		1E44D2F2CEFC2C83FE2C0C9D /* ProductService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductService.swift; sourceTree = "<group>"; };
+		256ABC78A298464A54D4C187 /* KeyboardToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardToolbar.swift; sourceTree = "<group>"; };
+		25FBA22E5EEEBA8ECBBC77AC /* OfflineBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineBanner.swift; sourceTree = "<group>"; };
+		2B0C2BDE76002FEB702279C5 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		2D744A8F287170D3C9CAC092 /* ScanService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanService.swift; sourceTree = "<group>"; };
+		49611169D4ABFA4FDDF6EE82 /* PetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetsView.swift; sourceTree = "<group>"; };
+		53051FA46AE4EDE25312870D /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+		66A756B7797E91CEBCF12D03 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		717E0853B14FA81427AF9F49 /* TermsOfServiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TermsOfServiceView.swift; sourceTree = "<group>"; };
+		721252203C80336F474CD424 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		77AA3B5C427ECA01BF13A314 /* PrivacyPolicyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyPolicyView.swift; sourceTree = "<group>"; };
+		85D911EA47F989207D58586B /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
+		8BC0D73AC90B2CA4FBDE46B3 /* FoodCheckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoodCheckView.swift; sourceTree = "<group>"; };
+		9419A79C1DF89A714F6C774E /* ErrorStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorStateView.swift; sourceTree = "<group>"; };
+		A20998C315DFE2862E474F9C /* PetFoodAnalyzer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PetFoodAnalyzer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA07AE523E2E010E006D27D7 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
+		ACAC382C4A1297ADEC9BE302 /* AddPetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddPetView.swift; sourceTree = "<group>"; };
+		C0FC17D17306E43DCF585372 /* PetAvatarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetAvatarView.swift; sourceTree = "<group>"; };
+		C1702EE0DCB5C1AA33394E84 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		CDDE964C225280253C49E3FD /* ProductSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductSearchView.swift; sourceTree = "<group>"; };
+		CF255E5287883E00427FB07D /* PetService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetService.swift; sourceTree = "<group>"; };
+		D3BB80578F8D09030AA946CC /* EditPetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditPetView.swift; sourceTree = "<group>"; };
+		D5042506E1523B0636FFE71A /* PetFoodAnalyzerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetFoodAnalyzerApp.swift; sourceTree = "<group>"; };
+		F21D0519BE9F6DF859F8972A /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		F6F333ED4437C45882B7CFE5 /* APIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIService.swift; sourceTree = "<group>"; };
+		FCB43A2E95940D5A9447FC01 /* ResultView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		06788086B9905CBA04B84FFE = {
+			isa = PBXGroup;
+			children = (
+				E5DB9121326023699CB51D0B /* PetFoodAnalyzer */,
+				645BBD432ABD3639311293C0 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		0A97838F95D28C0D6A24C240 /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				9419A79C1DF89A714F6C774E /* ErrorStateView.swift */,
+				256ABC78A298464A54D4C187 /* KeyboardToolbar.swift */,
+				25FBA22E5EEEBA8ECBBC77AC /* OfflineBanner.swift */,
+				C0FC17D17306E43DCF585372 /* PetAvatarView.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		1759A66F9350DD44197C889E /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				C1702EE0DCB5C1AA33394E84 /* ContentView.swift */,
+				BD8CA944369D5E56C28773C6 /* Auth */,
+				0A97838F95D28C0D6A24C240 /* Components */,
+				34DEB75197FEB074AFD523C1 /* History */,
+				374B2DE4159C92D99A27D2E9 /* Home */,
+				ED2585F83FA54638D5AEBB7C /* Onboarding */,
+				9E7132BC3B549B7E4EC51D5B /* Pets */,
+				23610F235BA4B1583268E642 /* Profile */,
+				2FBE958D25C00D9D6EE950EF /* Scan */,
+				942A065DA6038EA716F3A70D /* Search */,
+				631319DAD1B627CC5A0657FD /* Settings */,
+				97F1E63315CEED65B2CD5BB4 /* Share */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		23610F235BA4B1583268E642 /* Profile */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Profile;
+			sourceTree = "<group>";
+		};
+		2FBE958D25C00D9D6EE950EF /* Scan */ = {
+			isa = PBXGroup;
+			children = (
+				8BC0D73AC90B2CA4FBDE46B3 /* FoodCheckView.swift */,
+				1538C98954368F56800376F2 /* LabelScanView.swift */,
+				FCB43A2E95940D5A9447FC01 /* ResultView.swift */,
+				1397748BBE4572B178521576 /* TwoStepScanView.swift */,
+			);
+			path = Scan;
+			sourceTree = "<group>";
+		};
+		34DEB75197FEB074AFD523C1 /* History */ = {
+			isa = PBXGroup;
+			children = (
+				F21D0519BE9F6DF859F8972A /* HistoryView.swift */,
+			);
+			path = History;
+			sourceTree = "<group>";
+		};
+		374B2DE4159C92D99A27D2E9 /* Home */ = {
+			isa = PBXGroup;
+			children = (
+				120365C52EB3B840282D85BE /* HomeView.swift */,
+			);
+			path = Home;
+			sourceTree = "<group>";
+		};
+		44F80CF50BA19ECDEC503023 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				66A756B7797E91CEBCF12D03 /* Models.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		631319DAD1B627CC5A0657FD /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				17C3CAF583C06A57F95E37AC /* HowWeAnalyzeView.swift */,
+				77AA3B5C427ECA01BF13A314 /* PrivacyPolicyView.swift */,
+				2B0C2BDE76002FEB702279C5 /* SettingsView.swift */,
+				717E0853B14FA81427AF9F49 /* TermsOfServiceView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		645BBD432ABD3639311293C0 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A20998C315DFE2862E474F9C /* PetFoodAnalyzer.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		7FE26837F838D57B4A1568A7 /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				85D911EA47F989207D58586B /* AppTheme.swift */,
+			);
+			path = Theme;
+			sourceTree = "<group>";
+		};
+		942A065DA6038EA716F3A70D /* Search */ = {
+			isa = PBXGroup;
+			children = (
+				CDDE964C225280253C49E3FD /* ProductSearchView.swift */,
+			);
+			path = Search;
+			sourceTree = "<group>";
+		};
+		97F1E63315CEED65B2CD5BB4 /* Share */ = {
+			isa = PBXGroup;
+			children = (
+				00CF2E29475DAC980DB27ADE /* ShareCardView.swift */,
+			);
+			path = Share;
+			sourceTree = "<group>";
+		};
+		9E7132BC3B549B7E4EC51D5B /* Pets */ = {
+			isa = PBXGroup;
+			children = (
+				ACAC382C4A1297ADEC9BE302 /* AddPetView.swift */,
+				D3BB80578F8D09030AA946CC /* EditPetView.swift */,
+				49611169D4ABFA4FDDF6EE82 /* PetsView.swift */,
+			);
+			path = Pets;
+			sourceTree = "<group>";
+		};
+		BD8CA944369D5E56C28773C6 /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Auth;
+			sourceTree = "<group>";
+		};
+		DEFD670D468ACE45C989048B /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				53051FA46AE4EDE25312870D /* AppConfig.swift */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		E0CF7FA899381E402805ECEE /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				F6F333ED4437C45882B7CFE5 /* APIService.swift */,
+				AA07AE523E2E010E006D27D7 /* NetworkMonitor.swift */,
+				CF255E5287883E00427FB07D /* PetService.swift */,
+				1E44D2F2CEFC2C83FE2C0C9D /* ProductService.swift */,
+				2D744A8F287170D3C9CAC092 /* ScanService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		E5DB9121326023699CB51D0B /* PetFoodAnalyzer */ = {
+			isa = PBXGroup;
+			children = (
+				721252203C80336F474CD424 /* Info.plist */,
+				D5042506E1523B0636FFE71A /* PetFoodAnalyzerApp.swift */,
+				DEFD670D468ACE45C989048B /* Config */,
+				44F80CF50BA19ECDEC503023 /* Models */,
+				E0CF7FA899381E402805ECEE /* Services */,
+				7FE26837F838D57B4A1568A7 /* Theme */,
+				1759A66F9350DD44197C889E /* Views */,
+			);
+			path = PetFoodAnalyzer;
+			sourceTree = "<group>";
+		};
+		ED2585F83FA54638D5AEBB7C /* Onboarding */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Onboarding;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F172CC4FEFA3CE49B0D2EBC8 /* PetFoodAnalyzer */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 050B53FCB4648CBB20610E89 /* Build configuration list for PBXNativeTarget "PetFoodAnalyzer" */;
+			buildPhases = (
+				4747FACD4D205B7B56C43E44 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PetFoodAnalyzer;
+			packageProductDependencies = (
+			);
+			productName = PetFoodAnalyzer;
+			productReference = A20998C315DFE2862E474F9C /* PetFoodAnalyzer.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C753E82E0B3F1303657EE0AA /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					F172CC4FEFA3CE49B0D2EBC8 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = CCE4A28623D17A9715A400DD /* Build configuration list for PBXProject "PetFoodAnalyzer" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 06788086B9905CBA04B84FFE;
+			minimizedProjectReferenceProxies = 1;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F172CC4FEFA3CE49B0D2EBC8 /* PetFoodAnalyzer */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4747FACD4D205B7B56C43E44 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7895D3F51F21B92A2E01C54B /* APIService.swift in Sources */,
+				EEC0BEBB788B603A2F07FE5C /* AddPetView.swift in Sources */,
+				9D4CCB054B7EF3EE0CFCE2B9 /* AppConfig.swift in Sources */,
+				D55234C50A1385EBC17F64A1 /* AppTheme.swift in Sources */,
+				E1D4CB11C5DAC712B4A67240 /* ContentView.swift in Sources */,
+				85E41E02C34EA2CDBD905CA3 /* EditPetView.swift in Sources */,
+				2F40CC8E0E4C5A956C0DE326 /* ErrorStateView.swift in Sources */,
+				0F990056E6D51A2FE70FEFD4 /* FoodCheckView.swift in Sources */,
+				C895956A31ECDECF9058E141 /* HistoryView.swift in Sources */,
+				3B4149C0BE0ADC88E8E1AD9E /* HomeView.swift in Sources */,
+				93135F4F8A1ED4DE75BE5DFE /* HowWeAnalyzeView.swift in Sources */,
+				9CE7C9AF60B965240F7DC550 /* KeyboardToolbar.swift in Sources */,
+				6E1A3DF3954F7A376E3D87A5 /* LabelScanView.swift in Sources */,
+				BAC567F66D9E09F14D7E96E7 /* Models.swift in Sources */,
+				6FE23FB31302A06DCD3CB8B2 /* NetworkMonitor.swift in Sources */,
+				1DF2CAEE80E0759099D1E37D /* OfflineBanner.swift in Sources */,
+				7352A49F9EE53E54CC306CA7 /* PetAvatarView.swift in Sources */,
+				792464C895EB7C01F0531F48 /* PetFoodAnalyzerApp.swift in Sources */,
+				32FA55E0BEF5E475EE4C0216 /* PetService.swift in Sources */,
+				47F5B62C5DEC5D6E923AEE03 /* PetsView.swift in Sources */,
+				4EC3FDCF44F686C8D5AE863B /* PrivacyPolicyView.swift in Sources */,
+				623E1ECAC683E6AE135B56E4 /* ProductSearchView.swift in Sources */,
+				178D00C17E4BAA8AE3AE1A6A /* ProductService.swift in Sources */,
+				A1726EAC55B66797EE742623 /* ResultView.swift in Sources */,
+				6A00A0192F35B416737D9E19 /* ScanService.swift in Sources */,
+				29D2BC65A3EA98D4E4E5A512 /* SettingsView.swift in Sources */,
+				7EC22C2FA130DB977474819E /* ShareCardView.swift in Sources */,
+				BD333AAB4BF5056AD0130254 /* TermsOfServiceView.swift in Sources */,
+				EB8AB8F71B664D93322B307E /* TwoStepScanView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		06015E49AFA6950960F00049 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = G8BF55L87P;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PetFoodAnalyzer/Info.plist;
+				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_NSCameraUsageDescription = "PetFoodAnalyzer needs camera access to scan pet food labels";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.petfoodanalyzer.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		221145E90C10504F4089EB54 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		57DFD619AC98FB8206B2E23D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = G8BF55L87P;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PetFoodAnalyzer/Info.plist;
+				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_NSCameraUsageDescription = "PetFoodAnalyzer needs camera access to scan pet food labels";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.petfoodanalyzer.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A8BC41BEA89B1BB047DB8346 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		050B53FCB4648CBB20610E89 /* Build configuration list for PBXNativeTarget "PetFoodAnalyzer" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				06015E49AFA6950960F00049 /* Debug */,
+				57DFD619AC98FB8206B2E23D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CCE4A28623D17A9715A400DD /* Build configuration list for PBXProject "PetFoodAnalyzer" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A8BC41BEA89B1BB047DB8346 /* Debug */,
+				221145E90C10504F4089EB54 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = C753E82E0B3F1303657EE0AA /* Project object */;
+}
