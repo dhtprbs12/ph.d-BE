@@ -45,6 +45,14 @@ app.use('/images/products', express.static(path.join(__dirname, '../public/produ
   immutable: true
 }));
 
+// Legal pages (required by Apple)
+app.get('/privacy', (req, res) => {
+  res.sendFile(path.join(__dirname, 'legal', 'privacy.html'));
+});
+app.get('/terms', (req, res) => {
+  res.sendFile(path.join(__dirname, 'legal', 'terms.html'));
+});
+
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/pets', petRoutes);

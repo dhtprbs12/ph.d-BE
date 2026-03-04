@@ -103,20 +103,25 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
 
     // =============================================
     // SCORE LOOKUP (Tier 1 + Tier 2, no AI calls)
+    // Skip scoring entirely when no pet info was provided (e.g. dog owner browsing cat products)
     // =============================================
     const scores = {};
+    const skipScoring = !healthConditionsRaw;
+
+    if (skipScoring) {
+      console.log(`📊 [FILTER] Skipping scoring — no pet conditions provided`);
+    }
 
     const hasConditions = healthConditions && healthConditions.length > 0;
     const conditionsToCheck = hasConditions
       ? healthConditions.map(c => c.condition_type || c.conditionType || c)
       : ['healthy'];
 
-    console.log(`📊 [FILTER] Scoring ${products.length} products, conditions: ${conditionsToCheck.join(', ')}`);
+    if (!skipScoring) {
+      console.log(`📊 [FILTER] Scoring ${products.length} products, conditions: ${conditionsToCheck.join(', ')}`);
+    }
 
-    // ── Tier 1: product_review_cache (instant DB read)
-    // ── Tier 2: ai_assessment_cache → compute from individual ingredients (DB reads + math, no AI)
-    // ── NO Tier 3: no AI calls — keeps filter fast and stable
-    await Promise.all(products.map(async (product) => {
+    !skipScoring && await Promise.all(products.map(async (product) => {
       try {
         if (!product.ingredient_hash && !product.raw_ingredients_text) return;
 
