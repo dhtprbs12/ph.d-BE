@@ -1011,6 +1011,191 @@ Return JSON:
   }
 
   /**
+   * MERGED: Per-ingredient assessment + Holistic review in ONE Gemini call.
+   * @param {Object} params
+   * @param {Array} params.uncachedIngredients - Only the ingredients needing AI assessment
+   * @param {Array} params.allIngredients - Full ingredient list for holistic review
+   * @param {string} params.petType
+   * @param {string} params.petName
+   * @param {Array} params.healthConditions
+   * @param {string} params.productType
+   */
+  async assessAndReviewProduct({ uncachedIngredients, allIngredients, petType, petName = 'your pet', healthConditions = [], productType = 'food' }) {
+    this.initialize();
+
+    const ingredients = uncachedIngredients || allIngredients;
+    const fullIngredients = allIngredients || ingredients;
+
+    if (!this.model || ingredients.length === 0) {
+      throw new Error('Gemini AI not initialized or no ingredients');
+    }
+
+    const uncachedDetails = ingredients.map((i, idx) => {
+      const name = i.name || i;
+      const position = i.position || (idx + 1);
+      return `${position}. ${name}`;
+    }).join('\n');
+
+    const fullIngredientDetails = fullIngredients.map((i, idx) => {
+      const name = i.name || i;
+      const position = i.position || (idx + 1);
+      return `${position}. ${name}`;
+    }).join('\n');
+
+    const totalIngredients = fullIngredients.length;
+    const hasConditions = healthConditions.length > 0;
+    const conditionsText = hasConditions
+      ? healthConditions.map(c => c.condition_type || c).join(', ')
+      : 'None (healthy pet)';
+
+    const isSupplement = productType === 'supplement';
+    const isTreat = isSupplement || productType === 'treats' || productType === 'treat' ||
+                    (ingredients.length <= 6 && ingredients.some(i =>
+                      (i.name || i).toLowerCase().includes('jerky') ||
+                      (i.name || i).toLowerCase().includes('treat')));
+
+    const productTypeLabel = isSupplement ? 'SUPPLEMENT' : (isTreat ? 'TREAT' : 'DAILY FOOD');
+
+    const conditionGuidelines = hasConditions ? `
+CRITICAL - This pet has health conditions. Apply these scoring rules:
+${healthConditions.map(c => {
+  const condition = c.condition_type || c;
+  if (condition.includes('allergy')) {
+    const allergen = condition.replace('allergy_', '').replace(/_/g, ' ');
+    return `- 🚨 ${allergen.toUpperCase()} ALLERGY: Any ${allergen} or ${allergen}-derived ingredient → riskScore: +45 to +50, explanation MUST warn about allergy. Holistic score ≤30 (Grade F).`;
+  }
+  if (condition.includes('obesity')) return '- OBESITY: Penalize high-calorie ingredients, fats, sugars (+10 to +20). Holistic: subtract 15-25.';
+  if (condition.includes('diabetes')) return '- DIABETES: Severely penalize sugars and simple carbs (+20 to +40). Holistic: score ≤40 if sugar prominent.';
+  if (condition.includes('kidney')) return '- KIDNEY DISEASE: Penalize high-protein and high-phosphorus ingredients (+15 to +30). Holistic: score ≤50.';
+  if (condition.includes('heart')) return '- HEART DISEASE: Penalize high-sodium ingredients (+15 to +25). Holistic: score ≤50.';
+  if (condition.includes('pancreatitis')) return '- PANCREATITIS: Severely penalize high-fat ingredients (+25 to +40). Holistic: score ≤40.';
+  if (condition.includes('liver')) return '- LIVER DISEASE: Penalize high-protein, copper-rich ingredients (+15 to +25). Holistic: score ≤50.';
+  if (condition.includes('urinary')) return '- URINARY ISSUES: Penalize high-mineral ingredients (+10 to +20).';
+  if (condition.includes('digestive')) return '- DIGESTIVE SENSITIVITY: Penalize hard-to-digest ingredients, dairy, fatty foods (+10 to +20).';
+  return `- ${condition.toUpperCase()}: Assess impact on this condition`;
+}).join('\n')}
+` : '';
+
+    const hasPartialCache = ingredients.length < fullIngredients.length;
+    
+    const prompt = `You are a veterinary nutritionist. Perform a COMPLETE analysis of this pet food product.
+
+PRODUCT TYPE: ${productTypeLabel}
+PET: ${petType} named ${petName}
+HEALTH CONDITIONS: ${conditionsText}
+
+FULL INGREDIENT LIST (for holistic review - by weight, earlier = larger amount):
+${fullIngredientDetails}
+
+TOTAL INGREDIENTS: ${totalIngredients}
+${conditionGuidelines}
+
+You must return TWO things in your response:
+
+═══ PART 1: PER-INGREDIENT ASSESSMENT ═══
+${hasPartialCache ? `Assess ONLY these ${ingredients.length} ingredients (the others are already evaluated):
+${uncachedDetails}` : `For EACH ingredient, provide a risk score and explanation.`}
+
+riskScore guidelines: -20 (very beneficial) to +50 (dangerous)
+${isSupplement ? `- Active beneficial ingredients (fish oil, glucosamine, probiotics): -15 to -20
+- Carrier/capsule components (gelatin, glycerin, cellulose): -2 to +2 (NEUTRAL)
+- Natural preservatives: -3 to +2` :
+isTreat ? `- Quality proteins (chicken, beef, fish): -12 to -18 (very beneficial)
+- Wholesome grains (oatmeal, brown rice): -5 to -10
+- Treat fillers/binders (rice flour, glycerin, tapioca, guar gum): -2 to +2 (NEUTRAL - expected in treats)
+- Vegetables, fruits: -5 to -10
+- Organic sugars in moderation: +2 to +5
+- Refined sugars, corn syrup: +8 to +15
+- Artificial colors: +8 to +15
+- Artificial preservatives: +10 to +20
+- Toxic ingredients (xylitol, chocolate): +40 to +50` :
+`- Quality proteins (chicken, beef, salmon): -10 to -18 (very beneficial)
+- Wholesome grains (oatmeal, brown rice, barley): -5 to -10
+- Vegetables & fruits: -5 to -10
+- Lower quality fillers (corn, wheat gluten, soy): +3 to +8
+- Any added sugars: +8 to +15
+- Artificial colors/flavors: +10 to +18
+- Byproducts (unspecified): +5 to +10`}
+
+IMPORTANT: Do NOT mention ingredient position/order in explanations.
+
+═══ PART 2: HOLISTIC PRODUCT REVIEW ═══
+Evaluate the ENTIRE product (all ${totalIngredients} ingredients in the FULL INGREDIENT LIST above) as a whole and provide an overall score.
+
+${isSupplement ? 'BASE SCORE: 80 (supplements start here)' : isTreat ? 'BASE SCORE: 75 (treats start here)' : 'BASE SCORE: 75 (daily food starts here)'}
+
+Scoring guide:
+- 90-100: Excellent (Grade A) ${isTreat ? '- real protein + clean ingredients' : '- high-quality protein + nutritionally complete'}
+- 80-89: Good (Grade B)
+- 70-79: Acceptable (Grade C)
+- 55-69: Below average (Grade D)
+- Below 55: ${hasConditions ? 'Avoid - harmful for this pet' : 'Avoid - significant issues'} (Grade F)
+
+${hasConditions ? `⚠️ REMINDER: ${petName} has ${conditionsText}. Health conditions MUST significantly impact the holistic score if problematic ingredients are present.` : ''}
+
+Return VALID JSON (no + prefix on numbers):
+{
+  "assessments": {
+    "Ingredient Name": {
+      "riskScore": <integer>,
+      "category": "string",
+      "explanation": "string",
+      "benefit": "string or empty"
+    }
+  },
+  "holistic": {
+    "finalScore": <number 0-100>,
+    "grade": "<A|B|C|D|F>",
+    "recommendation": "<highly_recommended|recommended|acceptable|caution|not_recommended>",
+    "proteinQuality": "<none|low|medium|high>",
+    "primaryIngredientType": "<protein|carb|filler|fat|other>",
+    "hasArtificialAdditives": <true|false>,
+    "keyIssues": ["issue 1", "issue 2"],
+    "positives": ["positive 1", "positive 2"],
+    "aiSummary": "<2-3 sentence summary for ${petName}>"
+  }
+}`;
+
+    try {
+      console.log(`🚀 [MERGED AI] Single call for ${totalIngredients} ingredients + holistic (${conditionsText})`);
+      const result = await this.model.generateContent(prompt);
+      const text = result.response.text();
+
+      console.log(`🤖 [MERGED AI RAW]:\n${text.substring(0, 500)}...`);
+
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const cleanedJson = jsonMatch[0].replace(/:\s*\+(\d)/g, ': $1');
+        const parsed = JSON.parse(cleanedJson);
+
+        const assessments = parsed.assessments || {};
+        const holistic = parsed.holistic || {};
+
+        const normalizedHolistic = {
+          finalScore: Math.max(0, Math.min(100, parseInt(holistic.finalScore) || 50)),
+          grade: ['A', 'B', 'C', 'D', 'F'].includes(holistic.grade) ? holistic.grade : 'C',
+          recommendation: holistic.recommendation || 'acceptable',
+          proteinQuality: holistic.proteinQuality || 'unknown',
+          primaryIngredientType: holistic.primaryIngredientType || 'unknown',
+          hasArtificialAdditives: !!holistic.hasArtificialAdditives,
+          keyIssues: Array.isArray(holistic.keyIssues) ? holistic.keyIssues : [],
+          positives: Array.isArray(holistic.positives) ? holistic.positives : [],
+          aiSummary: holistic.aiSummary || ''
+        };
+
+        console.log(`✅ [MERGED AI] Got ${Object.keys(assessments).length} ingredient assessments + holistic score=${normalizedHolistic.finalScore} grade=${normalizedHolistic.grade}`);
+
+        return { assessments, holistic: normalizedHolistic };
+      }
+
+      throw new Error('Invalid JSON response from merged AI call');
+    } catch (error) {
+      console.error('Merged AI assessment error:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Identify food from photo (Step 1 - always needed for image recognition)
    * @param {Buffer} imageBuffer - Image data
    * @param {string} mimeType - Image MIME type

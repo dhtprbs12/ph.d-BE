@@ -186,9 +186,40 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
       ingredientsToAssess = analysis.ingredients.filter(i => i.needsAIAssessment || !i.found);
     }
     
+    // Pre-compute ingredient hash for cache lookups
+    const productServiceLocal = require('../services/productService');
+    const ingredientHash = productServiceLocal.generateIngredientHash(ingredientsList);
+    const holisticCacheResults = {};
+    const uncachedHolisticConditions = new Set();
+    
+    // ============================================
+    // TIER 1: Check product_review_cache FIRST (always, regardless of ingredient state)
+    // ============================================
+    const holisticCachePromises = conditionsToEvaluate.map(async (condition) => {
+      const conditionHash = getSingleConditionHash(condition, productType);
+      try {
+        const cached = await query(
+          `SELECT * FROM product_review_cache WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
+          [ingredientHash, conditionHash, pet.pet_type]
+        );
+        return { condition, conditionHash, cached };
+      } catch (err) {
+        return { condition, conditionHash, cached: [] };
+      }
+    });
+    
+    const holisticResults = await Promise.all(holisticCachePromises);
+    for (const { condition, conditionHash, cached } of holisticResults) {
+      if (cached.length > 0) {
+        holisticCacheResults[condition] = { cached: cached[0], conditionHash };
+      } else {
+        uncachedHolisticConditions.add(condition);
+      }
+    }
+    
     // ============================================
     // PER-CONDITION INGREDIENT CACHING - OPTIMIZED
-    // PARALLEL cache checks + PARALLEL AI calls
+    // PARALLEL cache checks + MERGED AI calls
     // Then combine by taking the WORST score across all conditions
     // ============================================
     if (ingredientsToAssess.length > 0) {
@@ -246,42 +277,71 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
           }
         }
       }
-      
-      // STEP 2: Run AI assessments for ALL uncached conditions in PARALLEL
+
+      // STEP 3: Run AI calls - MERGED for fully uncached, STANDALONE for partial
       const conditionsNeedingAI = Object.entries(uncachedByCondition).filter(([_, data]) => data.ingredients.length > 0);
       
       if (conditionsNeedingAI.length > 0) {
+        // Determine which conditions can use merged call (ingredients + holistic both uncached)
+        const mergedConditions = conditionsNeedingAI.filter(([cond]) => uncachedHolisticConditions.has(cond));
+        const ingredientOnlyConditions = conditionsNeedingAI.filter(([cond]) => !uncachedHolisticConditions.has(cond));
+        
+        const totalAICalls = mergedConditions.length + ingredientOnlyConditions.length;
         analysisStore.set(scanId, {
           ...analysisStore.get(scanId),
-          progress: `AI analyzing ${conditionsNeedingAI.length} condition(s)...`
+          progress: `Analyzing ${totalAICalls} condition(s)...`
         });
         
-        console.log(`🚀 [BG] PARALLEL AI ingredient assessment for ${conditionsNeedingAI.length} conditions`);
+        console.log(`🚀 [BG] ${mergedConditions.length} merged calls + ${ingredientOnlyConditions.length} ingredient-only calls`);
         
-        const aiAssessmentPromises = conditionsNeedingAI.map(async ([condition, { conditionHash, ingredients }]) => {
-          console.log(`🤖 [BG] AI assessing ${ingredients.length} ingredients for condition: ${condition}`);
-          try {
-            const singleCondition = condition === 'healthy' ? [] : [{ condition_type: condition }];
-            const aiAssessments = await geminiService.assessIngredientsForPet(
-              ingredients,
-              pet.pet_type,
-              pet.name,
-              singleCondition,
-              productType
-            );
-            return { condition, conditionHash, ingredients, aiAssessments, success: true };
-          } catch (aiError) {
-            console.error(`[BG] AI assessment failed for condition ${condition}:`, aiError.message);
-            return { condition, conditionHash, ingredients, aiAssessments: {}, success: false };
-          }
-        });
+        const allAIPromises = [];
         
-        const aiResults = await Promise.all(aiAssessmentPromises);
+        // MERGED calls: get ingredients + holistic in one shot
+        for (const [condition, { conditionHash, ingredients }] of mergedConditions) {
+          allAIPromises.push((async () => {
+            console.log(`🤖 [BG-MERGED] ${ingredients.length}/${ingredientsList.length} ingredients + holistic for: ${condition}`);
+            try {
+              const singleCondition = condition === 'healthy' ? [] : [{ condition_type: condition }];
+              const { assessments, holistic } = await geminiService.assessAndReviewProduct({
+                uncachedIngredients: ingredients,
+                allIngredients: ingredientsList,
+                petType: pet.pet_type,
+                petName: pet.name,
+                healthConditions: singleCondition,
+                productType
+              });
+              return { condition, conditionHash, ingredients, aiAssessments: assessments, holistic, merged: true, success: true };
+            } catch (err) {
+              console.error(`[BG-MERGED] Failed for ${condition}:`, err.message);
+              return { condition, conditionHash, ingredients, aiAssessments: {}, holistic: null, merged: true, success: false };
+            }
+          })());
+        }
+        
+        // INGREDIENT-ONLY calls: holistic already cached
+        for (const [condition, { conditionHash, ingredients }] of ingredientOnlyConditions) {
+          allAIPromises.push((async () => {
+            console.log(`🤖 [BG-ING] ${ingredients.length} ingredients for: ${condition}`);
+            try {
+              const singleCondition = condition === 'healthy' ? [] : [{ condition_type: condition }];
+              const aiAssessments = await geminiService.assessIngredientsForPet(
+                ingredients, pet.pet_type, pet.name, singleCondition, productType
+              );
+              return { condition, conditionHash, ingredients, aiAssessments, holistic: null, merged: false, success: true };
+            } catch (err) {
+              console.error(`[BG-ING] Failed for ${condition}:`, err.message);
+              return { condition, conditionHash, ingredients, aiAssessments: {}, holistic: null, merged: false, success: false };
+            }
+          })());
+        }
+        
+        const aiResults = await Promise.all(allAIPromises);
         
         // Process AI results
-        for (const { condition, conditionHash, ingredients, aiAssessments, success } of aiResults) {
+        for (const { condition, conditionHash, ingredients, aiAssessments, holistic, merged, success } of aiResults) {
           if (!success) continue;
           
+          // Process ingredient assessments
           for (const ing of ingredients) {
             let assessment = aiAssessments[ing.name];
             if (!assessment) {
@@ -308,7 +368,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
                 category: assessment.category
               };
               
-              // Prepare cache insert for this condition
               if (ing.normalizedName) {
                 allCacheInserts.push([
                   ing.normalizedName, conditionHash, pet.pet_type,
@@ -316,6 +375,12 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
                 ]);
               }
             }
+          }
+          
+          // Store holistic result from merged call
+          if (merged && holistic) {
+            holisticCacheResults[condition] = { fromMerged: true, review: holistic, conditionHash };
+            uncachedHolisticConditions.delete(condition);
           }
         }
       } else {
@@ -399,70 +464,80 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     });
     
     // =============================================
-    // HOLISTIC AI REVIEW - PER CONDITION CACHING
-    // OPTIMIZED: Parallel cache checks + parallel AI calls
-    // Then combine by taking the WORST score/grade
+    // HOLISTIC REVIEW - Use pre-collected cache + merged results
+    // Only make standalone AI calls for conditions still uncached
     // =============================================
-    const productServiceLocal = require('../services/productService');
-    const ingredientHash = productServiceLocal.generateIngredientHash(ingredientsList);
-    
-    // Store reviews per condition
     const conditionReviews = {};
     const productCacheInserts = [];
     const productCacheHitIds = [];
     
-    // STEP 1: Check cache for ALL conditions in PARALLEL
-    console.log(`🔍 [BG] Checking holistic cache for ${conditionsToEvaluate.length} conditions...`);
-    const cacheCheckPromises = conditionsToEvaluate.map(async (condition) => {
-      const conditionHash = getSingleConditionHash(condition, productType);
-      try {
-        const cached = await query(
-          `SELECT * FROM product_review_cache 
-           WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
-          [ingredientHash, conditionHash, pet.pet_type]
-        );
-        return { condition, conditionHash, cached };
-      } catch (err) {
-        console.warn(`[BG] Cache check failed for ${condition}:`, err.message);
-        return { condition, conditionHash, cached: [] };
-      }
-    });
-    
-    const cacheResults = await Promise.all(cacheCheckPromises);
-    
-    // Process cache results and identify uncached conditions
-    const uncachedConditions = [];
-    for (const { condition, conditionHash, cached } of cacheResults) {
-      if (cached.length > 0) {
+    // Process holistic results already gathered during ingredient phase
+    for (const [condition, data] of Object.entries(holisticCacheResults)) {
+      if (data.fromMerged && data.review) {
+        conditionReviews[condition] = { ...data.review, fromCache: false };
+        console.log(`🤖 [BG-MERGED] Holistic for ${condition}: score=${data.review.finalScore}, grade=${data.review.grade}`);
+        productCacheInserts.push({
+          ingredientHash,
+          conditionHash: data.conditionHash,
+          petType: pet.pet_type,
+          productType,
+          review: data.review
+        });
+      } else if (data.cached) {
         conditionReviews[condition] = {
-          finalScore: cached[0].final_score,
-          grade: cached[0].grade,
-          recommendation: cached[0].recommendation,
-          keyIssues: safeJsonParse(cached[0].key_issues),
-          positives: safeJsonParse(cached[0].positives),
-          aiSummary: cached[0].ai_summary,
-          proteinQuality: cached[0].protein_quality,
-          hasArtificialAdditives: !!cached[0].has_artificial_additives,
-          primaryIngredientType: cached[0].primary_ingredient_type,
+          finalScore: data.cached.final_score,
+          grade: data.cached.grade,
+          recommendation: data.cached.recommendation,
+          keyIssues: safeJsonParse(data.cached.key_issues),
+          positives: safeJsonParse(data.cached.positives),
+          aiSummary: data.cached.ai_summary,
+          proteinQuality: data.cached.protein_quality,
+          hasArtificialAdditives: !!data.cached.has_artificial_additives,
+          primaryIngredientType: data.cached.primary_ingredient_type,
           fromCache: true
         };
-        productCacheHitIds.push(cached[0].id);
-        console.log(`⚡ [BG] Cache hit for ${condition}: score=${cached[0].final_score}`);
-      } else {
-        uncachedConditions.push({ condition, conditionHash });
+        productCacheHitIds.push(data.cached.id);
+        console.log(`⚡ [BG] Holistic cache hit for ${condition}: score=${data.cached.final_score}`);
       }
     }
     
-    // STEP 2: Run AI holistic reviews for ALL uncached conditions in PARALLEL
-    if (uncachedConditions.length > 0) {
-      analysisStore.set(scanId, {
-        ...analysisStore.get(scanId),
-        progress: `AI reviewing ${uncachedConditions.length} condition(s)...`
-      });
+    // Tier 2: Compute from ai_assessment_cache for conditions still uncached
+    // All ingredient gaps were just filled by AI above, so computeScoreFromCache should find everything
+    const afterMergeUncached = conditionsToEvaluate.filter(c => !conditionReviews[c]);
+    
+    if (afterMergeUncached.length > 0) {
+      console.log(`🧮 [BG-T2] Attempting compute-from-cache for ${afterMergeUncached.length} conditions: ${afterMergeUncached.join(', ')}`);
       
-      console.log(`🚀 [BG] PARALLEL AI review for ${uncachedConditions.length} conditions: ${uncachedConditions.map(c => c.condition).join(', ')}`);
+      for (const condition of afterMergeUncached) {
+        const conditionHash = getSingleConditionHash(condition, productType);
+        try {
+          const computed = await ingredientAnalyzer.computeScoreFromCache(ingredientsList, conditionHash, pet.pet_type, productType);
+          
+          if (computed.allCached && computed.finalScore !== undefined) {
+            conditionReviews[condition] = { ...computed, fromCache: false };
+            console.log(`🧮 [BG-T2] Computed from ingredients: ${condition} = ${computed.finalScore} (${ingredientsList.length}/${ingredientsList.length} cached)`);
+            productCacheInserts.push({
+              ingredientHash,
+              conditionHash,
+              petType: pet.pet_type,
+              productType,
+              review: computed
+            });
+          }
+        } catch (err) {
+          console.warn(`[BG-T2] Compute failed for ${condition}:`, err.message);
+        }
+      }
+    }
+    
+    // Tier 3: AI holistic fallback for any conditions STILL uncached
+    const stillUncachedConditions = conditionsToEvaluate.filter(c => !conditionReviews[c]);
+    
+    if (stillUncachedConditions.length > 0) {
+      console.log(`🚀 [BG-T3] AI holistic fallback for ${stillUncachedConditions.length} remaining conditions: ${stillUncachedConditions.join(', ')}`);
       
-      const aiReviewPromises = uncachedConditions.map(async ({ condition, conditionHash }) => {
+      const aiReviewPromises = stillUncachedConditions.map(async (condition) => {
+        const conditionHash = getSingleConditionHash(condition, productType);
         const singleConditionList = condition === 'healthy' ? [] : [condition];
         try {
           const review = await geminiService.reviewProductHolistically({
@@ -474,20 +549,17 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
           });
           return { condition, conditionHash, review, success: true };
         } catch (err) {
-          console.error(`[BG] AI review failed for ${condition}:`, err.message);
+          console.error(`[BG-T3] AI review failed for ${condition}:`, err.message);
           return { condition, conditionHash, review: null, success: false };
         }
       });
       
       const aiResults = await Promise.all(aiReviewPromises);
       
-      // Process AI results
       for (const { condition, conditionHash, review, success } of aiResults) {
         if (success && review) {
           conditionReviews[condition] = { ...review, fromCache: false };
-          console.log(`🤖 [BG] AI review for ${condition}: score=${review.finalScore}, grade=${review.grade}`);
-          
-          // Prepare cache insert
+          console.log(`🤖 [BG-T3] AI review for ${condition}: score=${review.finalScore}, grade=${review.grade}`);
           productCacheInserts.push({
             ingredientHash,
             conditionHash,
@@ -498,7 +570,7 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
         }
       }
     } else {
-      console.log(`⚡ [BG] All ${conditionsToEvaluate.length} condition reviews served from cache!`);
+      console.log(`⚡ [BG] All ${conditionsToEvaluate.length} condition reviews resolved (cache + T2 compute)!`);
     }
     
     // Batch update hit counts for product cache
@@ -2367,6 +2439,8 @@ router.get('/history', async (req, res, next) => {
       return res.status(400).json({ error: 'deviceId is required' });
     }
 
+    const { petName, petType } = req.query;
+    
     let sql = `
       SELECT sh.*, p.name as product_name, p.brand as product_brand, p.image_url as product_image
       FROM scan_history sh
@@ -2374,6 +2448,15 @@ router.get('/history', async (req, res, next) => {
       WHERE sh.device_id = ?
     `;
     const params = [deviceId];
+
+    if (petName) {
+      sql += ' AND sh.pet_name = ?';
+      params.push(petName);
+    }
+    if (petType) {
+      sql += ' AND sh.pet_type = ?';
+      params.push(petType);
+    }
 
     sql += ' ORDER BY sh.created_at DESC LIMIT ? OFFSET ?';
     params.push(parseInt(limit), parseInt(offset));

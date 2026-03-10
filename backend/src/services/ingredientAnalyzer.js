@@ -431,11 +431,11 @@ class IngredientAnalyzer {
       totalRiskScore += parseFloat((penalties[i] * multiplier).toFixed(2));
     }
 
-    // If more than half the ingredients are missing, we can't compute reliably
-    const cachedCount = ingredientsList.length - missingIngredients.length;
-    if (cachedCount === 0 || missingIngredients.length > ingredientsList.length * 0.5) {
+    if (missingIngredients.length > 0) {
       return { allCached: false, missingIngredients };
     }
+
+    const cachedCount = ingredientsList.length;
 
     // ── Base score: supplements 85, treats 75, food 100 ──
     let baseScore = isSupplement ? 85 : (isTreat ? 75 : 100);
@@ -837,33 +837,6 @@ class IngredientAnalyzer {
       }
     }
 
-    // Step 5b: Try with the most specific word (excluding generic terms)
-    const genericWords = new Set([
-      'products', 'product', 'meal', 'by', 'extract', 'oil', 'dried',
-      'supplement', 'flavor', 'natural', 'added', 'source', 'with',
-      'modified', 'preserved', 'dehydrated', 'ground', 'whole', 'organic'
-    ]);
-    const specificWords = normalizedName.split(' ')
-      .filter(w => w.length >= 4 && !genericWords.has(w))
-      .sort((a, b) => b.length - a.length);
-    
-    const keyWord = specificWords[0];
-    if (keyWord && keyWord.length >= 5) {
-      const fuzzy = await query(
-        `SELECT * FROM ai_assessment_cache 
-         WHERE ingredient_normalized LIKE ? AND ${baseWhere} AND pet_type = ?
-         ORDER BY CHAR_LENGTH(ingredient_normalized) ASC
-         LIMIT 1`,
-        [`%${keyWord}%`, ...baseParams, petType]
-      );
-      // Only accept if the matched result is similar in length (not wildly shorter or longer)
-      const matchLen = fuzzy[0]?.ingredient_normalized?.length || 0;
-      if (fuzzy.length > 0 && matchLen >= normalizedName.length * 0.4 && matchLen <= normalizedName.length * 2) {
-        console.log(`🔄 [Cache] Fuzzy match: "${normalizedName}" → "${fuzzy[0].ingredient_normalized}" (via "${keyWord}")`);
-        return fuzzy;
-      }
-    }
-
     return [];
   }
 
@@ -941,7 +914,7 @@ class IngredientAnalyzer {
     } else if (grade === 'D') {
       summary = `⚠️ Use caution. This food has several issues for ${petName}. Score: ${score}/100.`;
     } else {
-      summary = `❌ Not recommended for ${petName}. This food has significant issues. Score: ${score}/100.`;
+      summary = `❌ Avoid for ${petName}. This food has significant issues. Score: ${score}/100.`;
     }
 
     if (allergenMatches.length > 0) {

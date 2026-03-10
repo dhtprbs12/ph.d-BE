@@ -948,7 +948,7 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
             try {
               const computed = await ingredientAnalyzer.computeScoreFromCache(ingredientsList, conditionHash, petType, actualCandidateType);
               
-              if (computed.allCached || computed.finalScore !== undefined) {
+              if (computed.allCached && computed.finalScore !== undefined) {
                 review = {
                   finalScore: computed.finalScore,
                   grade: computed.grade,
