@@ -229,15 +229,26 @@ class ProductService {
       }
     }
 
-    // Ingredient inclusions
-    for (const [ingredient, include] of Object.entries(ingredientInclusions)) {
-      if (include && ingredientKeywords[ingredient]) {
-        const keywords = ingredientKeywords[ingredient];
-        const orConditions = keywords.map(() => `LOWER(p.raw_ingredients_text) LIKE ?`).join(' OR ');
-        where.push(`(${orConditions})`);
-        for (const keyword of keywords) {
-          params.push(`%${keyword}%`);
+    // Ingredient inclusions — match if keyword appears in first 3 ingredients
+    const activeInclusions = Object.entries(ingredientInclusions)
+      .filter(([_, include]) => include)
+      .map(([ingredient]) => ingredient);
+    
+    if (activeInclusions.length > 0) {
+      const inclusionClauses = [];
+      for (const ingredient of activeInclusions) {
+        if (!ingredientKeywords[ingredient]) continue;
+        for (const keyword of ingredientKeywords[ingredient]) {
+          inclusionClauses.push(
+            `LOWER(SUBSTRING_INDEX(p.raw_ingredients_text, ',', 1)) LIKE ?`,
+            `LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(p.raw_ingredients_text, ',', 2), ',', -1))) LIKE ?`,
+            `LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(p.raw_ingredients_text, ',', 3), ',', -1))) LIKE ?`
+          );
+          params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
         }
+      }
+      if (inclusionClauses.length > 0) {
+        where.push(`(${inclusionClauses.join(' OR ')})`);
       }
     }
 
