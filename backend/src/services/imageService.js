@@ -71,39 +71,50 @@ class ImageService {
    * SerpAPI - Google Images wrapper (primary)
    */
   async searchViaSerpApi(productName, brand) {
-    const searchQuery = `${brand || ''} ${productName} pet food product`.trim();
-    const url = `https://serpapi.com/search.json?` +
-      `api_key=${this.serpApiKey}&` +
-      `engine=google_images&` +
-      `q=${encodeURIComponent(searchQuery)}&` +
-      `num=1`;
+    const queries = [
+      `${brand || ''} ${productName} pet food product`.trim(),
+      `${brand || ''} ${productName} dog cat treats`.trim(),
+      `"${brand || ''}" "${productName}"`.trim(),
+    ];
 
-    try {
-      console.log(`🔍 [SerpAPI] Searching: "${searchQuery}"`);
-      const response = await fetch(url, {
-        signal: AbortSignal.timeout(10000)
-      });
+    for (const searchQuery of queries) {
+      const url = `https://serpapi.com/search.json?` +
+        `api_key=${this.serpApiKey}&` +
+        `engine=google_images&` +
+        `q=${encodeURIComponent(searchQuery)}&` +
+        `num=3`;
 
-      if (!response.ok) {
-        const errText = await response.text().catch(() => '');
-        console.error(`❌ [SerpAPI] HTTP ${response.status}: ${errText.slice(0, 200)}`);
-        return null;
+      try {
+        console.log(`🔍 [SerpAPI] Searching: "${searchQuery}"`);
+        const response = await fetch(url, {
+          signal: AbortSignal.timeout(10000)
+        });
+
+        if (!response.ok) {
+          const errText = await response.text().catch(() => '');
+          console.error(`❌ [SerpAPI] HTTP ${response.status}: ${errText.slice(0, 200)}`);
+          continue;
+        }
+
+        const data = await response.json();
+
+        if (data.images_results && data.images_results.length > 0) {
+          const best = data.images_results.find(r =>
+            r.original && !r.original.includes('placeholder') && !r.original.includes('no-image')
+          ) || data.images_results[0];
+          if (best?.original) {
+            console.log(`✅ [SerpAPI] Found: ${best.original}`);
+            return best.original;
+          }
+        }
+
+        console.log(`⚠️ [SerpAPI] No results for: "${searchQuery}"`);
+      } catch (error) {
+        console.error(`❌ [SerpAPI] Error:`, error.message);
       }
-
-      const data = await response.json();
-
-      if (data.images_results && data.images_results.length > 0) {
-        const imageUrl = data.images_results[0].original;
-        console.log(`✅ [SerpAPI] Found: ${imageUrl}`);
-        return imageUrl;
-      }
-
-      console.log(`⚠️ [SerpAPI] No results for: "${searchQuery}"`);
-      return null;
-    } catch (error) {
-      console.error(`❌ [SerpAPI] Error:`, error.message);
-      return null;
     }
+
+    return null;
   }
 
   /**
