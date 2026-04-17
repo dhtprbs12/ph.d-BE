@@ -258,21 +258,24 @@ class ProductService {
       params.push(`%${searchTerm}%`, `%${searchTerm}%`);
     }
 
+    // ── Assemble WHERE ──
+    const whereStr = where.length > 0 ? where.join(' AND ') : '1=1';
+
+    // Count total matching rows (before LIMIT/OFFSET)
+    const countSql = `SELECT COUNT(*) as total FROM products p${joinSql} WHERE ${whereStr}`;
+    const countResult = await query(countSql, [...params]);
+    const total = countResult[0]?.total ?? 0;
+
     // ── 3. ORDER + LIMIT ──
     params.push(limit, offset);
-
-    // ── Assemble ──
-    const whereStr = where.length > 0 ? where.join(' AND ') : '1=1';
     const sql = `SELECT p.* FROM products p${joinSql} WHERE ${whereStr} ORDER BY p.name ASC LIMIT ? OFFSET ?`;
 
     console.log('🔍 Filter SQL:', sql);
-    console.log('🔍 Filter params:', params);
 
     const results = await query(sql, params);
-    console.log('🔍 Filter results:', results.length, 'products');
+    console.log(`🔍 Filter results: ${results.length} products (total: ${total})`);
     
-    // Convert MySQL TINYINT(1) to boolean for iOS compatibility
-    return results;
+    return { products: results, total };
   }
 
   /**

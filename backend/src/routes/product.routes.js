@@ -78,7 +78,7 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
 
     const pet_type = petType || 'dog';
 
-    const products = await productService.filterProducts({
+    const filterResult = await productService.filterProducts({
       petType,
       productType,
       lifeStage,
@@ -100,6 +100,8 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
       limit: parseInt(limit),
       offset: parseInt(offset)
     });
+
+    const { products, total: totalCount } = filterResult;
 
     // =============================================
     // SCORE LOOKUP (Tier 1 + Tier 2, no AI calls)
@@ -223,7 +225,8 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
       pagination: {
         limit: parseInt(limit),
         offset: parseInt(offset),
-        count: products.length
+        count: products.length,
+        total: totalCount
       }
     });
   } catch (error) {
