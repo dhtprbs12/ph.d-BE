@@ -987,7 +987,8 @@ class IngredientAnalyzer {
 
   /**
    * Generate rule-based condition warnings for a product's ingredients.
-   * No AI needed — pure keyword matching against the pet's health conditions.
+   * No AI needed — word-boundary keyword matching with exclusion lists,
+   * per-keyword severity/messages, and position-aware context.
    */
   generateConditionWarnings(ingredientsList, healthConditions) {
     if (!healthConditions || healthConditions.length === 0) return [];
@@ -996,98 +997,193 @@ class IngredientAnalyzer {
     const warnings = [];
     const lowerIngredients = ingredientsList.map(i => i.toLowerCase());
 
+    function matchesKeyword(ingredientLower, keyword, excludes) {
+      if (excludes && excludes.some(ex => ingredientLower.includes(ex))) return false;
+      const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+      return regex.test(ingredientLower);
+    }
+
+    function positionSuffix(pos) {
+      if (pos <= 3) return ' (main ingredient — significant amount)';
+      if (pos >= 8) return ' (minor ingredient — small amount)';
+      return '';
+    }
+
     const allergyRules = {
-      allergy_beef: { keywords: ['beef', 'cattle', 'bovine'], label: 'Beef' },
-      allergy_chicken: { keywords: ['chicken', 'poultry'], label: 'Chicken' },
-      allergy_fish: { keywords: ['fish', 'salmon', 'tuna', 'sardine', 'anchovy', 'herring', 'cod', 'tilapia', 'whitefish', 'trout', 'pollock', 'mackerel'], label: 'Fish' },
-      allergy_dairy: { keywords: ['milk', 'cheese', 'whey', 'dairy', 'casein', 'lactose', 'yogurt', 'butter'], label: 'Dairy' },
-      allergy_grains: { keywords: ['wheat', 'corn', 'rice', 'barley', 'oat', 'grain', 'sorghum', 'millet', 'rye'], label: 'Grains' },
-      allergy_eggs: { keywords: ['egg'], label: 'Eggs' },
-      allergy_soy: { keywords: ['soy', 'soybean'], label: 'Soy' },
-      allergy_lamb: { keywords: ['lamb'], label: 'Lamb' }
+      allergy_beef: {
+        keywords: ['beef', 'cattle', 'bovine'],
+        excludes: [],
+        label: 'Beef'
+      },
+      allergy_chicken: {
+        keywords: ['chicken', 'poultry'],
+        excludes: ['chickpea', 'chickpeas'],
+        label: 'Chicken'
+      },
+      allergy_fish: {
+        keywords: ['fish', 'salmon', 'tuna', 'sardine', 'anchovy', 'herring', 'cod', 'tilapia', 'whitefish', 'trout', 'pollock', 'mackerel', 'menhaden'],
+        excludes: ['starfish'],
+        label: 'Fish'
+      },
+      allergy_dairy: {
+        keywords: ['milk', 'cheese', 'whey', 'dairy', 'casein', 'lactose', 'yogurt', 'butter', 'cream'],
+        excludes: ['coconut milk', 'coconut cream', 'buttercup'],
+        label: 'Dairy'
+      },
+      allergy_grains: {
+        keywords: ['wheat', 'corn', 'rice', 'barley', 'oat', 'grain', 'sorghum', 'millet', 'rye', 'spelt', 'maize'],
+        excludes: ['grain-free', 'licorice'],
+        label: 'Grains'
+      },
+      allergy_eggs: {
+        keywords: ['egg'],
+        excludes: ['eggplant'],
+        label: 'Eggs'
+      },
+      allergy_soy: {
+        keywords: ['soy', 'soybean'],
+        excludes: [],
+        label: 'Soy'
+      },
+      allergy_lamb: {
+        keywords: ['lamb'],
+        excludes: [],
+        label: 'Lamb'
+      }
     };
 
     const diseaseRules = {
       diabetes: {
-        keywords: ['sugar', 'corn syrup', 'dextrose', 'sucrose', 'molasses', 'honey', 'fructose', 'caramel'],
-        label: 'diabetes',
-        message: 'may affect blood sugar levels'
+        label: 'Diabetes',
+        entries: [
+          { keywords: ['corn syrup', 'high fructose corn syrup'], severity: 'high', message: '{ingredient} is a high-glycemic sweetener that can spike blood sugar' },
+          { keywords: ['sugar', 'sucrose', 'dextrose', 'fructose', 'glucose'], severity: 'high', message: '{ingredient} is a simple sugar that can elevate blood glucose levels' },
+          { keywords: ['molasses', 'honey', 'caramel'], severity: 'medium', message: '{ingredient} contains natural sugars — monitor intake for diabetic pets' },
+          { keywords: ['white rice', 'brewers rice', 'rice flour'], severity: 'medium', message: '{ingredient} is high-glycemic and may cause blood sugar fluctuations' },
+        ]
       },
       obesity: {
-        keywords: ['animal fat', 'beef tallow', 'lard', 'vegetable oil', 'corn syrup', 'sugar', 'dextrose'],
-        label: 'weight management',
-        message: 'high-calorie ingredient not ideal for weight management'
+        label: 'Weight Management',
+        entries: [
+          { keywords: ['animal fat', 'beef tallow', 'lard', 'poultry fat'], severity: 'high', message: '{ingredient} is a concentrated fat source — adds significant calories' },
+          { keywords: ['corn syrup', 'sugar', 'sucrose', 'dextrose'], severity: 'high', message: '{ingredient} adds empty calories with no nutritional benefit' },
+          { keywords: ['vegetable oil', 'canola oil', 'soybean oil'], severity: 'medium', message: '{ingredient} is calorie-dense — portion control important for overweight pets' },
+          { keywords: ['tapioca', 'potato starch'], severity: 'medium', message: '{ingredient} is a high-carb filler that can contribute to weight gain' },
+        ]
       },
       kidney_disease: {
-        keywords: ['salt', 'sodium', 'phosphoric acid', 'bone meal', 'sodium phosphate', 'phosphorus'],
-        label: 'kidney health',
-        message: 'high phosphorus/sodium can stress kidneys'
+        label: 'Kidney Health',
+        entries: [
+          { keywords: ['sodium phosphate', 'phosphoric acid', 'dicalcium phosphate'], severity: 'high', message: '{ingredient} is high in phosphorus — can accelerate kidney damage' },
+          { keywords: ['bone meal', 'meat and bone meal'], severity: 'high', message: '{ingredient} is very high in phosphorus — avoid for kidney disease' },
+          { keywords: ['salt', 'sodium'], severity: 'high', message: '{ingredient} increases sodium load — stresses kidneys and raises blood pressure' },
+          { keywords: ['phosphorus'], severity: 'medium', message: '{ingredient} adds to phosphorus intake — should be limited with kidney disease' },
+        ]
       },
       heart_disease: {
-        keywords: ['salt', 'sodium', 'sodium chloride', 'sodium nitrite'],
-        label: 'heart health',
-        message: 'high sodium not recommended for heart conditions'
+        label: 'Heart Health',
+        entries: [
+          { keywords: ['salt', 'sodium chloride', 'sodium nitrite'], severity: 'high', message: '{ingredient} is high in sodium — can worsen fluid retention and heart strain' },
+          { keywords: ['sodium'], severity: 'medium', message: '{ingredient} contributes to sodium intake — should be minimized for heart conditions' },
+        ]
       },
       pancreatitis: {
-        keywords: ['animal fat', 'beef tallow', 'lard', 'bacon', 'vegetable oil', 'canola oil'],
-        label: 'pancreatitis',
-        message: 'high-fat ingredient can trigger pancreatitis flare-ups'
+        label: 'Pancreatitis',
+        entries: [
+          { keywords: ['animal fat', 'beef tallow', 'lard', 'bacon fat'], severity: 'high', message: '{ingredient} is very high in fat — can trigger a pancreatitis flare-up' },
+          { keywords: ['vegetable oil', 'canola oil', 'soybean oil', 'coconut oil'], severity: 'medium', message: '{ingredient} adds fat content — use caution with pancreatitis history' },
+          { keywords: ['butter', 'cream'], severity: 'high', message: '{ingredient} is a rich fat source — risky for pancreatitis-prone pets' },
+        ]
       },
       liver_disease: {
-        keywords: ['copper sulfate', 'copper proteinate', 'copper amino acid', 'copper chelate'],
-        label: 'liver health',
-        message: 'added copper may be harmful for liver conditions'
+        label: 'Liver Health',
+        entries: [
+          { keywords: ['copper sulfate', 'copper proteinate', 'copper amino acid', 'copper chelate', 'cupric'], severity: 'high', message: '{ingredient} contains added copper — can be toxic for pets with liver disease' },
+          { keywords: ['bha', 'bht', 'ethoxyquin'], severity: 'medium', message: '{ingredient} is a chemical preservative — extra burden on a compromised liver' },
+        ]
       },
       ibd: {
-        keywords: ['carrageenan', 'guar gum', 'xanthan gum', 'cellulose', 'soy'],
-        label: 'digestive health (IBD)',
-        message: 'thickener/additive may irritate sensitive GI tract'
+        label: 'IBD (Inflammatory Bowel)',
+        entries: [
+          { keywords: ['carrageenan'], severity: 'high', message: '{ingredient} is linked to GI inflammation — avoid with IBD' },
+          { keywords: ['guar gum', 'xanthan gum', 'locust bean gum'], severity: 'medium', message: '{ingredient} is a thickener that may irritate an inflamed GI tract' },
+          { keywords: ['cellulose', 'powdered cellulose'], severity: 'medium', message: '{ingredient} is an indigestible fiber filler — can aggravate IBD symptoms' },
+          { keywords: ['soy', 'soybean'], severity: 'medium', message: '{ingredient} is a common irritant for pets with inflammatory bowel disease' },
+        ]
       },
       urinary_issues: {
-        keywords: ['salt', 'sodium', 'magnesium oxide', 'phosphoric acid', 'calcium carbonate'],
-        label: 'urinary health',
-        message: 'mineral content may affect urinary crystal formation'
+        label: 'Urinary Health',
+        entries: [
+          { keywords: ['magnesium oxide', 'magnesium sulfate'], severity: 'high', message: '{ingredient} is high in magnesium — can promote struvite crystal formation' },
+          { keywords: ['phosphoric acid', 'dicalcium phosphate'], severity: 'high', message: '{ingredient} is high in phosphorus — can contribute to urinary stones' },
+          { keywords: ['calcium carbonate'], severity: 'medium', message: '{ingredient} adds calcium — excess calcium can promote crystal formation' },
+          { keywords: ['salt', 'sodium'], severity: 'medium', message: '{ingredient} affects hydration balance — monitor for urinary conditions' },
+        ]
       },
       digestive_sensitivity: {
-        keywords: ['corn', 'wheat', 'soy', 'carrageenan', 'guar gum', 'xanthan gum', 'artificial flavor', 'bha', 'bht', 'ethoxyquin'],
-        label: 'digestive sensitivity',
-        message: 'may irritate a sensitive digestive system'
+        label: 'Digestive Sensitivity',
+        entries: [
+          { keywords: ['carrageenan'], severity: 'high', message: '{ingredient} is a known GI irritant — avoid for sensitive stomachs' },
+          { keywords: ['bha', 'bht', 'ethoxyquin'], severity: 'high', message: '{ingredient} is an artificial preservative that can upset sensitive digestion' },
+          { keywords: ['corn', 'wheat', 'soy'], severity: 'medium', message: '{ingredient} is a common trigger for digestive discomfort in sensitive pets' },
+          { keywords: ['guar gum', 'xanthan gum'], severity: 'medium', message: '{ingredient} is a thickening agent that some sensitive pets struggle to digest' },
+          { keywords: ['artificial flavor', 'artificial colour', 'artificial color'], severity: 'medium', message: '{ingredient} is a synthetic additive — not ideal for sensitive digestion' },
+        ]
       },
       skin_issues: {
-        keywords: ['artificial color', 'red 40', 'yellow 5', 'yellow 6', 'blue 2', 'corn', 'wheat', 'soy', 'by-product'],
-        label: 'skin health',
-        message: 'may contribute to skin irritation or inflammation'
+        label: 'Skin Health',
+        entries: [
+          { keywords: ['red 40', 'yellow 5', 'yellow 6', 'blue 2', 'artificial color', 'artificial colour'], severity: 'high', message: '{ingredient} is an artificial dye linked to skin reactions and inflammation' },
+          { keywords: ['by-product', 'by-products', 'meat by-product'], severity: 'medium', message: '{ingredient} is a low-quality protein source that may trigger skin issues' },
+          { keywords: ['corn', 'wheat', 'soy'], severity: 'medium', message: '{ingredient} is a common allergen that can manifest as skin irritation' },
+          { keywords: ['bha', 'bht'], severity: 'medium', message: '{ingredient} is a chemical preservative that may aggravate skin conditions' },
+        ]
       },
       joint_issues: {
-        keywords: ['corn syrup', 'sugar', 'dextrose', 'sodium', 'salt'],
-        label: 'joint health',
-        message: 'may promote inflammation — not ideal for joint issues'
+        label: 'Joint Health',
+        entries: [
+          { keywords: ['corn syrup', 'sugar', 'sucrose', 'dextrose'], severity: 'high', message: '{ingredient} promotes inflammation — counterproductive for joint issues' },
+          { keywords: ['salt', 'sodium'], severity: 'medium', message: '{ingredient} can contribute to water retention and joint swelling' },
+          { keywords: ['bha', 'bht'], severity: 'medium', message: '{ingredient} is a synthetic preservative that may promote oxidative stress in joints' },
+        ]
       },
       thyroid_issues: {
-        keywords: ['soy', 'soybean', 'soy flour', 'soy protein', 'iodine'],
-        label: 'thyroid health',
-        message: 'may interfere with thyroid function'
+        label: 'Thyroid Health',
+        entries: [
+          { keywords: ['soy', 'soybean', 'soy flour', 'soy protein', 'soy lecithin'], severity: 'high', message: '{ingredient} contains isoflavones that can interfere with thyroid hormone production' },
+          { keywords: ['iodine', 'kelp', 'seaweed'], severity: 'medium', message: '{ingredient} affects iodine levels — requires monitoring for thyroid conditions' },
+        ]
       }
     };
 
     for (const condition of healthConditions) {
       const condType = condition.condition_type || condition.conditionType || condition;
 
-      // Allergy warnings
+      // Allergy warnings — word-boundary matching with exclusion lists
       const allergyRule = allergyRules[condType];
       if (allergyRule) {
         for (let i = 0; i < ingredientsList.length; i++) {
           const lower = lowerIngredients[i];
           for (const keyword of allergyRule.keywords) {
-            if (lower.includes(keyword)) {
+            if (matchesKeyword(lower, keyword, allergyRule.excludes)) {
+              const pos = i + 1;
+              let message;
+              if (pos <= 2) {
+                message = `⚠️ ${ingredientsList[i]} is a primary ingredient — high exposure risk for ${allergyRule.label.toLowerCase()} allergy`;
+              } else if (pos <= 5) {
+                message = `Contains ${ingredientsList[i]} — potential allergen trigger for ${allergyRule.label.toLowerCase()} allergy`;
+              } else {
+                message = `${ingredientsList[i]} is listed further down but may still trigger ${allergyRule.label.toLowerCase()} allergy in sensitive pets`;
+              }
+
               warnings.push({
                 type: 'allergy',
-                severity: 'high',
+                severity: pos <= 5 ? 'high' : 'medium',
                 condition: condType,
                 conditionLabel: allergyRule.label,
                 ingredient: ingredientsList[i],
-                position: i + 1,
-                message: `Contains ${ingredientsList[i]} — allergen for pets with ${allergyRule.label.toLowerCase()} allergy`
+                position: pos,
+                message
               });
               break;
             }
@@ -1095,24 +1191,33 @@ class IngredientAnalyzer {
         }
       }
 
-      // Disease warnings
+      // Disease warnings — per-keyword severity and specific messages
       const diseaseRule = diseaseRules[condType];
       if (diseaseRule) {
         for (let i = 0; i < ingredientsList.length; i++) {
           const lower = lowerIngredients[i];
-          for (const keyword of diseaseRule.keywords) {
-            if (lower.includes(keyword)) {
-              warnings.push({
-                type: 'disease',
-                severity: i < 5 ? 'high' : 'medium',
-                condition: condType,
-                conditionLabel: diseaseRule.label,
-                ingredient: ingredientsList[i],
-                position: i + 1,
-                message: `${ingredientsList[i]} — ${diseaseRule.message}`
-              });
-              break;
+          let matched = false;
+
+          for (const entry of diseaseRule.entries) {
+            for (const keyword of entry.keywords) {
+              if (matchesKeyword(lower, keyword)) {
+                const pos = i + 1;
+                const baseMsg = entry.message.replace('{ingredient}', ingredientsList[i]);
+
+                warnings.push({
+                  type: 'disease',
+                  severity: entry.severity,
+                  condition: condType,
+                  conditionLabel: diseaseRule.label,
+                  ingredient: ingredientsList[i],
+                  position: pos,
+                  message: baseMsg + positionSuffix(pos)
+                });
+                matched = true;
+                break;
+              }
             }
+            if (matched) break;
           }
         }
       }
