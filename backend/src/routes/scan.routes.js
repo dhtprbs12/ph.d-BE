@@ -1195,11 +1195,12 @@ router.post('/quick-analyze', async (req, res, next) => {
     }
 
     const pet = {
+      id: deviceId || 'local',
       name: petName || 'Pet',
-      type: petType || product.target_pet_type || 'dog',
+      pet_type: petType || product.target_pet_type || 'dog',
       breed: petBreed || null,
-      ageMonths: petAgeMonths ? parseInt(petAgeMonths) : null,
-      weightKg: petWeightKg ? parseFloat(petWeightKg) : null,
+      age_months: petAgeMonths ? parseInt(petAgeMonths) : null,
+      weight_kg: petWeightKg ? parseFloat(petWeightKg) : null,
       allergies: petAllergies ? (typeof petAllergies === 'string' ? safeJsonParse(petAllergies, []) : petAllergies) : [],
       healthConditions: parsedConditions
     };

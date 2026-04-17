@@ -989,6 +989,122 @@ class IngredientAnalyzer {
       return !filterWords.includes(lower) && !/^\d+%?$/.test(i);
     });
   }
+
+  /**
+   * Generate rule-based condition warnings for a product's ingredients.
+   * No AI needed — pure keyword matching against the pet's health conditions.
+   */
+  generateConditionWarnings(ingredientsList, healthConditions) {
+    if (!healthConditions || healthConditions.length === 0) return [];
+    if (!ingredientsList || ingredientsList.length === 0) return [];
+
+    const warnings = [];
+    const lowerIngredients = ingredientsList.map(i => i.toLowerCase());
+
+    const allergyRules = {
+      allergy_beef: { keywords: ['beef', 'cattle', 'bovine'], label: 'Beef' },
+      allergy_chicken: { keywords: ['chicken', 'poultry'], label: 'Chicken' },
+      allergy_fish: { keywords: ['fish', 'salmon', 'tuna', 'sardine', 'anchovy', 'herring', 'cod', 'tilapia', 'whitefish', 'trout', 'pollock', 'mackerel'], label: 'Fish' },
+      allergy_dairy: { keywords: ['milk', 'cheese', 'whey', 'dairy', 'casein', 'lactose', 'yogurt', 'butter'], label: 'Dairy' },
+      allergy_grains: { keywords: ['wheat', 'corn', 'rice', 'barley', 'oat', 'grain', 'sorghum', 'millet', 'rye'], label: 'Grains' },
+      allergy_eggs: { keywords: ['egg'], label: 'Eggs' },
+      allergy_soy: { keywords: ['soy', 'soybean'], label: 'Soy' },
+      allergy_lamb: { keywords: ['lamb'], label: 'Lamb' }
+    };
+
+    const diseaseRules = {
+      diabetes: {
+        keywords: ['sugar', 'corn syrup', 'dextrose', 'sucrose', 'molasses', 'honey', 'fructose', 'caramel'],
+        label: 'diabetes',
+        message: 'may affect blood sugar levels'
+      },
+      obesity: {
+        keywords: ['animal fat', 'beef tallow', 'lard', 'vegetable oil'],
+        label: 'weight management',
+        message: 'high-fat ingredient not ideal for weight management'
+      },
+      kidney_disease: {
+        keywords: ['salt', 'sodium', 'phosphoric acid', 'bone meal', 'sodium phosphate'],
+        label: 'kidney health',
+        message: 'high phosphorus/sodium can stress kidneys'
+      },
+      heart_disease: {
+        keywords: ['salt', 'sodium', 'sodium chloride', 'sodium nitrite'],
+        label: 'heart health',
+        message: 'high sodium not recommended for heart conditions'
+      },
+      pancreatitis: {
+        keywords: ['animal fat', 'beef tallow', 'lard', 'bacon', 'vegetable oil', 'canola oil'],
+        label: 'pancreatitis',
+        message: 'high-fat ingredient can trigger pancreatitis flare-ups'
+      },
+      liver_disease: {
+        keywords: ['copper sulfate', 'copper proteinate', 'copper amino acid'],
+        label: 'liver health',
+        message: 'added copper may be harmful for liver conditions'
+      },
+      ibd: {
+        keywords: ['carrageenan', 'guar gum', 'xanthan gum'],
+        label: 'digestive health (IBD)',
+        message: 'thickener/additive may irritate sensitive GI tract'
+      },
+      urinary: {
+        keywords: ['salt', 'sodium', 'magnesium oxide', 'phosphoric acid'],
+        label: 'urinary health',
+        message: 'mineral content may affect urinary crystal formation'
+      }
+    };
+
+    for (const condition of healthConditions) {
+      const condType = condition.condition_type || condition.conditionType || condition;
+
+      // Allergy warnings
+      const allergyRule = allergyRules[condType];
+      if (allergyRule) {
+        for (let i = 0; i < ingredientsList.length; i++) {
+          const lower = lowerIngredients[i];
+          for (const keyword of allergyRule.keywords) {
+            if (lower.includes(keyword)) {
+              warnings.push({
+                type: 'allergy',
+                severity: 'high',
+                condition: condType,
+                conditionLabel: allergyRule.label,
+                ingredient: ingredientsList[i],
+                position: i + 1,
+                message: `Contains ${ingredientsList[i]} — allergen for pets with ${allergyRule.label.toLowerCase()} allergy`
+              });
+              break;
+            }
+          }
+        }
+      }
+
+      // Disease warnings
+      const diseaseRule = diseaseRules[condType];
+      if (diseaseRule) {
+        for (let i = 0; i < ingredientsList.length; i++) {
+          const lower = lowerIngredients[i];
+          for (const keyword of diseaseRule.keywords) {
+            if (lower.includes(keyword)) {
+              warnings.push({
+                type: 'disease',
+                severity: i < 5 ? 'high' : 'medium',
+                condition: condType,
+                conditionLabel: diseaseRule.label,
+                ingredient: ingredientsList[i],
+                position: i + 1,
+                message: `${ingredientsList[i]} — ${diseaseRule.message}`
+              });
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    return warnings;
+  }
 }
 
 module.exports = new IngredientAnalyzer();
