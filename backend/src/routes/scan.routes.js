@@ -159,18 +159,17 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     console.log('🧪 [BG] Analyzing', ingredientsList.length, 'ingredients for', pet.name);
     let analysis = await ingredientAnalyzer.analyzeIngredients(ingredientsList, pet);
     
-    // PERSONALIZED AI ASSESSMENT - Now per individual condition
+    // UNIVERSAL SCORING — always score as "healthy" baseline
+    // Pet-specific concerns are handled via rule-based warnings (no AI needed)
     const healthConditions = pet.healthConditions || [];
     const hasConditions = healthConditions.length > 0;
     const productType = extracted.productType || product?.product_type || 
       (ingredientsList.length <= 6 ? 'treats' : 'food');
     
-    // Get list of individual conditions to evaluate (including "healthy" as a baseline)
-    const conditionsToEvaluate = hasConditions 
-      ? healthConditions.map(c => c.condition_type || c)
-      : ['healthy'];
+    // Always evaluate as "healthy" — one universal score per product
+    const conditionsToEvaluate = ['healthy'];
     
-    console.log('🏥 [BG] Evaluating conditions:', conditionsToEvaluate.join(', '));
+    console.log(`🏥 [BG] Universal scoring (healthy baseline)${hasConditions ? ` + ${healthConditions.length} condition warning(s)` : ''}`);
     
     // Update progress
     analysisStore.set(scanId, {
@@ -178,13 +177,8 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
       progress: 'Checking ingredient database...'
     });
     
-    // Determine which ingredients need AI assessment
-    let ingredientsToAssess;
-    if (hasConditions) {
-      ingredientsToAssess = analysis.ingredients;
-    } else {
-      ingredientsToAssess = analysis.ingredients.filter(i => i.needsAIAssessment || !i.found);
-    }
+    // Determine which ingredients need AI assessment (only those not yet cached)
+    let ingredientsToAssess = analysis.ingredients.filter(i => i.needsAIAssessment || !i.found);
     
     // Pre-compute ingredient hash for cache lookups
     const productServiceLocal = require('../services/productService');
@@ -728,16 +722,17 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     
     console.log(`✅ [BG] Analysis complete: score=${analysis.finalScore}, grade=${analysis.grade}`);
     
-    // Generate AI insights
-    analysisStore.set(scanId, {
-      ...analysisStore.get(scanId),
-      progress: 'Generating personalized insights...'
-    });
+    // Generate condition warnings (rule-based, no AI)
+    const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, healthConditions);
+    if (conditionWarnings.length > 0) {
+      console.log(`⚠️ [BG] ${conditionWarnings.length} condition warning(s) for ${pet.name}`);
+    }
     
     // Build aiInsights from holistic review (no extra AI call needed)
     const aiInsights = {
       topBenefits: holisticReview.positives || [],
       topConcerns: holisticReview.keyIssues || [],
+      conditionWarnings,
       aiGenerated: true
     };
     
@@ -862,11 +857,86 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
 
     console.log(`✅ [FRONT] Captured: "${extracted.brand || ''} ${extracted.productName || ''}" (pendingId: ${pendingScanId})`);
 
-    // Background: check DB first, then search Google only if no image exists (non-blocking)
+    // Search DB for matching products (candidates for quick selection)
+    let candidates = [];
+    if (extracted.productName || extracted.brand) {
+      try {
+        const brandTerm = (extracted.brand || '').trim();
+        const nameTerm = (extracted.productName || '').trim();
+        const fullText = `${brandTerm} ${nameTerm}`.trim();
+        
+        console.log(`🔍 [FRONT] Searching candidates: brand="${brandTerm}", name="${nameTerm}"`);
+        
+        let candidateRows = [];
+        
+        // Strategy 1: Search by brand
+        if (brandTerm) {
+          candidateRows = await query(
+            `SELECT id, name, brand, image_url, product_type, target_pet_type 
+             FROM products 
+             WHERE brand LIKE ? AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
+             ORDER BY scan_count DESC
+             LIMIT 10`,
+            [`%${brandTerm}%`]
+          );
+        }
+        
+        // Strategy 2: Search by name keywords
+        if (candidateRows.length === 0 && nameTerm) {
+          const keywords = nameTerm.split(/\s+/).filter(w => w.length > 2);
+          if (keywords.length > 0) {
+            const likeConditions = keywords.map(() => 'name LIKE ?').join(' AND ');
+            const likeParams = keywords.map(k => `%${k}%`);
+            candidateRows = await query(
+              `SELECT id, name, brand, image_url, product_type, target_pet_type 
+               FROM products 
+               WHERE (${likeConditions}) AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
+               ORDER BY scan_count DESC
+               LIMIT 10`,
+              likeParams
+            );
+          }
+        }
+        
+        // Strategy 3: Search brand+name keywords across both columns
+        if (candidateRows.length === 0 && fullText) {
+          const keywords = fullText.split(/\s+/).filter(w => w.length > 2);
+          if (keywords.length > 0) {
+            const likeConditions = keywords.map(() => '(name LIKE ? OR brand LIKE ?)').join(' AND ');
+            const likeParams = keywords.flatMap(k => [`%${k}%`, `%${k}%`]);
+            candidateRows = await query(
+              `SELECT id, name, brand, image_url, product_type, target_pet_type 
+               FROM products 
+               WHERE (${likeConditions}) AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
+               ORDER BY scan_count DESC
+               LIMIT 10`,
+              likeParams
+            );
+          }
+        }
+        
+        if (candidateRows.length > 0) {
+          candidates = candidateRows.map(r => ({
+            id: r.id,
+            name: r.name,
+            brand: r.brand,
+            imageUrl: r.image_url,
+            productType: r.product_type,
+            targetPetType: r.target_pet_type
+          }));
+          console.log(`🔍 [FRONT] Found ${candidates.length} candidate(s) for "${fullText}"`);
+        } else {
+          console.log(`🔍 [FRONT] No candidates found for "${fullText}"`);
+        }
+      } catch (err) {
+        console.log('⚠️ [FRONT] Candidate search failed:', err.message);
+      }
+    }
+
+    // Background: search for product image (non-blocking)
     if (extracted.productName || extracted.brand) {
       (async () => {
         try {
-          // Check DB for existing product with this name/brand that already has an image
           const existing = await query(
             `SELECT image_url FROM products 
              WHERE (name LIKE ? OR brand LIKE ?) AND image_url IS NOT NULL AND image_url != ''
@@ -878,15 +948,11 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
           if (!pending) return;
 
           if (existing.length > 0 && existing[0].image_url) {
-            // Already have image in DB — skip API call
             pending.imageUrl = existing[0].image_url;
-            console.log(`⚡ [FRONT] Image already in DB for "${extracted.brand || ''} ${extracted.productName || ''}"`);
           } else {
-            // No image in DB — search Google (store external URL temporarily, will download during back label)
             const externalUrl = await imageService.searchProductImage(extracted.productName, extracted.brand);
             if (externalUrl && pendingFrontLabels.has(pendingScanId)) {
               pendingFrontLabels.get(pendingScanId).externalImageUrl = externalUrl;
-              console.log(`🖼️ [FRONT] Found image via Google for "${extracted.brand || ''} ${extracted.productName || ''}": ${externalUrl}`);
             }
           }
         } catch (err) {
@@ -904,7 +970,10 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
         targetPet: extracted.targetPet,
         productType: extracted.productType
       },
-      nextStep: 'Now scan the back of the package to see the ingredients list.'
+      candidates,
+      nextStep: candidates.length > 0 
+        ? 'We found matching products. Select yours or scan the back label.'
+        : 'Now scan the back of the package to see the ingredients list.'
     });
 
   } catch (error) {
@@ -1091,6 +1160,104 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
 
   } catch (error) {
     console.error('[BACK] Error:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /api/scan/quick-analyze
+ * Skip back label scan — analyze a known product from the DB for a specific pet
+ */
+router.post('/quick-analyze', async (req, res, next) => {
+  try {
+    const { productId, petName, petType, petBreed, petAgeMonths, petWeightKg, petAllergies, petHealthConditions, deviceId } = req.body;
+
+    if (!productId) {
+      return res.status(400).json({ error: 'productId is required' });
+    }
+
+    const product = await productService.findById(productId);
+    if (!product || !product.raw_ingredients_text) {
+      return res.status(404).json({ error: 'Product not found or has no ingredient data' });
+    }
+
+    const ingredientsList = ingredientAnalyzer.parseIngredientText(product.raw_ingredients_text);
+    if (ingredientsList.length === 0) {
+      return res.status(422).json({ error: 'Could not parse ingredients for this product' });
+    }
+
+    // Build pet object
+    let parsedConditions = [];
+    if (petHealthConditions) {
+      parsedConditions = typeof petHealthConditions === 'string'
+        ? safeJsonParse(petHealthConditions, [])
+        : petHealthConditions;
+    }
+
+    const pet = {
+      name: petName || 'Pet',
+      type: petType || product.target_pet_type || 'dog',
+      breed: petBreed || null,
+      ageMonths: petAgeMonths ? parseInt(petAgeMonths) : null,
+      weightKg: petWeightKg ? parseFloat(petWeightKg) : null,
+      allergies: petAllergies ? (typeof petAllergies === 'string' ? safeJsonParse(petAllergies, []) : petAllergies) : [],
+      healthConditions: parsedConditions
+    };
+
+    const scanId = uuidv4();
+    const extracted = {
+      productName: product.name,
+      brand: product.brand,
+      targetPet: product.target_pet_type,
+      productType: product.product_type,
+      rawIngredientsText: product.raw_ingredients_text,
+      ingredientsList,
+      confidence: 1.0,
+      imageType: 'quick_analyze'
+    };
+
+    // Store initial state for polling
+    analysisStore.set(scanId, {
+      status: 'processing',
+      progress: 'Analyzing ingredients...',
+      extracted,
+      product: { id: product.id, name: product.name, brand: product.brand, image_url: product.image_url },
+      pet,
+      startTime: Date.now()
+    });
+
+    // Increment scan count
+    await query('UPDATE products SET scan_count = scan_count + 1 WHERE id = ?', [product.id]);
+
+    console.log(`⚡ [QUICK] Starting analysis for "${product.brand || ''} ${product.name}" (${ingredientsList.length} ingredients) for ${pet.name}`);
+
+    // Trigger background analysis (same as back label flow)
+    processAnalysisInBackground(scanId, ingredientsList, pet, extracted, product, deviceId || 'unknown');
+
+    res.json({
+      scanId,
+      status: 'processing',
+      scanType: 'quick_analyze',
+      extracted: {
+        productName: product.name,
+        brand: product.brand,
+        targetPet: product.target_pet_type,
+        ingredientCount: ingredientsList.length,
+        confidence: 1.0
+      },
+      product: {
+        id: product.id,
+        name: product.name,
+        brand: product.brand,
+        image_url: product.image_url,
+        isNew: false
+      },
+      pollUrl: `/api/scan/${scanId}/result`,
+      message: 'Quick analysis started. Poll for results.'
+    });
+
+  } catch (error) {
+    console.error('[QUICK-ANALYZE] Error:', error);
     next(error);
   }
 });
@@ -1387,32 +1554,22 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
     console.log('🧪 Analyzing', ingredientsList.length, 'ingredients for', pet.name);
     let analysis = await ingredientAnalyzer.analyzeIngredients(ingredientsList, pet);
     
-    // PERSONALIZED AI ASSESSMENT - PER CONDITION CACHING
+    // UNIVERSAL SCORING — always score as "healthy" baseline
     const healthConditions = pet.healthConditions || [];
     const hasConditions = healthConditions.length > 0;
     const productType = extracted.productType || product?.product_type || 
       (ingredientsList.length <= 6 ? 'treats' : 'food');
     
-    // Get list of individual conditions to evaluate
-    const conditionsToEvaluateSync = hasConditions 
-      ? healthConditions.map(c => c.condition_type || c)
-      : ['healthy'];
+    // Always evaluate as "healthy" — universal score
+    const conditionsToEvaluateSync = ['healthy'];
     
-    console.log('🏥 [SYNC] Evaluating conditions:', conditionsToEvaluateSync.join(', '));
+    console.log(`🏥 [SYNC] Universal scoring${hasConditions ? ` + ${healthConditions.length} condition warning(s)` : ''}`);
     
-    // Determine which ingredients need AI assessment
-    let ingredientsToAssess;
-    if (hasConditions) {
-      ingredientsToAssess = analysis.ingredients;
-    } else {
-      ingredientsToAssess = analysis.ingredients.filter(i => i.needsAIAssessment || !i.found);
-    }
+    // Determine which ingredients need AI assessment (only uncached)
+    let ingredientsToAssess = analysis.ingredients.filter(i => i.needsAIAssessment || !i.found);
     
-    // Note: SYNC mode uses simplified combined hash (ASYNC mode uses per-condition caching)
-    // For healthy pets, use "healthy_productType" format to match new per-condition format
-    const syncConditionsHash = hasConditions 
-      ? require('crypto').createHash('md5').update(healthConditions.map(c => c.condition_type || c).sort().join(',') + '_' + productType).digest('hex').substring(0, 16)
-      : `healthy_${productType}`;
+    // Always use healthy hash for universal scoring
+    const syncConditionsHash = `healthy_${productType}`;
     
     let scoreAdjustment = 0;
     
@@ -1630,13 +1787,13 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
       console.warn('Cache check failed:', err.message);
     }
     
-    // If not cached, get AI holistic review
+    // If not cached, get AI holistic review (universal — no conditions)
     if (!holisticReview) {
-      console.log('🤖 Getting AI holistic review...');
+      console.log('🤖 Getting AI holistic review (universal)...');
       holisticReview = await geminiService.reviewProductHolistically({
         ingredients: ingredientsList,
         petType: pet.pet_type,
-        healthConditions: healthConditions.map(c => c.condition_type || c),
+        healthConditions: [],
         productType: productType,
         petName: pet.name
       });
@@ -1695,18 +1852,18 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
     const summaryEmoji = analysis.grade === 'A' ? '✅' : analysis.grade === 'B' ? '👍' : analysis.grade === 'C' ? '⚠️' : '❌';
     analysis.summary = holisticReview.aiSummary || `${summaryEmoji} ${['A', 'B'].includes(analysis.grade) ? 'Good' : analysis.grade === 'C' ? 'Acceptable' : 'Concerning'} choice for ${pet.name}. Score: ${analysis.finalScore}/100.`;
     
-    if (hasConditions) {
-      analysis.summary += ` (Personalized for ${healthConditions.map(c => c.condition_type || c).join(', ')})`;
-    }
-    
-    console.log(`✅ Analysis complete: score=${analysis.finalScore}, grade=${analysis.grade}`);
-    
-    console.log('✅ Analysis complete:', { score: analysis.finalScore, grade: analysis.grade });
+    console.log(`✅ [SYNC] Analysis complete: score=${analysis.finalScore}, grade=${analysis.grade}`);
 
-    // Build aiInsights from holistic review (no extra AI call needed)
+    // Generate condition warnings (rule-based, no AI)
+    const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, healthConditions);
+    if (conditionWarnings.length > 0) {
+      console.log(`⚠️ [SYNC] ${conditionWarnings.length} condition warning(s) for ${pet.name}`);
+    }
+
     const aiInsights = {
       topBenefits: holisticReview.positives || [],
       topConcerns: holisticReview.keyIssues || [],
+      conditionWarnings,
       aiGenerated: true
     };
 
@@ -1842,9 +1999,8 @@ router.post('/food-check', upload.single('image'), async (req, res, next) => {
 
     // Get list of individual conditions to evaluate (always include "healthy" as baseline)
     const hasConditions = healthConditions.length > 0;
-    const conditionsToEvaluate = hasConditions
-      ? healthConditions.map(c => c.condition_type || c)
-      : ['healthy'];
+    // Universal scoring — always evaluate as "healthy"
+    const conditionsToEvaluate = ['healthy'];
 
     // STEP 1: Identify what food this is (always needs AI for image recognition)
     const identificationResult = await geminiService.identifyFoodFromImage(
@@ -1867,7 +2023,7 @@ router.post('/food-check', upload.single('image'), async (req, res, next) => {
     const isPreparedDish = foodType === 'prepared' || identificationResult.category === 'PreparedDish';
     
     console.log(`🔍 [Food Check] Identified: "${identificationResult.foodName}" (${foodType}) for ${petType}`);
-    console.log(`🏥 [Food Check] Evaluating conditions: ${conditionsToEvaluate.join(', ')}`);
+    console.log(`🏥 [Food Check] Universal scoring${hasConditions ? ` + ${healthConditions.length} condition warning(s)` : ''}`);
 
     // STEP 2: Check cache for EACH condition (per-single-condition pattern)
     const cachedResults = {};
@@ -2079,12 +2235,10 @@ router.post('/manual', async (req, res, next) => {
     const hasConditions = healthConditions.length > 0;
     const productType = ingredientsList.length <= 6 ? 'treats' : 'food';
     
-    // Get list of individual conditions to evaluate
-    const conditionsToEvaluate = hasConditions 
-      ? healthConditions.map(c => c.condition_type || c)
-      : ['healthy'];
+    // Universal scoring — always evaluate as "healthy"
+    const conditionsToEvaluate = ['healthy'];
     
-    console.log('🏥 [Manual] Evaluating conditions:', conditionsToEvaluate.join(', '));
+    console.log(`🏥 [Manual] Universal scoring${hasConditions ? ` + ${healthConditions.length} condition warning(s)` : ''}`);
     
     // Get AI assessments for ingredients (per condition)
     const allConditionAssessments = {}; // { ingredientName: { condition: assessment } }
@@ -2371,10 +2525,16 @@ router.post('/manual', async (req, res, next) => {
     const summaryEmoji = analysis.grade === 'A' ? '✅' : analysis.grade === 'B' ? '👍' : analysis.grade === 'C' ? '⚠️' : '❌';
     analysis.summary = holisticReview.aiSummary || `${summaryEmoji} Score: ${analysis.finalScore}/100 for ${pet.name}.`;
 
-    // Build aiInsights from holistic review (no extra AI call needed)
+    // Generate condition warnings (rule-based, no AI)
+    const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, healthConditions);
+    if (conditionWarnings.length > 0) {
+      console.log(`⚠️ [Manual] ${conditionWarnings.length} condition warning(s) for ${pet.name}`);
+    }
+
     const aiInsights = {
       topBenefits: holisticReview.positives || [],
       topConcerns: holisticReview.keyIssues || [],
+      conditionWarnings,
       aiGenerated: true
     };
 
