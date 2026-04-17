@@ -116,7 +116,7 @@ class ProductService {
       turkey: ['turkey'],
       duck: ['duck'],
       dairy: ['milk', 'cheese', 'whey', 'dairy'],
-      grains: ['wheat', 'corn', 'rice', 'barley', 'oat', 'grain'],
+      grains: ['wheat', 'corn', 'maize', 'rice', 'barley', 'oat', 'grain', 'sorghum', 'millet', 'rye', 'spelt'],
       eggs: ['egg'],
       soy: ['soy', 'soybean']
     };
