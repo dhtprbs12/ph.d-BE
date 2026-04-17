@@ -764,7 +764,7 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
           ingredientCount: ingredientsList.length,
           confidence: extracted.confidence
         },
-        product: product ? { id: product.id, name: product.name, brand: product.brand } : null,
+        product: product ? { id: product.id, name: product.name, brand: product.brand, image_url: product.image_url } : null,
         analysis,
         aiInsights,
         pet: { id: pet.id || 'local', name: pet.name, petType: pet.pet_type }
@@ -1152,6 +1152,7 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
         id: product.id,
         name: product.name,
         brand: product.brand,
+        image_url: product.image_url,
         isNew: !product.scan_count || product.scan_count === 0
       } : null,
       pollUrl: `/api/scan/${scanId}/result`,
