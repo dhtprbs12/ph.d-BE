@@ -112,13 +112,8 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
       console.log(`📊 [FILTER] Skipping scoring — no pet conditions provided`);
     }
 
-    const hasConditions = healthConditions && healthConditions.length > 0;
-    const conditionsToCheck = hasConditions
-      ? healthConditions.map(c => c.condition_type || c.conditionType || c)
-      : ['healthy'];
-
     if (!skipScoring) {
-      console.log(`📊 [FILTER] Scoring ${products.length} products, conditions: ${conditionsToCheck.join(', ')}`);
+      console.log(`📊 [FILTER] Universal scoring for ${products.length} products`);
     }
 
     !skipScoring && await Promise.all(products.map(async (product) => {
@@ -135,77 +130,64 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
         const productTypeForHash = isTreatProduct ? 'treats' : 'food';
         const actualProductType = product.product_type || (isTreatProduct ? 'treats' : 'food');
 
-        let worstScore = 100;
-        let worstGradeNum = 5;
-        let worstRecommendation = 'highly_recommended';
-        let allConditionsScored = true;
+        // Universal scoring — always use "healthy" baseline
+        const conditionHash = getSingleConditionHash('healthy', productTypeForHash);
+        let review = null;
 
-        for (const condition of conditionsToCheck) {
-          const conditionHash = getSingleConditionHash(condition, productTypeForHash);
-          let review = null;
+        // Tier 1: product_review_cache
+        try {
+          const cached = await query(
+            `SELECT final_score, grade, recommendation FROM product_review_cache 
+             WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ? LIMIT 1`,
+            [ingredientHash, conditionHash, pet_type]
+          );
+          if (cached.length > 0) {
+            review = { finalScore: cached[0].final_score, grade: cached[0].grade, recommendation: cached[0].recommendation };
+          }
+        } catch (err) { /* continue to Tier 2 */ }
 
-          // ── Tier 1: product_review_cache ──
+        // Tier 2: compute from ai_assessment_cache
+        if (!review) {
           try {
-            const cached = await query(
-              `SELECT final_score, grade, recommendation FROM product_review_cache 
-               WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ? LIMIT 1`,
-              [ingredientHash, conditionHash, pet_type]
-            );
-            if (cached.length > 0) {
-              review = { finalScore: cached[0].final_score, grade: cached[0].grade, recommendation: cached[0].recommendation };
+            const computed = await ingredientAnalyzer.computeScoreFromCache(ingredientsList, conditionHash, pet_type, actualProductType);
+            if (computed.finalScore !== undefined && computed.allCached) {
+              review = { finalScore: computed.finalScore, grade: computed.grade, recommendation: computed.recommendation };
+              try {
+                const { v4: uuidv4 } = require('uuid');
+                await query(
+                  `INSERT INTO product_review_cache 
+                   (id, ingredient_hash, conditions_hash, pet_type, product_type, final_score, grade, recommendation,
+                    key_issues, positives, ai_summary, protein_quality, has_artificial_additives, primary_ingredient_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON DUPLICATE KEY UPDATE 
+                    final_score = VALUES(final_score), grade = VALUES(grade), recommendation = VALUES(recommendation),
+                    hit_count = hit_count + 1`,
+                  [
+                    uuidv4(), ingredientHash, conditionHash, pet_type,
+                    product.product_type || 'dry_food',
+                    computed.finalScore, computed.grade, computed.recommendation || 'consider',
+                    JSON.stringify(computed.keyIssues || []),
+                    JSON.stringify(computed.positives || []),
+                    computed.aiSummary || '', computed.proteinQuality || null,
+                    computed.hasArtificialAdditives ? 1 : 0, computed.primaryIngredientType || null
+                  ]
+                );
+              } catch (err) { /* cache save failed */ }
             }
-          } catch (err) { /* continue to Tier 2 */ }
-
-          // ── Tier 2: compute from ai_assessment_cache (DB reads + math, no AI) ──
-          // ONLY use score if ALL ingredients are cached — no partial scores
-          if (!review) {
-            try {
-              const computed = await ingredientAnalyzer.computeScoreFromCache(ingredientsList, conditionHash, pet_type, actualProductType);
-              if (computed.finalScore !== undefined && computed.allCached) {
-                review = { finalScore: computed.finalScore, grade: computed.grade, recommendation: computed.recommendation };
-                // Save to product_review_cache → next time it's a Tier 1 hit
-                try {
-                  const { v4: uuidv4 } = require('uuid');
-                  await query(
-                    `INSERT INTO product_review_cache 
-                     (id, ingredient_hash, conditions_hash, pet_type, product_type, final_score, grade, recommendation,
-                      key_issues, positives, ai_summary, protein_quality, has_artificial_additives, primary_ingredient_type)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                     ON DUPLICATE KEY UPDATE 
-                      final_score = VALUES(final_score), grade = VALUES(grade), recommendation = VALUES(recommendation),
-                      hit_count = hit_count + 1`,
-                    [
-                      uuidv4(), ingredientHash, conditionHash, pet_type,
-                      product.product_type || 'dry_food',
-                      computed.finalScore, computed.grade, computed.recommendation || 'consider',
-                      JSON.stringify(computed.keyIssues || []),
-                      JSON.stringify(computed.positives || []),
-                      computed.aiSummary || '', computed.proteinQuality || null,
-                      computed.hasArtificialAdditives ? 1 : 0, computed.primaryIngredientType || null
-                    ]
-                  );
-                } catch (err) { /* cache save failed, continue */ }
-              }
-            } catch (err) { /* continue */ }
-          }
-
-          if (review) {
-            const gNum = gradeToNumber(review.grade);
-            if (review.finalScore < worstScore) {
-              worstScore = review.finalScore;
-              worstRecommendation = review.recommendation;
-            }
-            if (gNum < worstGradeNum) worstGradeNum = gNum;
-          } else {
-            allConditionsScored = false;
-          }
+          } catch (err) { /* continue */ }
         }
 
-        if (allConditionsScored && worstScore < 100) {
+        if (review) {
+          // Generate condition warnings (rule-based)
+          const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(
+            ingredientsList, healthConditions
+          );
+
           scores[product.id] = {
-            score: worstScore,
-            grade: numberToGrade(worstGradeNum),
-            recommendation: worstRecommendation || 'consider'
+            score: review.finalScore,
+            grade: review.grade,
+            recommendation: review.recommendation || 'consider',
+            conditionWarnings: conditionWarnings.length > 0 ? conditionWarnings : undefined
           };
         }
       } catch (err) {
@@ -213,7 +195,7 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
       }
     }));
 
-    console.log(`✅ [FILTER] Scored ${Object.keys(scores).length}/${products.length} products (Tier 1 + Tier 2, no AI)`);
+    console.log(`✅ [FILTER] Scored ${Object.keys(scores).length}/${products.length} products (universal, no AI)`);
 
     // =============================================
     // SORT: scored products first (score desc), then unscored alphabetically
@@ -286,9 +268,8 @@ router.get('/:id/image', async (req, res, next) => {
 
 /**
  * POST /api/products/batch-scores
- * Get cached personalized scores for multiple products
- * Uses PER-CONDITION caching: checks each individual condition and takes WORST score
- * Returns scores only if ALL conditions are cached for that product
+ * Get cached universal scores for multiple products
+ * Always uses "healthy" baseline — condition warnings are separate
  */
 router.post('/batch-scores', optionalAuth, async (req, res, next) => {
   try {
@@ -299,14 +280,9 @@ router.post('/batch-scores', optionalAuth, async (req, res, next) => {
     }
     
     const pet_type = petType || 'dog';
-    const hasConditions = healthConditions && healthConditions.length > 0;
-    const conditionsToCheck = hasConditions 
-      ? healthConditions.map(c => c.condition_type || c.conditionType || c)
-      : ['healthy'];
     
-    console.log(`🔍 [BATCH] Checking scores for ${productIds.length} products, pet: ${pet_type}, conditions: ${conditionsToCheck.join(', ')}`);
+    console.log(`🔍 [BATCH] Universal scores for ${productIds.length} products, pet: ${pet_type}`);
     
-    // Get products with their ingredient hashes and product types
     const placeholders = productIds.map(() => '?').join(',');
     const products = await query(
       `SELECT id, ingredient_hash, product_type, raw_ingredients_text FROM products WHERE id IN (${placeholders})`,
@@ -322,7 +298,6 @@ router.post('/batch-scores', optionalAuth, async (req, res, next) => {
     for (const product of products) {
       if (!product.ingredient_hash) continue;
       
-      // Determine product type (treats vs food)
       let productTypeForHash = 'food';
       if (product.product_type === 'treats') {
         productTypeForHash = 'treats';
@@ -331,53 +306,38 @@ router.post('/batch-scores', optionalAuth, async (req, res, next) => {
         if (ingredientCount <= 6) productTypeForHash = 'treats';
       }
       
-      // Check cache for EACH individual condition
-      const conditionScores = [];
-      let allConditionsCached = true;
+      // Universal score — always "healthy"
+      const conditionHash = getSingleConditionHash('healthy', productTypeForHash);
       
-      for (const condition of conditionsToCheck) {
-        const conditionHash = getSingleConditionHash(condition, productTypeForHash);
-        
-        const cached = await query(
-          `SELECT final_score, grade, recommendation
-           FROM product_review_cache 
-           WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?
-           LIMIT 1`,
-          [product.ingredient_hash, conditionHash, pet_type]
-        );
-        
-        if (cached.length > 0) {
-          conditionScores.push({
-            score: cached[0].final_score,
-            grade: cached[0].grade,
-            gradeNum: gradeToNumber(cached[0].grade),
-            recommendation: cached[0].recommendation
-          });
-        } else {
-          // If any condition is not cached, we don't have a complete score
-          allConditionsCached = false;
-          break;
-        }
-      }
+      const cached = await query(
+        `SELECT final_score, grade, recommendation
+         FROM product_review_cache 
+         WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?
+         LIMIT 1`,
+        [product.ingredient_hash, conditionHash, pet_type]
+      );
       
-      // Only return a score if ALL conditions are cached
-      if (allConditionsCached && conditionScores.length > 0) {
-        // Take the WORST score and grade
-        const worstScore = Math.min(...conditionScores.map(c => c.score));
-        const worstGradeNum = Math.min(...conditionScores.map(c => c.gradeNum));
-        
-        // Use the recommendation from the worst scoring condition
-        const worstCondition = conditionScores.find(c => c.score === worstScore);
-        
-        scores[product.id] = {
-          score: worstScore,
-          grade: numberToGrade(worstGradeNum),
-          recommendation: worstCondition?.recommendation || 'unknown'
+      if (cached.length > 0) {
+        const scoreEntry = {
+          score: cached[0].final_score,
+          grade: cached[0].grade,
+          recommendation: cached[0].recommendation || 'unknown'
         };
+        
+        // Add condition warnings if pet has health conditions
+        if (healthConditions.length > 0 && product.raw_ingredients_text) {
+          const ingredientsList = ingredientAnalyzer.parseIngredientText(product.raw_ingredients_text);
+          const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, healthConditions);
+          if (conditionWarnings.length > 0) {
+            scoreEntry.conditionWarnings = conditionWarnings;
+          }
+        }
+        
+        scores[product.id] = scoreEntry;
       }
     }
     
-    console.log(`✅ [BATCH] Found ${Object.keys(scores).length}/${productIds.length} fully cached scores`);
+    console.log(`✅ [BATCH] Found ${Object.keys(scores).length}/${productIds.length} universal scores`);
     
     res.json({ scores });
   } catch (error) {
@@ -465,13 +425,11 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
     // For AI prompt context: pass actual product_type so AI knows supplement vs treat vs food
     const productTypeForAI = product.product_type || (isTreatProduct ? 'treats' : 'food');
     
-    // Get list of individual conditions to evaluate (including "healthy" as a baseline)
+    // Universal scoring — always evaluate as "healthy"
     const hasConditions = pet.healthConditions && pet.healthConditions.length > 0;
-    const conditionsToEvaluate = hasConditions 
-      ? pet.healthConditions.map(c => c.condition_type || c)
-      : ['healthy'];
+    const conditionsToEvaluate = ['healthy'];
     
-    console.log('🏥 [ANALYZE] Evaluating conditions:', conditionsToEvaluate.join(', '));
+    console.log(`🏥 [ANALYZE] Universal scoring${hasConditions ? ` + ${pet.healthConditions.length} condition warning(s)` : ''}`);
 
     // =============================================
     // PHASE 1: PER-INGREDIENT AI ASSESSMENT
@@ -821,10 +779,18 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
       hasArtificialAdditives: holisticReview.hasArtificialAdditives
     };
 
-    // Build aiInsights from holistic review (no extra AI call needed)
+    // Generate condition warnings (rule-based, no AI)
+    const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(
+      ingredientsList, pet.healthConditions || []
+    );
+    if (conditionWarnings.length > 0) {
+      console.log(`⚠️ [ANALYZE] ${conditionWarnings.length} condition warning(s) for ${pet.name}`);
+    }
+
     const aiInsights = {
       topBenefits: holisticReview.positives || [],
       topConcerns: holisticReview.keyIssues || [],
+      conditionWarnings,
       aiGenerated: true
     };
 
@@ -887,11 +853,9 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
 
     console.log(`📦 [ALTERNATIVES] Found ${candidates.length} candidates`);
 
-    // Prepare condition info
+    // Universal scoring — always evaluate as "healthy"
     const hasConditions = healthConditions && healthConditions.length > 0;
-    const conditionsToEvaluate = hasConditions
-      ? healthConditions.map(c => c.condition_type || c)
-      : ['healthy'];
+    const conditionsToEvaluate = ['healthy'];
 
     const geminiService = require('../services/geminiService');
     const scoredAlternatives = [];
@@ -1103,12 +1067,11 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
         }
       });
 
-    // Wait for all image fetches (with 8s timeout so we don't block forever)
     if (imageFetches.length > 0) {
       console.log(`📸 [ALT] Fetching images for ${imageFetches.length} products...`);
       await Promise.race([
-        Promise.all(imageFetches),
-        new Promise(resolve => setTimeout(resolve, 8000))
+        Promise.allSettled(imageFetches),
+        new Promise(resolve => setTimeout(resolve, 12000))
       ]);
     }
 
