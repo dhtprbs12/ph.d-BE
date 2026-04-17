@@ -1014,12 +1014,12 @@ class IngredientAnalyzer {
         message: 'may affect blood sugar levels'
       },
       obesity: {
-        keywords: ['animal fat', 'beef tallow', 'lard', 'vegetable oil'],
+        keywords: ['animal fat', 'beef tallow', 'lard', 'vegetable oil', 'corn syrup', 'sugar', 'dextrose'],
         label: 'weight management',
-        message: 'high-fat ingredient not ideal for weight management'
+        message: 'high-calorie ingredient not ideal for weight management'
       },
       kidney_disease: {
-        keywords: ['salt', 'sodium', 'phosphoric acid', 'bone meal', 'sodium phosphate'],
+        keywords: ['salt', 'sodium', 'phosphoric acid', 'bone meal', 'sodium phosphate', 'phosphorus'],
         label: 'kidney health',
         message: 'high phosphorus/sodium can stress kidneys'
       },
@@ -1034,19 +1034,39 @@ class IngredientAnalyzer {
         message: 'high-fat ingredient can trigger pancreatitis flare-ups'
       },
       liver_disease: {
-        keywords: ['copper sulfate', 'copper proteinate', 'copper amino acid'],
+        keywords: ['copper sulfate', 'copper proteinate', 'copper amino acid', 'copper chelate'],
         label: 'liver health',
         message: 'added copper may be harmful for liver conditions'
       },
       ibd: {
-        keywords: ['carrageenan', 'guar gum', 'xanthan gum'],
+        keywords: ['carrageenan', 'guar gum', 'xanthan gum', 'cellulose', 'soy'],
         label: 'digestive health (IBD)',
         message: 'thickener/additive may irritate sensitive GI tract'
       },
-      urinary: {
-        keywords: ['salt', 'sodium', 'magnesium oxide', 'phosphoric acid'],
+      urinary_issues: {
+        keywords: ['salt', 'sodium', 'magnesium oxide', 'phosphoric acid', 'calcium carbonate'],
         label: 'urinary health',
         message: 'mineral content may affect urinary crystal formation'
+      },
+      digestive_sensitivity: {
+        keywords: ['corn', 'wheat', 'soy', 'carrageenan', 'guar gum', 'xanthan gum', 'artificial flavor', 'bha', 'bht', 'ethoxyquin'],
+        label: 'digestive sensitivity',
+        message: 'may irritate a sensitive digestive system'
+      },
+      skin_issues: {
+        keywords: ['artificial color', 'red 40', 'yellow 5', 'yellow 6', 'blue 2', 'corn', 'wheat', 'soy', 'by-product'],
+        label: 'skin health',
+        message: 'may contribute to skin irritation or inflammation'
+      },
+      joint_issues: {
+        keywords: ['corn syrup', 'sugar', 'dextrose', 'sodium', 'salt'],
+        label: 'joint health',
+        message: 'may promote inflammation — not ideal for joint issues'
+      },
+      thyroid_issues: {
+        keywords: ['soy', 'soybean', 'soy flour', 'soy protein', 'iodine'],
+        label: 'thyroid health',
+        message: 'may interfere with thyroid function'
       }
     };
 
