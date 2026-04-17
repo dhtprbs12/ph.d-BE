@@ -204,19 +204,14 @@ class IngredientAnalyzer {
       positiveBenefit: ''
     };
 
-    // FIRST: Check AI assessment cache (has personalized, pet-specific assessments)
-    // IMPORTANT: Only use cache for HEALTHY pets to avoid returning allergy-specific data
-    const isHealthyPet = !petConditions || petConditions.length === 0;
-    console.log(`🔍 [AI Cache] Looking up: "${normalizedName}" for pet_type="${pet.pet_type}" (healthy=${isHealthyPet})`);
+    // FIRST: Check AI assessment cache — always use "healthy" baseline
+    // Condition-specific warnings are handled separately via generateConditionWarnings()
+    console.log(`🔍 [AI Cache] Looking up: "${normalizedName}" for pet_type="${pet.pet_type}"`);
     try {
-      // For healthy pets, use the shared cacheLookup with fallbacks
-      // For pets with conditions, skip (scan.routes.js handles per-condition caching)
-      const cached = isHealthyPet
-        ? await this.cacheLookup(normalizedName, null, pet.pet_type, {
-            sql: `conditions_hash LIKE 'healthy_%'`,
-            params: []
-          })
-        : [];
+      const cached = await this.cacheLookup(normalizedName, null, pet.pet_type, {
+        sql: `conditions_hash LIKE 'healthy_%'`,
+        params: []
+      });
       
       if (cached.length > 0) {
         const aiData = cached[0];
