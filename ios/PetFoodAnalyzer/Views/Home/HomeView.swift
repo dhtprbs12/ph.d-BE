@@ -59,13 +59,7 @@ struct HomeView: View {
                     
                     // All Action Cards - consistent spacing
                     VStack(spacing: AppSpacing.md) {
-                        ScanModeCard(
-                            icon: "camera.fill",
-                            title: "Label Scan",
-                            description: "Scan front & back labels",
-                            color: .appTeal,
-                            isEnabled: appState.selectedPet != nil
-                        ) {
+                        LabelScanPromptCard(isEnabled: appState.selectedPet != nil) {
                             showTwoStepScan = true
                         }
                         .staggeredAppear(index: 4)
@@ -94,8 +88,22 @@ struct HomeView: View {
                 .padding(.top)
             }
             .background(Color.appBackground)
-            .navigationTitle("PetFood Analyzer")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 8) {
+                        Image("AppLogo")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 32, height: 32)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        
+                        Text("PHD")
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .foregroundColor(.appTextPrimary)
+                    }
+                }
+            }
             .task {
                 await loadCommunityStats()
                 await loadUserStats()
@@ -149,7 +157,7 @@ struct HomeView: View {
         do {
             communityStats = try await APIService.shared.fetchCommunityStats()
         } catch {
-            // Silently fail - banner will still show FDA/AAFCO
+            // Silently fail - banner will still show AAFCO
             print("Failed to load community stats: \(error)")
         }
     }
@@ -257,15 +265,22 @@ struct CommunityTrustBanner: View {
                 }
             }
             
-            // FDA/AAFCO Guidelines Badge
-            HStack(spacing: AppSpacing.xs) {
-                Image(systemName: "checkmark.shield.fill")
-                    .font(.system(size: 14))
-                    .foregroundColor(.appSafe)
+            // AAFCO Guidelines Badge
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: AppSpacing.xs) {
+                    Image(systemName: "checkmark.shield.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(.appSafe)
+
+                    Text("AAFCO Guidelines")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.appTextPrimary)
+                }
                 
-                Text("FDA & AAFCO Guidelines")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.appTextPrimary)
+                Text("The U.S. standard for pet food nutrition & labeling")
+                    .font(.system(size: 11))
+                    .foregroundColor(.appTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.horizontal, AppSpacing.md)
@@ -408,6 +423,81 @@ struct ScanModeCard: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
+    }
+}
+
+// MARK: - Label Scan Prompt Card
+struct LabelScanPromptCard: View {
+    var isEnabled: Bool = true
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 0) {
+                HStack(spacing: AppSpacing.md) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: AppCornerRadius.medium)
+                            .fill(Color.appTeal.opacity(0.15))
+                            .frame(width: 60, height: 60)
+                        
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 26))
+                            .foregroundColor(.appTeal)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: AppSpacing.xxs) {
+                        Text("Label Scan")
+                            .font(AppTypography.bodyLarge())
+                            .fontWeight(.semibold)
+                            .foregroundColor(.appTextPrimary)
+                        
+                        Text("Full ingredient analysis for your pet")
+                            .font(AppTypography.bodySmall())
+                            .foregroundColor(.appTextSecondary)
+                    }
+                    
+                    Spacer()
+                    
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.appTextSecondary)
+                }
+                .padding()
+                
+                Divider()
+                    .padding(.horizontal)
+                
+                HStack(spacing: 0) {
+                    stepBadge(number: "1", label: "Front Label", icon: "1.square.fill")
+                    
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.appTeal.opacity(0.5))
+                    
+                    stepBadge(number: "2", label: "Back Label", icon: "2.square.fill")
+                }
+                .padding(.vertical, 10)
+                .padding(.horizontal)
+            }
+            .background(Color.appCardBackground)
+            .cornerRadius(AppCornerRadius.large)
+            .cardShadow()
+            .opacity(isEnabled ? 1.0 : 0.6)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+    }
+    
+    private func stepBadge(number: String, label: String, icon: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundColor(.appTeal)
+            
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.appTextSecondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 

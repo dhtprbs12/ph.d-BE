@@ -451,18 +451,16 @@ class ProductService {
       else petSize = 'large';
     }
 
-    // Determine age group
     let petAgeGroup = 'adult';
-    if (pet.age_months < 12) petAgeGroup = 'puppy_kitten';
-    else if (pet.age_months < 24) petAgeGroup = 'young';
-    else if (pet.age_months > 84) petAgeGroup = 'senior';
+    if (pet.age_months != null && pet.age_months < 12) petAgeGroup = 'puppy_kitten';
+    else if (pet.age_months != null && pet.age_months < 24) petAgeGroup = 'young';
+    else if (pet.age_months != null && pet.age_months > 84) petAgeGroup = 'senior';
 
-    // Check for allergies/conditions
     const conditions = await query(
       'SELECT condition_type FROM pet_health_conditions WHERE pet_id = ?',
       [petId]
     );
-    const hasAllergies = conditions.some(c => c.condition_type.startsWith('allergy_'));
+    const hasAllergies = conditions.some(c => c.condition_type?.startsWith('allergy_'));
     const hasHealthConditions = conditions.length > 0;
 
     const id = uuidv4();
@@ -488,6 +486,12 @@ class ProductService {
     );
 
     return await query('SELECT * FROM product_reviews WHERE id = ?', [id]);
+  }
+
+  async findByBarcode(barcode) {
+    if (!barcode) return null;
+    const rows = await query('SELECT * FROM products WHERE barcode = ? LIMIT 1', [barcode]);
+    return rows[0] || null;
   }
 }
 

@@ -3,11 +3,11 @@ import Foundation
 // MARK: - API Configuration
 enum APIConfig {
     // Toggle this to switch between local dev and production
-    static let useProduction = false
+    static let useProduction = true
 
     static var baseURL: String {
         if useProduction {
-            return "https://YOUR_RAILWAY_DOMAIN.up.railway.app/api"
+            return "https://phd-be-production.up.railway.app/api"
         }
         #if targetEnvironment(simulator)
         return "http://localhost:3000/api"

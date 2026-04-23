@@ -326,12 +326,15 @@ class ScanService {
     }
     
     // MARK: - Get Scan History
-    func getScanHistory(petId: String? = nil, limit: Int = 20) async throws -> [ScanHistoryItem] {
+    func getScanHistory(petName: String? = nil, petType: String? = nil, limit: Int = 20) async throws -> [ScanHistoryItem] {
         var endpoint = "/scan/history?deviceId=\(deviceId)&limit=\(limit)"
-        if let petId = petId {
-            endpoint += "&petId=\(petId)"
+        if let petName = petName, let encoded = petName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            endpoint += "&petName=\(encoded)"
         }
-        
+        if let petType = petType {
+            endpoint += "&petType=\(petType)"
+        }
+
         let response: ScanHistoryResponse = try await api.request(endpoint: endpoint)
         return response.history
     }
@@ -348,6 +351,16 @@ class ScanService {
     
     // MARK: - Two-Step Scanning
     
+    /// A candidate product found in the DB
+    struct ProductCandidate: Codable, Identifiable {
+        let id: String
+        let name: String?
+        let brand: String?
+        let imageUrl: String?
+        let productType: String?
+        let targetPetType: String?
+    }
+    
     /// Response from front label scan
     struct FrontScanResult {
         let pendingScanId: String
@@ -355,6 +368,7 @@ class ScanService {
         let brand: String?
         let targetPet: String?
         let productType: String?
+        let candidates: [ProductCandidate]
     }
     
     /// Step 1: Scan front label to get product name
@@ -367,9 +381,9 @@ class ScanService {
             let success: Bool?
             let pendingScanId: String
             let captured: CapturedInfo
+            let candidates: [ProductCandidate]?
             let nextStep: String?
             
-            // Error fields
             let error: String?
             let message: String?
             let suggestion: String?
@@ -394,10 +408,10 @@ class ScanService {
                 productName: response.captured.productName,
                 brand: response.captured.brand,
                 targetPet: response.captured.targetPet,
-                productType: response.captured.productType
+                productType: response.captured.productType,
+                candidates: response.candidates ?? []
             )
         } catch APIError.serverError(let message, let data) {
-            // Check for specific errors
             if let data = data,
                let errorResponse = try? JSONDecoder().decode(FrontResponse.self, from: data) {
                 if errorResponse.error == "back_label_detected" {
@@ -411,29 +425,77 @@ class ScanService {
         }
     }
     
+    /// Quick analyze: analyze a known product for a specific pet (no back label needed)
+    func quickAnalyze(productId: String, pet: Pet, progressCallback: ProgressCallback? = nil) async throws -> ScanResult {
+        
+        struct QuickAnalyzeRequest: Encodable {
+            let productId: String
+            let petName: String
+            let petType: String
+            let deviceId: String
+            let petBreed: String?
+            let petAgeMonths: Int?
+            let petWeightKg: Double?
+            let petHealthConditions: String?
+        }
+        
+        var conditionsJSON: String? = nil
+        if !pet.healthConditions.isEmpty {
+            if let data = try? JSONEncoder().encode(pet.healthConditions) {
+                conditionsJSON = String(data: data, encoding: .utf8)
+            }
+        }
+        
+        let requestBody = QuickAnalyzeRequest(
+            productId: productId,
+            petName: pet.name,
+            petType: pet.petType.rawValue,
+            deviceId: deviceId,
+            petBreed: pet.breed,
+            petAgeMonths: pet.ageMonths,
+            petWeightKg: pet.weightKg,
+            petHealthConditions: conditionsJSON
+        )
+        
+        let asyncResponse: AsyncScanResponse = try await api.request(
+            endpoint: "/scan/quick-analyze",
+            method: "POST",
+            body: requestBody
+        )
+        
+        progressCallback?("Quick analysis started for \(asyncResponse.extracted?.productName ?? "product")", asyncResponse)
+        
+        return try await pollForResult(
+            scanId: asyncResponse.scanId,
+            initialResponse: asyncResponse,
+            pet: pet,
+            progressCallback: progressCallback
+        )
+    }
+    
     /// Step 2: Scan back label and combine with front label data
-    func scanBackLabel(image: UIImage, pendingScanId: String, pet: Pet) async throws -> ScanResult {
+    func scanBackLabel(image: UIImage, pendingScanId: String, pet: Pet, progressCallback: ProgressCallback? = nil) async throws -> ScanResult {
         guard let imageData = image.jpegData(compressionQuality: 0.8) else {
             throw APIError.invalidURL
         }
-        
+
         // Build pet fields
         var fields: [String: String] = [
             "petName": pet.name,
             "petType": pet.petType.rawValue,
             "deviceId": deviceId
         ]
-        
+
         if let breed = pet.breed { fields["petBreed"] = breed }
         if let age = pet.ageMonths { fields["petAgeMonths"] = String(age) }
         if let weight = pet.weightKg { fields["petWeightKg"] = String(weight) }
-        
+
         if !pet.healthConditions.isEmpty {
             if let data = try? JSONEncoder().encode(pet.healthConditions) {
                 fields["petHealthConditions"] = String(data: data, encoding: .utf8)
             }
         }
-        
+
         // Upload back label
         let asyncResponse: AsyncScanResponse = try await api.uploadImage(
             endpoint: "/scan/back/\(pendingScanId)",
@@ -441,12 +503,15 @@ class ScanService {
             additionalFields: fields
         )
         
+        // Notify with initial data (ingredient count, product name)
+        progressCallback?("Reading ingredients...", asyncResponse)
+
         // Poll for full result
         return try await pollForResult(
             scanId: asyncResponse.scanId,
             initialResponse: asyncResponse,
             pet: pet,
-            progressCallback: nil
+            progressCallback: progressCallback
         )
     }
     

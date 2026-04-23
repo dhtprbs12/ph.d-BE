@@ -36,7 +36,7 @@ extension Color {
         case "B": return Color(hex: "40916C")   // Light Green - Good
         case "C": return Color(hex: "E9C46A")   // Soft Amber - Acceptable
         case "D": return Color(hex: "F4A261")   // Warm Amber - Caution
-        case "F": return Color(hex: "E76F51")   // Terracotta - Not Recommended
+        case "F": return Color(hex: "E76F51")   // Terracotta - Avoid
         default: return Color(hex: "5C6B66")
         }
     }
@@ -48,7 +48,7 @@ extension Color {
         case "B": return "Good Choice"
         case "C": return "Acceptable"
         case "D": return "Use Caution"
-        case "F": return "Not Recommended"
+        case "F": return "Avoid"
         default: return "Unknown"
         }
     }

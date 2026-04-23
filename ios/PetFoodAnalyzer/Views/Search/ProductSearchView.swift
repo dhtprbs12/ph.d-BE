@@ -9,7 +9,12 @@ struct ProductSearchView: View {
     @State private var searchResults: [Product] = []
     @State private var cachedScores: [String: CachedScore] = [:]  // productId -> cached score
     @State private var isLoading = false
+    @State private var isLoadingMore = false
     @State private var hasSearched = false
+    @State private var hasMoreResults = true
+    @State private var currentOffset = 0
+    private let initialLimit = 20
+    private let pageSize = 10
     
     // Determine selected pet type for dynamic life stage filters
     private var selectedPetTypeFilter: ProductFilter? {
@@ -59,6 +64,45 @@ struct ProductSearchView: View {
             .cornerRadius(AppCornerRadius.medium)
             .padding()
             
+            // Pet profile banner
+            if let pet = appState.selectedPet {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 13))
+                            .foregroundColor(.appTeal)
+                        
+                        Text("Scores personalized for **\(pet.name)**")
+                            .font(.system(size: 13))
+                            .foregroundColor(.appTextPrimary)
+                    }
+                    
+                    if !pet.healthConditions.isEmpty {
+                        let names = pet.healthConditions.map { $0.conditionType.displayName }
+                        let visible = names.prefix(2).joined(separator: ", ")
+                        let remaining = names.count - 2
+                        let conditionText = remaining > 0 ? "\(visible) +\(remaining) more" : visible
+                        
+                        HStack(spacing: 4) {
+                            Image(systemName: "heart.text.square.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(.appTeal.opacity(0.7))
+                            
+                            Text("Factoring in: \(conditionText)")
+                                .font(.system(size: 12))
+                                .foregroundColor(.appTextSecondary)
+                        }
+                        .padding(.leading, 19)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.appTeal.opacity(0.08))
+                .cornerRadius(10)
+                .padding(.horizontal)
+            }
+            
             // Filter Section
             ScrollView {
                 VStack(alignment: .leading, spacing: AppSpacing.lg) {
@@ -86,15 +130,15 @@ struct ProductSearchView: View {
                         // Diet Type (single selection - grain-free OR with-grains)
                         FilterCategory(title: "Diet Type", filters: ProductFilter.dietFilters, selectedFilters: $selectedFilters, isSingleSelection: true)
                         
-                        // Protein Type (single selection)
-                        FilterCategory(title: "Protein", filters: ProductFilter.proteinFilters, selectedFilters: $selectedFilters, isSingleSelection: true)
+                        // Protein Type (single selection — matches 1st or 2nd ingredient)
+                        FilterCategory(title: "Main Protein", filters: ProductFilter.proteinFilters, selectedFilters: $selectedFilters, isSingleSelection: true)
                     }
                     
                     Divider()
                         .padding(.vertical, AppSpacing.sm)
                     
                     // Results Section
-                    VStack(alignment: .leading, spacing: AppSpacing.md) {
+                    LazyVStack(alignment: .leading, spacing: AppSpacing.md) {
                         if isLoading {
                             HStack {
                                 Spacer()
@@ -122,6 +166,26 @@ struct ProductSearchView: View {
                                 )
                                 .padding(.horizontal)
                                 .staggeredAppear(index: index + 1, baseDelay: 0.03)
+                                .onAppear {
+                                    if index >= searchResults.count - 3 && hasMoreResults && !isLoadingMore {
+                                        loadMore()
+                                    }
+                                }
+                            }
+                            
+                            if isLoadingMore {
+                                HStack {
+                                    Spacer()
+                                    ProgressView()
+                                        .padding(.vertical, AppSpacing.lg)
+                                    Spacer()
+                                }
+                            } else if !hasMoreResults {
+                                Text("All products loaded")
+                                    .font(AppTypography.caption())
+                                    .foregroundColor(.appTextSecondary.opacity(0.6))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, AppSpacing.md)
                             }
                         } else {
                             // Initial state - show prompt
@@ -146,6 +210,8 @@ struct ProductSearchView: View {
                         searchResults = []
                         cachedScores = [:]
                         hasSearched = false
+                        currentOffset = 0
+                        hasMoreResults = true
                     }
                     .font(AppTypography.labelMedium())
                 }
@@ -157,65 +223,74 @@ struct ProductSearchView: View {
         }
     }
     
+    private func buildFilterParams() -> (petType: PetType?, productType: String?, lifeStage: String?, allergenExclusions: [String], ingredientInclusions: [String], pet: Pet?) {
+        let allFilters = selectedFilters
+        
+        let petType: PetType? = allFilters.contains(.forDogs) ? .dog :
+                                allFilters.contains(.forCats) ? .cat : nil
+        
+        var productType: String? = nil
+        if allFilters.contains(.dryFood) { productType = "dry_food" }
+        else if allFilters.contains(.wetFood) { productType = "wet_food" }
+        else if allFilters.contains(.treats) { productType = "treats" }
+        else if allFilters.contains(.supplement) { productType = "supplement" }
+        
+        var lifeStage: String? = nil
+        if allFilters.contains(.puppy) || allFilters.contains(.kitten) { lifeStage = "puppy_kitten" }
+        else if allFilters.contains(.adult) { lifeStage = "adult" }
+        else if allFilters.contains(.senior) { lifeStage = "senior" }
+        
+        var allergenExclusions: [String] = []
+        if allFilters.contains(.grainFree) { allergenExclusions.append("noGrains") }
+        
+        var ingredientInclusions: [String] = []
+        if allFilters.contains(.withGrains) { ingredientInclusions.append("grains") }
+        if allFilters.contains(.chicken) { ingredientInclusions.append("chicken") }
+        if allFilters.contains(.beef) { ingredientInclusions.append("beef") }
+        if allFilters.contains(.fish) { ingredientInclusions.append("fish") }
+        if allFilters.contains(.lamb) { ingredientInclusions.append("lamb") }
+        if allFilters.contains(.turkey) { ingredientInclusions.append("turkey") }
+        if allFilters.contains(.duck) { ingredientInclusions.append("duck") }
+        
+        let selectedPet = appState.selectedPet
+        let petMatchesFilter: Bool = {
+            guard let pet = selectedPet, let filterType = petType else { return selectedPet != nil }
+            return pet.petType == filterType
+        }()
+        
+        return (petType, productType, lifeStage, allergenExclusions, ingredientInclusions, petMatchesFilter ? selectedPet : nil)
+    }
+    
     private func performSearch() {
         guard !searchText.isEmpty || !selectedFilters.isEmpty else { return }
         
         isLoading = true
         hasSearched = true
+        currentOffset = 0
+        hasMoreResults = true
+        
+        let params = buildFilterParams()
         
         Task {
             do {
-                // Build filter parameters from user selections
-                let allFilters = selectedFilters
-                
-                // Determine pet type from filters
-                let petType: PetType? = allFilters.contains(.forDogs) ? .dog :
-                                        allFilters.contains(.forCats) ? .cat : nil
-                
-                // Determine product type
-                var productType: String? = nil
-                if allFilters.contains(.dryFood) { productType = "dry_food" }
-                else if allFilters.contains(.wetFood) { productType = "wet_food" }
-                else if allFilters.contains(.treats) { productType = "treats" }
-                else if allFilters.contains(.supplement) { productType = "supplement" }
-                
-                // Determine life stage (matches target_life_stage column values)
-                var lifeStage: String? = nil
-                if allFilters.contains(.puppy) || allFilters.contains(.kitten) { lifeStage = "puppy_kitten" }
-                else if allFilters.contains(.adult) { lifeStage = "adult" }
-                else if allFilters.contains(.senior) { lifeStage = "senior" }
-                
-                // Build allergen exclusions (for grain-free)
-                var allergenExclusions: [String] = []
-                if allFilters.contains(.grainFree) { allergenExclusions.append("noGrains") }
-                
-                // Build ingredient inclusions (protein types and grains)
-                var ingredientInclusions: [String] = []
-                if allFilters.contains(.withGrains) { ingredientInclusions.append("grains") }
-                if allFilters.contains(.chicken) { ingredientInclusions.append("chicken") }
-                if allFilters.contains(.beef) { ingredientInclusions.append("beef") }
-                if allFilters.contains(.fish) { ingredientInclusions.append("fish") }
-                if allFilters.contains(.lamb) { ingredientInclusions.append("lamb") }
-                if allFilters.contains(.turkey) { ingredientInclusions.append("turkey") }
-                if allFilters.contains(.duck) { ingredientInclusions.append("duck") }
-                
-                // Single call: products + scores + images all in one
                 let (products, scores) = try await ProductServiceClient.shared.filterProducts(
                     searchTerm: searchText.isEmpty ? nil : searchText,
-                    petType: petType,
-                    productType: productType,
-                    lifeStage: lifeStage,
-                    allergenExclusions: allergenExclusions,
-                    ingredientInclusions: ingredientInclusions,
-                    pet: appState.selectedPet
+                    petType: params.petType,
+                    productType: params.productType,
+                    lifeStage: params.lifeStage,
+                    allergenExclusions: params.allergenExclusions,
+                    ingredientInclusions: params.ingredientInclusions,
+                    pet: params.pet,
+                    limit: initialLimit
                 )
                 
                 print("✅ [Search] Got \(products.count) products with \(scores.count) scores")
                 
                 await MainActor.run {
-                    // Products are already sorted by the backend (scored desc, then alphabetical)
                     searchResults = products
                     cachedScores = scores
+                    currentOffset = products.count
+                    hasMoreResults = products.count >= initialLimit
                     isLoading = false
                 }
             } catch {
@@ -223,6 +298,44 @@ struct ProductSearchView: View {
                 await MainActor.run {
                     searchResults = []
                     isLoading = false
+                }
+            }
+        }
+    }
+    
+    private func loadMore() {
+        guard hasMoreResults, !isLoadingMore else { return }
+        
+        isLoadingMore = true
+        let params = buildFilterParams()
+        
+        Task {
+            do {
+                let (products, scores) = try await ProductServiceClient.shared.filterProducts(
+                    searchTerm: searchText.isEmpty ? nil : searchText,
+                    petType: params.petType,
+                    productType: params.productType,
+                    lifeStage: params.lifeStage,
+                    allergenExclusions: params.allergenExclusions,
+                    ingredientInclusions: params.ingredientInclusions,
+                    pet: params.pet,
+                    limit: pageSize,
+                    offset: currentOffset
+                )
+                
+                print("📄 [Search] Loaded \(products.count) more (offset \(currentOffset))")
+                
+                await MainActor.run {
+                    searchResults.append(contentsOf: products)
+                    cachedScores.merge(scores) { _, new in new }
+                    currentOffset += products.count
+                    hasMoreResults = products.count >= pageSize
+                    isLoadingMore = false
+                }
+            } catch {
+                print("Load more error: \(error)")
+                await MainActor.run {
+                    isLoadingMore = false
                 }
             }
         }
@@ -567,15 +680,6 @@ struct ProductCard: View {
                             .foregroundColor(.appTextSecondary)
                         }
                         
-                        if product.verified == true {
-                            HStack(spacing: 2) {
-                                Image(systemName: "checkmark.seal.fill")
-                                    .font(.system(size: 10))
-                                Text("Verified")
-                            }
-                            .font(AppTypography.labelSmall())
-                            .foregroundColor(.appTeal)
-                        }
                     }
                 }
                 
@@ -649,10 +753,17 @@ struct ProductCard: View {
         }
     }
     
+    private var petTypeMismatch: Bool {
+        guard let pet = pet, let targetType = product.targetPetType else { return false }
+        if targetType == .both { return false }
+        return (targetType == .dog && pet.petType != .dog) ||
+               (targetType == .cat && pet.petType != .cat)
+    }
+    
     private func analyzeProduct() {
-        guard let pet = pet else { 
+        guard pet != nil || product.targetPetType != nil else {
             print("❌ No pet selected")
-            return 
+            return
         }
         let productId = product.id
         print("🔍 [ProductCard] Product ID: \(productId), Name: \(product.name)")
@@ -661,20 +772,32 @@ struct ProductCard: View {
         
         Task {
             do {
-                let result = try await ProductServiceClient.shared.analyzeProduct(
-                    productId: productId,
-                    pet: pet
-                )
+                let result: ScanResult
+                
+                if petTypeMismatch, let targetType = product.targetPetType {
+                    let genericPetType = targetType == .cat ? "cat" : "dog"
+                    let genericPetLabel = targetType == .cat ? "Healthy Cat" : "Healthy Dog"
+                    result = try await ProductServiceClient.shared.analyzeProduct(
+                        productId: productId,
+                        petType: genericPetType,
+                        petName: genericPetLabel
+                    )
+                } else if let pet = pet {
+                    result = try await ProductServiceClient.shared.analyzeProduct(
+                        productId: productId,
+                        pet: pet
+                    )
+                } else {
+                    return
+                }
                 
                 await MainActor.run {
                     analysisResult = result
-                    // Save the score locally so it shows after returning from analysis
                     localScore = CachedScore(
                         score: result.analysis.finalScore,
                         grade: result.analysis.grade,
                         recommendation: result.analysis.recommendation
                     )
-                    // Save the image URL if the backend fetched one during analysis
                     if let newImageUrl = result.product?.imageUrl, !newImageUrl.isEmpty {
                         localImageUrl = newImageUrl
                     }

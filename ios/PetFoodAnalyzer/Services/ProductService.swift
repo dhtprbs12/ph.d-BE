@@ -119,6 +119,55 @@ class ProductServiceClient {
         )
     }
     
+    // MARK: - Analyze Product as Generic Healthy Pet (pet type mismatch)
+    func analyzeProduct(productId: String, petType: String, petName: String) async throws -> ScanResult {
+        print("🔍 [ProductService] Analyzing product ID: \(productId) as \(petName)")
+        
+        struct AnalysisResponse: Codable {
+            let product: Product
+            let analysis: Analysis
+            let aiInsights: AIInsights?
+        }
+        
+        var params: [String] = []
+        params.append("petName=\(petName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? petName)")
+        params.append("petType=\(petType)")
+        
+        let endpoint = "/products/\(productId)/analyze?\(params.joined(separator: "&"))"
+        print("🌐 [ProductService] Full endpoint: \(endpoint)")
+        
+        let response: AnalysisResponse = try await api.request(
+            endpoint: endpoint,
+            requiresAuth: false
+        )
+        
+        return ScanResult(
+            scanId: UUID().uuidString,
+            scanType: "product_search",
+            extracted: ScanResult.ExtractedInfo(
+                productName: response.product.name,
+                brand: response.product.brand,
+                targetPet: response.product.targetPetType?.rawValue,
+                ingredientCount: response.analysis.ingredients.count,
+                confidence: 1.0
+            ),
+            product: ScanResult.ProductSummary(
+                id: response.product.id,
+                name: response.product.name,
+                brand: response.product.brand,
+                imageUrl: response.product.imageUrl,
+                productType: response.product.productType?.rawValue
+            ),
+            analysis: response.analysis,
+            aiInsights: response.aiInsights,
+            pet: PetSummary(
+                id: nil,
+                name: petName,
+                petType: petType
+            )
+        )
+    }
+    
     // MARK: - Get Alternatives
     func getAlternatives(productId: String, pet: Pet, limit: Int = 5) async throws -> [AlternativeProduct] {
         struct AlternativesRequest: Codable {
@@ -217,7 +266,6 @@ class ProductServiceClient {
         ingredientInclusions: [String] = [],
         pet: Pet? = nil,
         minScore: Int? = nil,
-        verified: Bool? = nil,
         limit: Int = 20,
         offset: Int = 0
     ) async throws -> (products: [Product], scores: [String: CachedScore]) {
@@ -242,18 +290,21 @@ class ProductServiceClient {
             params.append("with\(inclusion.capitalized)=true")
         }
         // Pass pet health conditions for inline score computation
-        if let pet = pet, !pet.healthConditions.isEmpty {
-            let conditions = pet.healthConditions.map { ["condition_type": $0.conditionType.rawValue, "severity": $0.severity.rawValue] }
-            if let data = try? JSONSerialization.data(withJSONObject: conditions),
-               let json = String(data: data, encoding: .utf8)?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
-                params.append("healthConditions=\(json)")
+        // When pet is provided, always send healthConditions (empty [] for healthy pet)
+        // When pet is nil (e.g. dog owner browsing cat products), omit entirely to skip scoring
+        if let pet = pet {
+            if pet.healthConditions.isEmpty {
+                params.append("healthConditions=%5B%5D")
+            } else {
+                let conditions = pet.healthConditions.map { ["condition_type": $0.conditionType.rawValue, "severity": $0.severity.rawValue] }
+                if let data = try? JSONSerialization.data(withJSONObject: conditions),
+                   let json = String(data: data, encoding: .utf8)?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+                    params.append("healthConditions=\(json)")
+                }
             }
         }
         if let minScore = minScore {
             params.append("minScore=\(minScore)")
-        }
-        if let verified = verified, verified {
-            params.append("verified=true")
         }
         params.append("limit=\(limit)")
         params.append("offset=\(offset)")
@@ -327,5 +378,6 @@ struct CachedScore: Codable {
     let score: Int
     let grade: String
     let recommendation: String?
+    let conditionWarnings: [ConditionWarning]?
 }
 

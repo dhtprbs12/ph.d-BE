@@ -238,11 +238,10 @@ struct Product: Codable, Identifiable, Hashable {
     var rawIngredientsText: String?
     var baseDogScore: Int?
     var baseCatScore: Int?
-    var verified: Bool?
     var scanCount: Int?
     
     enum CodingKeys: String, CodingKey {
-        case id, barcode, name, brand, verified, texture
+        case id, barcode, name, brand, texture
         case productType = "product_type"
         case targetPetType = "target_pet_type"
         case targetLifeStage = "target_life_stage"
@@ -251,33 +250,6 @@ struct Product: Codable, Identifiable, Hashable {
         case baseDogScore = "base_dog_score"
         case baseCatScore = "base_cat_score"
         case scanCount = "scan_count"
-    }
-    
-    // Custom decoder to handle verified as both Int (0/1) or Bool
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        barcode = try container.decodeIfPresent(String.self, forKey: .barcode)
-        name = try container.decode(String.self, forKey: .name)
-        brand = try container.decodeIfPresent(String.self, forKey: .brand)
-        productType = try container.decodeIfPresent(ProductType.self, forKey: .productType)
-        texture = try container.decodeIfPresent(ProductTexture.self, forKey: .texture)
-        targetPetType = try container.decodeIfPresent(TargetPetType.self, forKey: .targetPetType)
-        targetLifeStage = try container.decodeIfPresent(LifeStage.self, forKey: .targetLifeStage)
-        imageUrl = try container.decodeIfPresent(String.self, forKey: .imageUrl)
-        rawIngredientsText = try container.decodeIfPresent(String.self, forKey: .rawIngredientsText)
-        baseDogScore = try container.decodeIfPresent(Int.self, forKey: .baseDogScore)
-        baseCatScore = try container.decodeIfPresent(Int.self, forKey: .baseCatScore)
-        scanCount = try container.decodeIfPresent(Int.self, forKey: .scanCount)
-        
-        // Handle verified as either Bool or Int (MySQL returns 0/1)
-        if let boolValue = try? container.decodeIfPresent(Bool.self, forKey: .verified) {
-            verified = boolValue
-        } else if let intValue = try? container.decodeIfPresent(Int.self, forKey: .verified) {
-            verified = intValue == 1
-        } else {
-            verified = nil
-        }
     }
 }
 
@@ -343,7 +315,7 @@ enum Grade: String, Codable {
         case .B: return "Good"
         case .C: return "Acceptable"
         case .D: return "Caution"
-        case .F: return "Not Recommended"
+        case .F: return "Avoid"
         }
     }
 }
@@ -354,6 +326,7 @@ enum Recommendation: String, Codable {
     case acceptable
     case caution
     case notRecommended = "not_recommended"
+    case avoid
 }
 
 struct IngredientAnalysis: Codable, Identifiable, Hashable {
@@ -439,6 +412,18 @@ struct Positive: Codable, Identifiable, Hashable {
     let benefit: String
 }
 
+// MARK: - Condition Warning (rule-based, no AI)
+struct ConditionWarning: Codable, Hashable, Identifiable {
+    var id: String { "\(condition)-\(ingredient)" }
+    let type: String           // "allergy" or "disease"
+    let severity: String       // "high" or "medium"
+    let condition: String      // e.g. "allergy_beef", "diabetes"
+    let conditionLabel: String // e.g. "Beef", "diabetes"
+    let ingredient: String     // e.g. "Beef Meal"
+    let position: Int?
+    let message: String
+}
+
 // MARK: - AI Insights
 struct AIInsights: Codable, Hashable {
     let personalizedSummary: String?
@@ -448,6 +433,7 @@ struct AIInsights: Codable, Hashable {
     let alternativeAdvice: String?
     let confidenceNote: String?
     let aiGenerated: Bool?
+    let conditionWarnings: [ConditionWarning]?
 }
 
 // MARK: - Scan Result
@@ -611,20 +597,22 @@ struct ReviewStats: Codable {
 // MARK: - Scan History
 struct ScanHistoryItem: Codable, Identifiable {
     let id: String
-    let scanType: String  // Changed to String for flexibility
+    let scanType: String
     let finalScore: Int
-    let grade: String  // Changed to String for flexibility
+    let grade: String
+    let productId: String?
     let productName: String?
     let productBrand: String?
     let productImage: String?
     let petName: String?
-    let petType: String?  // Changed to String for flexibility
+    let petType: String?
     let createdAt: String
-    
+
     enum CodingKeys: String, CodingKey {
         case id, grade
         case scanType = "scan_type"
         case finalScore = "final_score"
+        case productId = "product_id"
         case productName = "product_name"
         case productBrand = "product_brand"
         case productImage = "product_image"
@@ -646,7 +634,7 @@ struct AlternativeProduct: Codable, Identifiable {
 // MARK: - Community Stats (for trust indicators)
 struct CommunityStats: Codable {
     let totalScans: Int
-    let verifiedProducts: Int
+    let totalProducts: Int
     let ingredientsAnalyzed: Int
     let lastUpdated: String?
     

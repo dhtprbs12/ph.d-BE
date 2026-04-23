@@ -10,6 +10,7 @@
 		0F990056E6D51A2FE70FEFD4 /* FoodCheckView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BC0D73AC90B2CA4FBDE46B3 /* FoodCheckView.swift */; };
 		178D00C17E4BAA8AE3AE1A6A /* ProductService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E44D2F2CEFC2C83FE2C0C9D /* ProductService.swift */; };
 		1DF2CAEE80E0759099D1E37D /* OfflineBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25FBA22E5EEEBA8ECBBC77AC /* OfflineBanner.swift */; };
+		2624604DAE6442F4348088A8 /* DisclaimerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9251DD4706188B5F8BC3A7B3 /* DisclaimerView.swift */; };
 		29D2BC65A3EA98D4E4E5A512 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B0C2BDE76002FEB702279C5 /* SettingsView.swift */; };
 		2F40CC8E0E4C5A956C0DE326 /* ErrorStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9419A79C1DF89A714F6C774E /* ErrorStateView.swift */; };
 		32FA55E0BEF5E475EE4C0216 /* PetService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF255E5287883E00427FB07D /* PetService.swift */; };
@@ -25,6 +26,7 @@
 		792464C895EB7C01F0531F48 /* PetFoodAnalyzerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5042506E1523B0636FFE71A /* PetFoodAnalyzerApp.swift */; };
 		7EC22C2FA130DB977474819E /* ShareCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00CF2E29475DAC980DB27ADE /* ShareCardView.swift */; };
 		85E41E02C34EA2CDBD905CA3 /* EditPetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3BB80578F8D09030AA946CC /* EditPetView.swift */; };
+		8D38D466A61E23B7E7D8D146 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97416AEFA598F7DB6F347705 /* Assets.xcassets */; };
 		93135F4F8A1ED4DE75BE5DFE /* HowWeAnalyzeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17C3CAF583C06A57F95E37AC /* HowWeAnalyzeView.swift */; };
 		9CE7C9AF60B965240F7DC550 /* KeyboardToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 256ABC78A298464A54D4C187 /* KeyboardToolbar.swift */; };
 		9D4CCB054B7EF3EE0CFCE2B9 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53051FA46AE4EDE25312870D /* AppConfig.swift */; };
@@ -33,6 +35,7 @@
 		BD333AAB4BF5056AD0130254 /* TermsOfServiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 717E0853B14FA81427AF9F49 /* TermsOfServiceView.swift */; };
 		C895956A31ECDECF9058E141 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F21D0519BE9F6DF859F8972A /* HistoryView.swift */; };
 		D55234C50A1385EBC17F64A1 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85D911EA47F989207D58586B /* AppTheme.swift */; };
+		DFC5B43C2CCB16E70C6C7120 /* LaunchScreenView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9733E148B5C3CE87E194054C /* LaunchScreenView.swift */; };
 		E1D4CB11C5DAC712B4A67240 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1702EE0DCB5C1AA33394E84 /* ContentView.swift */; };
 		EB8AB8F71B664D93322B307E /* TwoStepScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1397748BBE4572B178521576 /* TwoStepScanView.swift */; };
 		EEC0BEBB788B603A2F07FE5C /* AddPetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACAC382C4A1297ADEC9BE302 /* AddPetView.swift */; };
@@ -57,8 +60,11 @@
 		77AA3B5C427ECA01BF13A314 /* PrivacyPolicyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyPolicyView.swift; sourceTree = "<group>"; };
 		85D911EA47F989207D58586B /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
 		8BC0D73AC90B2CA4FBDE46B3 /* FoodCheckView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoodCheckView.swift; sourceTree = "<group>"; };
+		9251DD4706188B5F8BC3A7B3 /* DisclaimerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisclaimerView.swift; sourceTree = "<group>"; };
 		9419A79C1DF89A714F6C774E /* ErrorStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorStateView.swift; sourceTree = "<group>"; };
-		A20998C315DFE2862E474F9C /* PetFoodAnalyzer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PetFoodAnalyzer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9733E148B5C3CE87E194054C /* LaunchScreenView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchScreenView.swift; sourceTree = "<group>"; };
+		97416AEFA598F7DB6F347705 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A20998C315DFE2862E474F9C /* PHD.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PHD.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA07AE523E2E010E006D27D7 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		ACAC382C4A1297ADEC9BE302 /* AddPetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddPetView.swift; sourceTree = "<group>"; };
 		C0FC17D17306E43DCF585372 /* PetAvatarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PetAvatarView.swift; sourceTree = "<group>"; };
@@ -100,6 +106,7 @@
 				0A97838F95D28C0D6A24C240 /* Components */,
 				34DEB75197FEB074AFD523C1 /* History */,
 				374B2DE4159C92D99A27D2E9 /* Home */,
+				59EA4AD50432144FA7081420 /* LaunchScreen */,
 				ED2585F83FA54638D5AEBB7C /* Onboarding */,
 				9E7132BC3B549B7E4EC51D5B /* Pets */,
 				23610F235BA4B1583268E642 /* Profile */,
@@ -153,6 +160,14 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		59EA4AD50432144FA7081420 /* LaunchScreen */ = {
+			isa = PBXGroup;
+			children = (
+				9733E148B5C3CE87E194054C /* LaunchScreenView.swift */,
+			);
+			path = LaunchScreen;
+			sourceTree = "<group>";
+		};
 		631319DAD1B627CC5A0657FD /* Settings */ = {
 			isa = PBXGroup;
 			children = (
@@ -167,7 +182,7 @@
 		645BBD432ABD3639311293C0 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A20998C315DFE2862E474F9C /* PetFoodAnalyzer.app */,
+				A20998C315DFE2862E474F9C /* PHD.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -236,6 +251,7 @@
 		E5DB9121326023699CB51D0B /* PetFoodAnalyzer */ = {
 			isa = PBXGroup;
 			children = (
+				97416AEFA598F7DB6F347705 /* Assets.xcassets */,
 				721252203C80336F474CD424 /* Info.plist */,
 				D5042506E1523B0636FFE71A /* PetFoodAnalyzerApp.swift */,
 				DEFD670D468ACE45C989048B /* Config */,
@@ -250,6 +266,7 @@
 		ED2585F83FA54638D5AEBB7C /* Onboarding */ = {
 			isa = PBXGroup;
 			children = (
+				9251DD4706188B5F8BC3A7B3 /* DisclaimerView.swift */,
 			);
 			path = Onboarding;
 			sourceTree = "<group>";
@@ -262,6 +279,7 @@
 			buildConfigurationList = 050B53FCB4648CBB20610E89 /* Build configuration list for PBXNativeTarget "PetFoodAnalyzer" */;
 			buildPhases = (
 				4747FACD4D205B7B56C43E44 /* Sources */,
+				7888D5ABD33E756EE659AF98 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -271,7 +289,7 @@
 			packageProductDependencies = (
 			);
 			productName = PetFoodAnalyzer;
-			productReference = A20998C315DFE2862E474F9C /* PetFoodAnalyzer.app */;
+			productReference = A20998C315DFE2862E474F9C /* PHD.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -284,6 +302,7 @@
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
 					F172CC4FEFA3CE49B0D2EBC8 = {
+						DevelopmentTeam = G8BF55L87P;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -306,6 +325,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		7888D5ABD33E756EE659AF98 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8D38D466A61E23B7E7D8D146 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		4747FACD4D205B7B56C43E44 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -316,6 +346,7 @@
 				9D4CCB054B7EF3EE0CFCE2B9 /* AppConfig.swift in Sources */,
 				D55234C50A1385EBC17F64A1 /* AppTheme.swift in Sources */,
 				E1D4CB11C5DAC712B4A67240 /* ContentView.swift in Sources */,
+				2624604DAE6442F4348088A8 /* DisclaimerView.swift in Sources */,
 				85E41E02C34EA2CDBD905CA3 /* EditPetView.swift in Sources */,
 				2F40CC8E0E4C5A956C0DE326 /* ErrorStateView.swift in Sources */,
 				0F990056E6D51A2FE70FEFD4 /* FoodCheckView.swift in Sources */,
@@ -324,6 +355,7 @@
 				93135F4F8A1ED4DE75BE5DFE /* HowWeAnalyzeView.swift in Sources */,
 				9CE7C9AF60B965240F7DC550 /* KeyboardToolbar.swift in Sources */,
 				6E1A3DF3954F7A376E3D87A5 /* LabelScanView.swift in Sources */,
+				DFC5B43C2CCB16E70C6C7120 /* LaunchScreenView.swift in Sources */,
 				BAC567F66D9E09F14D7E96E7 /* Models.swift in Sources */,
 				6FE23FB31302A06DCD3CB8B2 /* NetworkMonitor.swift in Sources */,
 				1DF2CAEE80E0759099D1E37D /* OfflineBanner.swift in Sources */,
@@ -352,11 +384,12 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = G8BF55L87P;
+				CURRENT_PROJECT_VERSION = 3;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = PetFoodAnalyzer/Info.plist;
 				INFOPLIST_GENERATION_MODE = GeneratedFile;
-				INFOPLIST_KEY_NSCameraUsageDescription = "PetFoodAnalyzer needs camera access to scan pet food labels";
+				INFOPLIST_KEY_CFBundleDisplayName = PHD;
+				INFOPLIST_KEY_NSCameraUsageDescription = "PHD needs camera access to scan pet food labels";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -367,7 +400,7 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.petfoodanalyzer.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = PHD;
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -410,9 +443,9 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = G8BF55L87P;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -424,7 +457,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -441,11 +474,12 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				DEVELOPMENT_TEAM = G8BF55L87P;
+				CURRENT_PROJECT_VERSION = 3;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = PetFoodAnalyzer/Info.plist;
 				INFOPLIST_GENERATION_MODE = GeneratedFile;
-				INFOPLIST_KEY_NSCameraUsageDescription = "PetFoodAnalyzer needs camera access to scan pet food labels";
+				INFOPLIST_KEY_CFBundleDisplayName = PHD;
+				INFOPLIST_KEY_NSCameraUsageDescription = "PHD needs camera access to scan pet food labels";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -456,7 +490,7 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.petfoodanalyzer.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = PHD;
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -499,9 +533,9 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = G8BF55L87P;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -519,7 +553,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

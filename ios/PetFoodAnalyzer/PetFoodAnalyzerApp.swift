@@ -4,15 +4,41 @@ import UIKit
 @main
 struct PetFoodAnalyzerApp: App {
     @StateObject private var appState = AppState()
+    @State private var showLaunch = true
+    @AppStorage("hasAcceptedDisclaimer") private var hasAcceptedDisclaimer = false
     
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(appState)
-                .preferredColorScheme(.light)  // Force light mode
-                .task {
-                    await appState.authenticateAndSync()
+            ZStack {
+                if hasAcceptedDisclaimer {
+                    ContentView()
+                        .environmentObject(appState)
+                        .preferredColorScheme(.light)
+                        .task {
+                            await appState.authenticateAndSync()
+                        }
+                } else {
+                    DisclaimerView {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            hasAcceptedDisclaimer = true
+                        }
+                    }
+                    .preferredColorScheme(.light)
                 }
+                
+                if showLaunch {
+                    LaunchScreenView()
+                        .transition(.opacity)
+                        .zIndex(1)
+                }
+            }
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                    withAnimation(.easeOut(duration: 0.4)) {
+                        showLaunch = false
+                    }
+                }
+            }
         }
     }
 }

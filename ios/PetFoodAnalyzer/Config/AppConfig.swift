@@ -2,14 +2,14 @@ import Foundation
 
 enum AppConfig {
     // Update these after App Store approval:
-    static let appStoreURL = "https://apps.apple.com/app/petfood-analyzer/idYOUR_REAL_ID"
+    static let appStoreURL = "https://apps.apple.com/app/phd/idYOUR_REAL_ID"
     static let appStoreID = "YOUR_REAL_ID"
     
     // Optional: Short link for sharing
     static let shareURL: String? = nil
     
     // Support email
-    static let supportEmail = "support@petfoodanalyzer.com"
+    static let supportEmail = "dhtprbs12@gmail.com"
     
     // App Version (from Bundle)
     static var appVersion: String {

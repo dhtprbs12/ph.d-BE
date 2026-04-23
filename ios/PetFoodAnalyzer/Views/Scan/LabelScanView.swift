@@ -150,6 +150,10 @@ struct LabelScanView: View {
                                     .font(AppTypography.labelMedium())
                                     .foregroundColor(.appTextSecondary)
                                     .multilineTextAlignment(.center)
+                                
+                                Text("This may take up to a minute for new products")
+                                    .font(AppTypography.caption())
+                                    .foregroundColor(.appTextSecondary.opacity(0.7))
                             }
                             .padding()
                             

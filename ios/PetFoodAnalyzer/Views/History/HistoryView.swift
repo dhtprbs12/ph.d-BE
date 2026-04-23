@@ -5,6 +5,9 @@ struct HistoryView: View {
     @State private var history: [ScanHistoryItem] = []
     @State private var isLoading = true
     @State private var selectedPetFilter: Pet?
+    @State private var selectedResult: ScanResult?
+    @State private var isLoadingResult = false
+    @State private var showResult = false
     
     var body: some View {
         NavigationView {
@@ -19,9 +22,29 @@ struct HistoryView: View {
                             ForEach(Array(history.enumerated()), id: \.element.id) { index, item in
                                 HistoryCard(item: item)
                                     .staggeredAppear(index: index, baseDelay: 0.05)
+                                    .onTapGesture {
+                                        loadResult(for: item)
+                                    }
                             }
                         }
                         .padding()
+                    }
+                }
+            }
+            .overlay {
+                if isLoadingResult {
+                    ZStack {
+                        Color.black.opacity(0.3).ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .scaleEffect(1.2)
+                            Text("Loading analysis...")
+                                .font(AppTypography.bodyMedium())
+                                .foregroundColor(.white)
+                        }
+                        .padding(24)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(16)
                     }
                 }
             }
@@ -30,25 +53,35 @@ struct HistoryView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("All Pets") {
+                        Button {
                             selectedPetFilter = nil
                             loadHistory()
+                        } label: {
+                            Label("All Pets", systemImage: "pawprint.fill")
                         }
+                        
+                        Divider()
                         
                         ForEach(appState.pets) { pet in
                             Button {
                                 selectedPetFilter = pet
                                 loadHistory()
                             } label: {
-                                HStack {
-                                    Text(pet.petType.icon)
-                                    Text(pet.name)
-                                }
+                                Label(
+                                    "\(pet.petType.icon) \(pet.name)",
+                                    systemImage: selectedPetFilter?.id == pet.id ? "checkmark.circle.fill" : "circle"
+                                )
                             }
                         }
                     } label: {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
-                            .foregroundColor(.appTeal)
+                        HStack(spacing: 4) {
+                            Image(systemName: "line.3.horizontal.decrease.circle")
+                            if let pet = selectedPetFilter {
+                                Text(pet.name)
+                                    .font(.system(size: 14, weight: .medium))
+                            }
+                        }
+                        .foregroundColor(.appTeal)
                     }
                 }
             }
@@ -57,6 +90,50 @@ struct HistoryView: View {
             }
             .refreshable {
                 await refreshHistory()
+            }
+            .background(
+                NavigationLink(
+                    destination: Group {
+                        if let result = selectedResult {
+                            ResultView(result: result)
+                                .environmentObject(appState)
+                        }
+                    },
+                    isActive: $showResult
+                ) { EmptyView() }
+            )
+        }
+    }
+    
+    private func loadResult(for item: ScanHistoryItem) {
+        guard let productId = item.productId, !isLoadingResult else { return }
+        isLoadingResult = true
+
+        Task {
+            do {
+                let result: ScanResult
+                
+                let matchingPet = appState.pets.first { pet in
+                    pet.name == (item.petName ?? "") && pet.petType.rawValue == (item.petType ?? "")
+                }
+                
+                if let pet = matchingPet {
+                    result = try await ProductServiceClient.shared.analyzeProduct(productId: productId, pet: pet)
+                } else {
+                    let petType = item.petType ?? "dog"
+                    let petName = item.petName ?? "Pet"
+                    result = try await ProductServiceClient.shared.analyzeProduct(productId: productId, petType: petType, petName: petName)
+                }
+                await MainActor.run {
+                    selectedResult = result
+                    isLoadingResult = false
+                    showResult = true
+                }
+            } catch {
+                print("Failed to load result: \(error)")
+                await MainActor.run {
+                    isLoadingResult = false
+                }
             }
         }
     }
@@ -67,7 +144,8 @@ struct HistoryView: View {
         Task {
             do {
                 let items = try await ScanService.shared.getScanHistory(
-                    petId: selectedPetFilter?.id,
+                    petName: selectedPetFilter?.name,
+                    petType: selectedPetFilter?.petType.rawValue,
                     limit: 50
                 )
                 
@@ -86,7 +164,8 @@ struct HistoryView: View {
     private func refreshHistory() async {
         do {
             let items = try await ScanService.shared.getScanHistory(
-                petId: selectedPetFilter?.id,
+                petName: selectedPetFilter?.name,
+                petType: selectedPetFilter?.petType.rawValue,
                 limit: 50
             )
             

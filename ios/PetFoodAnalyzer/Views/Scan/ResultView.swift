@@ -8,8 +8,7 @@ struct ResultView: View {
     @State private var showAllIngredients = false
     @State private var alternatives: [AlternativeProduct] = []
     @State private var isLoadingAlternatives = false
-    @State private var showShareSheet = false
-    @State private var shareImage: UIImage?
+    @State private var isSharing = false
     
     var body: some View {
         ScrollView {
@@ -49,7 +48,16 @@ struct ResultView: View {
                 
                 // Share Button
                 ShareResultButton {
-                    shareResult()
+                    guard !isSharing else { return }
+                    isSharing = true
+                    Task {
+                        let productImg = await downloadProductImage()
+                        let image = ShareCardRenderer.render(result: result, productImage: productImg)
+                        await MainActor.run {
+                            isSharing = false
+                            presentShareSheet(with: image)
+                        }
+                    }
                 }
                 .padding(.horizontal)
                 .staggeredAppear(index: 5)
@@ -80,18 +88,30 @@ struct ResultView: View {
                 }
             }
         }
-        .sheet(isPresented: $showShareSheet) {
-            if let image = shareImage {
-                ShareSheet(items: [image, "Check out this pet food analysis! 🐾"])
-            }
-        }
     }
     
-    private func shareResult() {
-        let cardView = ShareCardView(result: result)
-        if let image = cardView.renderAsImage() {
-            shareImage = image
-            showShareSheet = true
+    private func downloadProductImage() async -> UIImage? {
+        guard let urlStr = result.product?.imageUrl, !urlStr.isEmpty else { return nil }
+        let fullUrl: URL?
+        if urlStr.hasPrefix("http") {
+            fullUrl = URL(string: urlStr)
+        } else {
+            let base = APIConfig.baseURL.replacingOccurrences(of: "/api", with: "")
+            fullUrl = URL(string: "\(base)\(urlStr)")
+        }
+        guard let url = fullUrl else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+        return UIImage(data: data)
+    }
+    
+    private func presentShareSheet(with image: UIImage) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let root = scene.windows.first?.rootViewController else { return }
+            var top = root
+            while let presented = top.presentedViewController { top = presented }
+            let ac = UIActivityViewController(activityItems: [image], applicationActivities: nil)
+            top.present(ac, animated: true)
         }
     }
     
@@ -231,16 +251,24 @@ struct ScoreHeaderCard: View {
             }
             
             // Pet Context
-            HStack {
-                Text(Color.petTypeIcon(result.pet.petType))
-                Text("Analysis for \(result.pet.name)")
-                    .font(AppTypography.labelMedium())
-                    .foregroundColor(.appTextSecondary)
+            VStack(spacing: AppSpacing.xxs) {
+                HStack {
+                    Text(Color.petTypeIcon(result.pet.petType))
+                    Text("Analysis for \(result.pet.name)")
+                        .font(AppTypography.labelMedium())
+                        .foregroundColor(.appTextSecondary)
+                }
+                .padding(.horizontal, AppSpacing.md)
+                .padding(.vertical, AppSpacing.xs)
+                .background(Color.appLightGray)
+                .cornerRadius(AppCornerRadius.full)
+                
+                if result.pet.id == nil {
+                    Text("Scored as a healthy \(result.pet.petType) with no specific conditions")
+                        .font(AppTypography.caption())
+                        .foregroundColor(.appTextSecondary.opacity(0.7))
+                }
             }
-            .padding(.horizontal, AppSpacing.md)
-            .padding(.vertical, AppSpacing.xs)
-            .background(Color.appLightGray)
-            .cornerRadius(AppCornerRadius.full)
         }
         .padding()
         .frame(maxWidth: .infinity)
@@ -595,7 +623,7 @@ struct IngredientDetailRow: View {
         case "low": return "Generally safe, low risk"
         case "moderate": return "Use with moderation"
         case "high": return "May cause issues for some pets"
-        case "danger": return "Not recommended"
+        case "danger": return "Avoid"
         default: return "Assessment pending"
         }
     }
@@ -654,7 +682,7 @@ struct DetailedInsightsCard: View {
                 HStack {
                     Image(systemName: "sparkles")
                         .foregroundColor(.appTeal)
-                    Text("Detailed AI Analysis")
+                    Text("Detailed Analysis")
                         .font(AppTypography.labelLarge())
                         .foregroundColor(.appTextPrimary)
                     Spacer()
@@ -1127,7 +1155,7 @@ struct AIInsightsCard: View {
             HStack {
                 Image(systemName: "sparkles")
                     .foregroundColor(.appTeal)
-                Text("AI Analysis for \(petName)")
+                Text("Analysis for \(petName)")
                     .font(AppTypography.labelLarge())
                 Spacer()
             }
@@ -1138,6 +1166,42 @@ struct AIInsightsCard: View {
                     .font(AppTypography.bodyMedium())
                     .foregroundColor(.appTextPrimary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            
+            // Condition Warnings (rule-based, pet-specific)
+            if let warnings = insights.conditionWarnings, !warnings.isEmpty {
+                VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.shield.fill")
+                            .foregroundColor(.appDanger)
+                        Text("Health Alerts for \(petName)")
+                            .font(AppTypography.labelMedium())
+                            .fontWeight(.semibold)
+                            .foregroundColor(.appDanger)
+                    }
+                    
+                    ForEach(warnings) { warning in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: warning.type == "allergy" ? "exclamationmark.triangle.fill" : "heart.text.square")
+                                .font(.system(size: 14))
+                                .foregroundColor(warning.severity == "high" ? .appDanger : .appCaution)
+                                .frame(width: 20)
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(warning.ingredient)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.appTextPrimary)
+                                Text(warning.message)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.appTextSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+                .padding()
+                .background(Color.appDanger.opacity(0.08))
+                .cornerRadius(AppCornerRadius.medium)
             }
             
             // Top Concerns
@@ -1238,13 +1302,12 @@ struct AIInsightsCard: View {
                 .cornerRadius(AppCornerRadius.medium)
             }
             
-            // AI Generated Note
             if insights.aiGenerated == true {
                 HStack {
                     Spacer()
                     Image(systemName: "cpu")
                         .font(.caption2)
-                    Text("Powered by AI")
+                    Text("Auto-generated insight")
                         .font(AppTypography.labelSmall())
                 }
                 .foregroundColor(.appTextSecondary.opacity(0.7))
@@ -1315,11 +1378,11 @@ struct TrustDisclaimerFooter: View {
                     )
                 }
                 
-                // FDA/AAFCO Badge
+                // AAFCO Badge
                 TrustBadge(
                     icon: "checkmark.shield.fill",
-                    value: "FDA",
-                    label: "& AAFCO"
+                    value: "AAFCO",
+                    label: "Compliant"
                 )
                 
                 // Verified Data
@@ -1358,7 +1421,7 @@ struct TrustDisclaimerFooter: View {
                 }
                 .foregroundColor(.appTextSecondary)
                 
-                Text("Analysis based on AAFCO & FDA guidelines. For informational purposes only — not veterinary advice. Always consult your veterinarian before making dietary changes.")
+                Text("Analysis based on AAFCO guidelines. For informational purposes only — not veterinary advice. Always consult your veterinarian before making dietary changes.")
                     .font(.system(size: 11))
                     .foregroundColor(.appTextSecondary.opacity(0.8))
                     .multilineTextAlignment(.center)
@@ -1379,7 +1442,7 @@ struct TrustDisclaimerFooter: View {
         do {
             communityStats = try await APIService.shared.fetchCommunityStats()
         } catch {
-            // Silently fail - trust indicators will still show FDA/AAFCO
+            // Silently fail - trust indicators will still show AAFCO
             print("Failed to load community stats: \(error)")
         }
     }

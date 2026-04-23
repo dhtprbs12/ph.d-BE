@@ -22,7 +22,7 @@ struct SettingsView: View {
                                 )
                             
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("PetFood Analyzer")
+                                Text("PHD")
                                     .font(AppTypography.bodyLarge())
                                     .fontWeight(.semibold)
                                     .foregroundColor(.appTextPrimary)

@@ -31,11 +31,11 @@ struct TermsOfServiceView: View {
                 .cornerRadius(12)
                 
                 section(title: "Acceptance of Terms", content: """
-                By using PetFood Analyzer, you agree to these Terms of Service. If you do not agree, please do not use the app.
+                By using PHD, you agree to these Terms of Service. If you do not agree, please do not use the app.
                 """)
                 
                 section(title: "Description of Service", content: """
-                PetFood Analyzer provides:
+                PHD provides:
                 
                 • Pet food ingredient analysis
                 • Safety assessments based on publicly available data

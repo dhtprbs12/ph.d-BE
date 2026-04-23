@@ -22,12 +22,11 @@ struct HowWeAnalyzeView: View {
                     title: "Our Analysis Process",
                     content: """
                     We analyze pet food using a combination of:
-                    
+
                     • Ingredient database with safety profiles
                     • AAFCO (Association of American Feed Control Officials) guidelines
-                    • FDA pet food safety standards
                     • Veterinary nutrition research
-                    
+
                     Each ingredient is evaluated for safety, nutritional value, and potential concerns based on your pet's specific health profile.
                     """
                 )
@@ -61,7 +60,7 @@ struct HowWeAnalyzeView: View {
                         gradeRow(grade: "B", range: "70-84", description: "Good choice", color: .appPrimaryLight)
                         gradeRow(grade: "C", range: "55-69", description: "Acceptable", color: .appAccentSoft)
                         gradeRow(grade: "D", range: "40-54", description: "Below average", color: .appAccent)
-                        gradeRow(grade: "F", range: "0-39", description: "Not recommended", color: .appDanger)
+                        gradeRow(grade: "F", range: "0-39", description: "Avoid", color: .appDanger)
                     }
                 }
                 .padding(16)
@@ -74,12 +73,11 @@ struct HowWeAnalyzeView: View {
                     title: "Our Data Sources",
                     content: """
                     We reference trusted sources including:
-                    
+
                     • AAFCO nutrient profiles
-                    • FDA Center for Veterinary Medicine
                     • Peer-reviewed veterinary nutrition studies
                     • Ingredient safety databases
-                    
+
                     Our database is regularly updated to reflect the latest research and safety guidelines.
                     """
                 )

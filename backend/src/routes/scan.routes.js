@@ -1321,8 +1321,8 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
       breed: petBreed || null,
       age_months: petAgeMonths ? parseInt(petAgeMonths) : null,
       weight_kg: petWeightKg ? parseFloat(petWeightKg) : null,
-      allergies: petAllergies ? JSON.parse(petAllergies) : [],
-      healthConditions: petHealthConditions ? JSON.parse(petHealthConditions) : []
+      allergies: safeJsonParse(petAllergies, []),
+      healthConditions: safeJsonParse(petHealthConditions, [])
     };
 
     // Process image (resize for API)
@@ -2207,8 +2207,8 @@ router.post('/manual', async (req, res, next) => {
       id: 'local',
       name: petName || 'My Pet',
       pet_type: petType,
-      allergies: petAllergies ? JSON.parse(petAllergies) : [],
-      healthConditions: petHealthConditions ? JSON.parse(petHealthConditions) : []
+      allergies: safeJsonParse(petAllergies, []),
+      healthConditions: safeJsonParse(petHealthConditions, [])
     };
 
     // Normalize ingredients using Gemini if available
@@ -2657,7 +2657,11 @@ router.get('/:id', async (req, res, next) => {
     }
 
     // Parse stored analysis JSON
-    scan.analysis = JSON.parse(scan.analysis_json || '{}');
+    try {
+      scan.analysis = JSON.parse(scan.analysis_json || '{}');
+    } catch {
+      scan.analysis = {};
+    }
 
     res.json({ scan });
   } catch (error) {

@@ -401,7 +401,7 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
       breed: petBreed || null,
       age_years: petAge ? parseFloat(petAge) : (petAgeMonths ? parseFloat(petAgeMonths) / 12 : null),
       weight_kg: petWeight ? parseFloat(petWeight) : null,
-      healthConditions: healthConditions ? JSON.parse(healthConditions) : []
+      healthConditions: safeJsonParse(healthConditions, [])
     };
     
     console.log('🐕 [ANALYZE] Pet:', pet.name, pet.pet_type);
