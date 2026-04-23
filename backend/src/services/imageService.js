@@ -3,6 +3,12 @@ const path = require('path');
 const { query } = require('../database/connection');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 
+/** Strip whitespace + UTF-8 BOM (invisible; breaks AWS Sig V4 if pasted from some editors) */
+function cleanR2Env(value) {
+  if (value == null) return '';
+  return String(value).trim().replace(/^\uFEFF/, '');
+}
+
 /**
  * IMAGE SERVICE
  * 
@@ -30,21 +36,37 @@ class ImageService {
     this.googleApiKey = process.env.GOOGLE_SEARCH_API_KEY;
     this.searchEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
 
-    // Cloudflare R2
-    this.r2BucketName = process.env.R2_BUCKET_NAME;
-    this.r2PublicUrl = process.env.R2_PUBLIC_URL;
+    // Cloudflare R2 — use cleanR2Env (BOM/whitespace breaks signature even when “it looks right” in UI)
+    this.r2BucketName = cleanR2Env(process.env.R2_BUCKET_NAME);
+    this.r2PublicUrl = cleanR2Env(process.env.R2_PUBLIC_URL).replace(/\/$/, '');
     this.r2Client = null;
 
-    if (process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY) {
-      this.r2Client = new S3Client({
+    const accountId = cleanR2Env(process.env.R2_ACCOUNT_ID);
+    const accessKeyId = cleanR2Env(process.env.R2_ACCESS_KEY_ID);
+    const secretAccessKey = cleanR2Env(process.env.R2_SECRET_ACCESS_KEY);
+
+    if (accountId && accessKeyId && secretAccessKey) {
+      // Cloudflare R2 + AWS SDK: official examples omit forcePathStyle (default signing path).
+      // If you need legacy path-style, set R2_FORCE_PATH_STYLE=true
+      const pathStyle = process.env.R2_FORCE_PATH_STYLE === 'true';
+      const s3Config = {
         region: 'auto',
-        endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+        endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
         credentials: {
-          accessKeyId: process.env.R2_ACCESS_KEY_ID,
-          secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+          accessKeyId,
+          secretAccessKey,
         },
-      });
-      console.log('☁️  [R2] Cloudflare R2 configured');
+      };
+      if (pathStyle) s3Config.forcePathStyle = true;
+      this.r2Client = new S3Client(s3Config);
+      console.log(
+        '☁️  [R2] configured | pathStyle=%s | lens account=%d access=%d secret=%d bucket=%s',
+        String(pathStyle),
+        accountId.length,
+        accessKeyId.length,
+        secretAccessKey.length,
+        this.r2BucketName || '(empty)',
+      );
     } else {
       console.log('⚠️  [R2] Cloudflare R2 not configured — images will be saved locally');
     }
