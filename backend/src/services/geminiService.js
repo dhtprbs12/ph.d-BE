@@ -190,18 +190,19 @@ Return ONLY a JSON array of strings, no explanation:
   }
 
   /**
-   * Get AI-powered explanation for why an ingredient is risky
+   * Get AI-powered explanation for an ingredient in pet food (universal healthy-pet baseline).
+   * @param {unknown} _healthConditions ignored (call-site compatibility)
    */
-  async explainIngredientRisk(ingredientName, petType, healthConditions = []) {
+  async explainIngredientRisk(ingredientName, petType, _healthConditions = []) {
     this.initialize();
 
     if (!this.model) {
       return null;
     }
 
-    const prompt = `Explain briefly (2-3 sentences) why "${ingredientName}" might be concerning in pet food for a ${petType}${healthConditions.length > 0 ? ` with ${healthConditions.join(', ')}` : ''}.
+    const prompt = `Explain briefly (2-3 sentences) how "${ingredientName}" is generally viewed in ${petType} food for a typical, healthy ${petType}. Do not personalize for diseases, allergies, or special diets.
 
-Be factual and specific. If it's actually safe, say so. Focus on practical concerns for pet owners.`;
+Be factual and specific. If it is usually fine for healthy pets, say so. If it is sometimes controversial, describe the general concern.`;
 
     try {
       const result = await this.model.generateContent(prompt);
@@ -485,8 +486,14 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
   /**
    * Quickly assess a list of ingredients for a specific pet type
    * Returns risk adjustments and explanations for each ingredient
+   *
+   * Always uses a universal "healthy pet" nutritional baseline. Pet-specific conditions
+   * (allergies, etc.) are NOT passed into this prompt — they are handled by rule-based
+   * layers (e.g. allergen match) and conditionWarnings elsewhere.
+   *
+   * @param {unknown} _healthConditions ignored (kept for call-site compatibility)
    */
-  async assessIngredientsForPet(ingredients, petType, petName, healthConditions = [], productType = 'food') {
+  async assessIngredientsForPet(ingredients, petType, petName, _healthConditions = [], productType = 'food') {
     this.initialize();
 
     if (!this.model || ingredients.length === 0) {
@@ -508,40 +515,6 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
                     (ingredients.length <= 6 && ingredients.some(i => 
                       (i.name || i).toLowerCase().includes('jerky') || 
                       (i.name || i).toLowerCase().includes('treat')));
-    
-    // Build health conditions context
-    const hasConditions = healthConditions && healthConditions.length > 0;
-    const conditionsText = hasConditions 
-      ? healthConditions.map(c => c.condition_type || c).join(', ')
-      : 'None (healthy pet)';
-    
-    // Condition-specific instructions
-    const conditionGuidelines = hasConditions ? `
-CRITICAL - This pet has health conditions. Apply these scoring rules:
-${healthConditions.map(c => {
-  const condition = c.condition_type || c;
-  
-  // Handle allergies - extract the allergen and be explicit about BOTH score AND explanation
-  if (condition.includes('allergy')) {
-    const allergen = condition.replace('allergy_', '').replace(/_/g, ' ');
-    return `- ⚠️ ${allergen.toUpperCase()} ALLERGY: Any ${allergen} or ${allergen}-derived ingredient MUST get:
-      • riskScore: +45 to +50 (DANGEROUS)
-      • explanation: MUST mention the allergy! Example: "ALLERGEN: This pet is allergic to ${allergen}. Do not feed."
-      • DO NOT describe nutritional benefits - focus on the allergy danger!`;
-  }
-  
-  // Other conditions
-  if (condition.includes('obesity')) return '- OBESITY: Penalize high-calorie ingredients, fats, sugars (+10 to +20)';
-  if (condition.includes('diabetes')) return '- DIABETES: Severely penalize sugars and simple carbs (+20 to +40)';
-  if (condition.includes('kidney')) return '- KIDNEY DISEASE: Penalize high-protein and high-phosphorus ingredients (+15 to +30)';
-  if (condition.includes('heart')) return '- HEART DISEASE: Penalize high-sodium ingredients (+15 to +25)';
-  if (condition.includes('pancreatitis')) return '- PANCREATITIS: Severely penalize high-fat ingredients (+25 to +40)';
-  if (condition.includes('liver')) return '- LIVER DISEASE: Penalize high-protein, copper-rich ingredients (+15 to +25)';
-  if (condition.includes('urinary')) return '- URINARY ISSUES: Penalize high-mineral ingredients (+10 to +20)';
-  if (condition.includes('digestive')) return '- DIGESTIVE SENSITIVITY: Penalize hard-to-digest ingredients, dairy, fatty foods (+10 to +20)';
-  return `- ${condition.toUpperCase()}: Assess impact on this condition`;
-}).join('\n')}
-` : '';
 
     // Product type context
     const productContext = isSupplement ? `
@@ -549,7 +522,7 @@ PRODUCT TYPE: SUPPLEMENT (not a food source)
 - This is a dietary supplement, NOT daily food or a treat
 - It is NOT expected to be nutritionally complete — it supplements the diet
 - Capsule shells, binders, and carrier ingredients (gelatin, glycerin, water, cellulose) are standard delivery mechanisms — score them NEUTRAL (-2 to +2)
-- Focus ONLY on: active ingredient quality, safety, and compatibility with health conditions
+- Focus ONLY on: active ingredient quality and general safety
 - Do NOT penalize for "nutritional inadequacy" — supplements are not meals
 ` : isTreat ? `
 PRODUCT TYPE: TREAT (occasional consumption)
@@ -566,15 +539,15 @@ PRODUCT TYPE: DAILY FOOD (regular consumption)
 `;
 
     const prompt = `You are a veterinary nutritionist. Assess these pet food ingredients for a ${petType} named ${petName}.
+Assume a generally healthy, typical ${petType} (no special medical conditions) — this is a universal product assessment.
 
 INGREDIENTS (by position - earlier = larger amount):
 ${ingredientDetails}
 
 TOTAL INGREDIENTS: ${totalIngredients}
 PET TYPE: ${petType}
-HEALTH CONDITIONS: ${conditionsText}
+HEALTH CONDITIONS: None (universal / healthy-pet baseline — do not personalize for diseases or allergies)
 ${productContext}
-${conditionGuidelines}
 
 SCORING GUIDELINES:
 - riskScore: -20 to +50 (negative = BENEFICIAL, positive = concerning)
@@ -635,21 +608,10 @@ Return VALID JSON (no + prefix on numbers, use -5 or 5, not +5):
   }
 }
 
-${hasConditions ? `⚠️ CRITICAL REMINDER: ${petName} has ${conditionsText}. 
-
-FOR ALLERGIES:
-- Any ingredient matching the allergen MUST have riskScore: +45 to +50
-- The "explanation" field MUST warn about the allergy, NOT describe nutritional value!
-- BAD explanation: "High-quality protein source" (ignores allergy!)
-- GOOD explanation: "ALLERGEN: This pet is allergic to chicken. Do not feed."
-
-FOR OTHER CONDITIONS:
-- Penalize problematic ingredients with appropriate scores
-- Mention the condition in the explanation when relevant` : 'This is a healthy pet - use standard nutritional assessment.'}`;
+Use standard nutritional assessment for a healthy ${petType}. Explanations describe the ingredient itself, not a specific sick pet.`;
 
     try {
-      console.log(`🤖 [AI PROMPT] Assessing for conditions: ${conditionsText}`);
-      console.log(`🤖 [AI PROMPT] Condition guidelines:\n${conditionGuidelines}`);
+      console.log('🤖 [AI PROMPT] Ingredient assessment: universal healthy-pet baseline (no condition personalization)');
       
       const result = await this.model.generateContent(prompt);
       const text = result.response.text();
@@ -679,29 +641,19 @@ FOR OTHER CONDITIONS:
 
   /**
    * HOLISTIC PRODUCT REVIEW
-   * AI evaluates the ENTIRE product and gives a final score
-   * This catches edge cases that position-weighted scoring misses:
-   * - No real protein in product
-   * - Artificial colors present (even at low positions)
-   * - Primary ingredients are all fillers
-   * 
+   * AI evaluates the ENTIRE product and gives a final score (universal healthy-pet product quality only).
    * @param {Object} params
-   * @param {string[]} params.ingredients - Full ingredient list
-   * @param {string} params.petType - 'dog' or 'cat'
-   * @param {string[]} params.healthConditions - Pet's health conditions
-   * @param {string} params.productType - 'treats', 'food', 'supplement'
-   * @param {string} params.petName - Pet's name for personalization
-   * @returns {Object} { finalScore, grade, keyIssues, positives, aiSummary, ... }
+   * @param {string[]} params.healthConditions - ignored; kept for call-site compatibility
+   * @param {string} params.petName - may be used in summary tone only, not for medical context
    */
-  async reviewProductHolistically({ ingredients, petType, healthConditions = [], productType = 'food', petName = 'your pet' }) {
+  async reviewProductHolistically({ ingredients, petType, healthConditions: _healthConditions = [], productType = 'food', petName = 'your pet' }) {
     this.initialize();
     
     if (!this.model) {
       throw new Error('Gemini AI not initialized. Check GEMINI_API_KEY.');
     }
 
-    const hasConditions = healthConditions.length > 0;
-    const conditionsText = hasConditions ? healthConditions.join(', ') : 'none (healthy)';
+    const conditionsText = 'None — universal healthy pet (do not adjust score or text for specific diseases, allergies, or special diets)';
     const isSupplement = productType === 'supplement';
     const isTreat = isSupplement || productType === 'treats' || productType === 'treat';
 
@@ -719,7 +671,7 @@ IMPORTANT: This is a SUPPLEMENT, NOT daily food or a treat. Supplements are:
 - Taken to complement the regular diet (e.g., fish oil, joint support, probiotics)
 - NOT expected to be nutritionally complete
 - Capsule shells/binders/carriers (gelatin, glycerin, water, cellulose) are standard delivery mechanisms — NEUTRAL
-- Evaluate ONLY: active ingredient quality, safety, and compatibility with health conditions
+- Evaluate ONLY: active ingredient quality and general safety (universal, healthy pet)
 
 BASE SCORE: 80 (supplements start here)
 
@@ -728,7 +680,6 @@ SCORING ADJUSTMENTS FOR SUPPLEMENTS:
 PENALTIES (subtract from base):
 - Artificial preservatives (BHA, BHT): -10 to -15
 - Toxic ingredients: -50 (instant fail)
-- Known allergens if pet has allergies: -15 to -25
 - Low-quality/rancid oil sources: -10 to -15
 - Artificial colors or flavors: -5 to -10
 
@@ -744,31 +695,12 @@ NEUTRAL FOR SUPPLEMENTS (don't penalize):
 - Small amounts of carrier oils
 - No protein content — supplements aren't protein sources
 
-${hasConditions ? `
-⚠️ CRITICAL - HEALTH CONDITIONS: ${conditionsText}
-${healthConditions.map(c => {
-  if (c.includes('allergy')) {
-    const allergen = c.replace('allergy_', '').replace(/_/g, ' ');
-    return '🚨 ' + allergen.toUpperCase() + ' ALLERGY: If ANY ' + allergen + ' or ' + allergen + '-derived ingredient is present → Score ≤30 (Grade F), not_recommended';
-  }
-  if (c.includes('diabetes')) return '⚠️ DIABETES: Most supplements are fine for diabetic pets unless sugar-coated';
-  if (c.includes('obesity')) return '⚠️ OBESITY: Fish oil can actually help with weight management — bonus if present';
-  if (c.includes('kidney')) return '🚨 KIDNEY DISEASE: High-protein supplements may be problematic → Subtract 10-20 points if high protein';
-  if (c.includes('liver')) return '🚨 LIVER DISEASE: Avoid copper-heavy or high-protein supplements → Subtract 10-15';
-  if (c.includes('heart')) return '⚠️ HEART DISEASE: Omega-3 is beneficial for heart → Bonus +5';
-  if (c.includes('pancreatitis')) return '🚨 PANCREATITIS: High-fat supplements (fish oil in large doses) may be problematic → Check fat content';
-  if (c.includes('digestive') || c.includes('sensitive')) return '⚠️ DIGESTIVE SENSITIVITY: Gelatin capsules are generally fine; watch for dairy-based ingredients';
-  if (c.includes('urinary')) return '⚠️ URINARY ISSUES: Check mineral content';
-  return '⚠️ ' + c.toUpperCase() + ': Evaluate supplement compatibility';
-}).join('\n')}
-` : ''}
-
 SCORING GUIDE FOR SUPPLEMENTS:
-- 90-100: Excellent supplement (high-quality active + clean + no artificial additives + compatible with health conditions)
-- 80-89: Good supplement (quality active ingredients, minimal concerns)
-- 70-79: Acceptable (some minor concerns, still beneficial)
-- 60-69: Caution (quality concerns or potential condition conflicts)
-- Below 60: Not recommended (allergen present, harmful for condition, or very low quality)
+- 90-100: Excellent supplement (high-quality actives + clean + no artificial additives)
+- 80-89: Good supplement (quality actives, minimal concerns)
+- 70-79: Acceptable (some minor concerns, still potentially beneficial)
+- 60-69: Caution (quality concerns)
+- Below 60: Not recommended (toxic or very low quality)
 
 IMPORTANT: In keyIssues, positives, and aiSummary, DO NOT mention ingredient position/order.
 
@@ -809,7 +741,6 @@ PENALTIES (subtract from base):
 - Artificial preservatives (BHA, BHT, ethoxyquin): -10 to -15
 - Toxic ingredients (xylitol, chocolate, grapes): -50 (instant fail)
 - Sugar/sweeteners as #1 or #2 ingredient: -2 to -4 (minor concern for treats)
-- Known allergens if pet has allergies: -15 to -25
 - Long ingredient list (15+) with many unrecognizable items: -3 to -5
 
 BONUSES (add to base):
@@ -827,25 +758,6 @@ NEUTRAL FOR TREATS (don't penalize):
 - Glycerin/water - common in soft treats
 - "Natural Flavor" - acceptable for treats
 - Organic sugar in small amounts - treats are meant to be tasty
-
-${hasConditions ? `
-⚠️ CRITICAL - HEALTH CONDITIONS: ${conditionsText}
-${healthConditions.map(c => {
-  if (c.includes('allergy')) {
-    const allergen = c.replace('allergy_', '').replace(/_/g, ' ');
-    return `🚨 ${allergen.toUpperCase()} ALLERGY: If ANY ${allergen} or ${allergen}-derived ingredient is present → Score ≤30 (Grade F), not_recommended`;
-  }
-  if (c.includes('diabetes')) return `🚨 DIABETES: If high sugar/simple carbs (sugar, corn syrup, dextrose, molasses) are prominent → Score ≤40 (Grade D/F), caution or not_recommended`;
-  if (c.includes('obesity')) return `⚠️ OBESITY: If high-fat or calorie-dense ingredients dominate → Subtract 15-25 points`;
-  if (c.includes('kidney')) return `🚨 KIDNEY DISEASE: If very high protein or high phosphorus (bone meal, organ meats, dairy) → Score ≤50 (Grade D), caution`;
-  if (c.includes('liver')) return `🚨 LIVER DISEASE: If high protein/copper (organ meats, shellfish) → Score ≤50 (Grade D), caution`;
-  if (c.includes('heart')) return `🚨 HEART DISEASE: If high sodium (salt, sodium nitrate) → Score ≤50 (Grade D), caution`;
-  if (c.includes('pancreatitis')) return `🚨 PANCREATITIS: If high fat (animal fat, bacon, fatty meats) → Score ≤40 (Grade D/F), not_recommended`;
-  if (c.includes('digestive') || c.includes('sensitive')) return `⚠️ DIGESTIVE SENSITIVITY: If hard-to-digest items (dairy, fatty foods, spicy, raw) → Subtract 15-25 points`;
-  if (c.includes('urinary')) return `⚠️ URINARY ISSUES: If high mineral content (magnesium, phosphorus) → Subtract 10-20 points`;
-  return `⚠️ ${c.toUpperCase()}: Evaluate ingredients for compatibility, penalize problematic ones`;
-}).join('\n')}
-` : ''}
 
 SCORING GUIDE FOR TREATS:
 - 90-100: Excellent treat (real protein #1 + clean ingredients + no artificial additives)
@@ -877,13 +789,8 @@ CALIBRATION EXAMPLES (follow these closely):
 - Rice flour, glycerin, natural preservatives, herbs, NO artificial colors = 78-82 (Grade B)
 - Rice flour, glycerin, natural preservatives, herbs, WITH artificial colors (Yellow 5, Blue 1) = 65-72 (Grade C/D)
 - Artificial colors AND artificial preservatives = 55-65 (Grade D/F)
-🚨 IF PET HAS HEALTH CONDITIONS:
-- Chicken treat + pet has CHICKEN ALLERGY → 20-30 (Grade F) - allergen present!
-- Sugary treat + pet has DIABETES → 35-45 (Grade D/F) - sugar is harmful!
-- Fatty treat + pet has PANCREATITIS → 30-40 (Grade F/D) - fat triggers flares!
-- High-protein treat + pet has KIDNEY DISEASE → 45-55 (Grade D) - protein overload!
 
-KEY PRINCIPLE: Treats deserve 90+ if clean ingredients + no artificial additives. BUT health conditions override everything - problematic ingredients for that condition MUST significantly lower the score.`;
+KEY PRINCIPLE: Score for a typical healthy pet. Treats deserve 90+ if clean ingredients and no artificial additives.`;
 
     const foodPrompt = `You are a veterinary nutritionist reviewing DAILY PET FOOD (not treats).
 
@@ -932,25 +839,6 @@ DOG-SPECIFIC:
 - Balanced nutrition important
 `}
 
-${hasConditions ? `
-⚠️ CRITICAL - HEALTH CONDITIONS: ${conditionsText}
-${healthConditions.map(c => {
-  if (c.includes('allergy')) {
-    const allergen = c.replace('allergy_', '').replace(/_/g, ' ');
-    return `🚨 ${allergen.toUpperCase()} ALLERGY: If ANY ${allergen} or ${allergen}-derived ingredient is present → Score ≤30 (Grade F), not_recommended`;
-  }
-  if (c.includes('diabetes')) return `🚨 DIABETES: If high sugar/simple carbs (sugar, corn syrup, dextrose, molasses) are prominent → Score ≤40 (Grade D/F), caution or not_recommended`;
-  if (c.includes('obesity')) return `⚠️ OBESITY: If high-fat or calorie-dense ingredients dominate → Subtract 15-25 points`;
-  if (c.includes('kidney')) return `🚨 KIDNEY DISEASE: If very high protein or high phosphorus (bone meal, organ meats, dairy) → Score ≤50 (Grade D), caution`;
-  if (c.includes('liver')) return `🚨 LIVER DISEASE: If high protein/copper (organ meats, shellfish) → Score ≤50 (Grade D), caution`;
-  if (c.includes('heart')) return `🚨 HEART DISEASE: If high sodium (salt, sodium nitrate) → Score ≤50 (Grade D), caution`;
-  if (c.includes('pancreatitis')) return `🚨 PANCREATITIS: If high fat (animal fat, bacon, fatty meats) → Score ≤40 (Grade D/F), not_recommended`;
-  if (c.includes('digestive') || c.includes('sensitive')) return `⚠️ DIGESTIVE SENSITIVITY: If hard-to-digest items (dairy, fatty foods, spicy, raw) → Subtract 15-25 points`;
-  if (c.includes('urinary')) return `⚠️ URINARY ISSUES: If high mineral content (magnesium, phosphorus) → Subtract 10-20 points`;
-  return `⚠️ ${c.toUpperCase()}: Evaluate ingredients for compatibility, penalize problematic ones`;
-}).join('\n')}
-` : ''}
-
 IMPORTANT: In keyIssues, positives, and aiSummary, DO NOT mention ingredient position/order.
 BAD: "Real chicken as the #1 ingredient" or "Sugar is the first ingredient"
 GOOD: "Contains quality chicken protein" or "High sugar content is concerning"
@@ -965,7 +853,7 @@ Return JSON:
   "hasArtificialAdditives": <true|false>,
   "keyIssues": ["<issue without position reference>", "<issue 2>"],
   "positives": ["<positive without position reference>", "<positive 2>"],
-  "aiSummary": "<2-3 sentence summary for ${petName} - no position references>"
+  "aiSummary": "<2-3 sentence product-quality summary (typical healthy pet) — you may use ${petName} naturally; no position references>"
 }`;
 
     const prompt = isSupplement ? supplementPrompt : (isTreat ? treatPrompt : foodPrompt);
@@ -1017,10 +905,10 @@ Return JSON:
    * @param {Array} params.allIngredients - Full ingredient list for holistic review
    * @param {string} params.petType
    * @param {string} params.petName
-   * @param {Array} params.healthConditions
+   * @param {Array} params.healthConditions ignored (holistic is universal healthy baseline)
    * @param {string} params.productType
    */
-  async assessAndReviewProduct({ uncachedIngredients, allIngredients, petType, petName = 'your pet', healthConditions = [], productType = 'food' }) {
+  async assessAndReviewProduct({ uncachedIngredients, allIngredients, petType, petName = 'your pet', healthConditions: _healthConditions = [], productType = 'food' }) {
     this.initialize();
 
     const ingredients = uncachedIngredients || allIngredients;
@@ -1043,10 +931,7 @@ Return JSON:
     }).join('\n');
 
     const totalIngredients = fullIngredients.length;
-    const hasConditions = healthConditions.length > 0;
-    const conditionsText = hasConditions
-      ? healthConditions.map(c => c.condition_type || c).join(', ')
-      : 'None (healthy pet)';
+    const conditionsText = 'None (universal healthy pet — same baseline as per-ingredient assessment)';
 
     const isSupplement = productType === 'supplement';
     const isTreat = isSupplement || productType === 'treats' || productType === 'treat' ||
@@ -1056,43 +941,26 @@ Return JSON:
 
     const productTypeLabel = isSupplement ? 'SUPPLEMENT' : (isTreat ? 'TREAT' : 'DAILY FOOD');
 
-    const conditionGuidelines = hasConditions ? `
-CRITICAL - This pet has health conditions. Apply these scoring rules:
-${healthConditions.map(c => {
-  const condition = c.condition_type || c;
-  if (condition.includes('allergy')) {
-    const allergen = condition.replace('allergy_', '').replace(/_/g, ' ');
-    return `- 🚨 ${allergen.toUpperCase()} ALLERGY: Any ${allergen} or ${allergen}-derived ingredient → riskScore: +45 to +50, explanation MUST warn about allergy. Holistic score ≤30 (Grade F).`;
-  }
-  if (condition.includes('obesity')) return '- OBESITY: Penalize high-calorie ingredients, fats, sugars (+10 to +20). Holistic: subtract 15-25.';
-  if (condition.includes('diabetes')) return '- DIABETES: Severely penalize sugars and simple carbs (+20 to +40). Holistic: score ≤40 if sugar prominent.';
-  if (condition.includes('kidney')) return '- KIDNEY DISEASE: Penalize high-protein and high-phosphorus ingredients (+15 to +30). Holistic: score ≤50.';
-  if (condition.includes('heart')) return '- HEART DISEASE: Penalize high-sodium ingredients (+15 to +25). Holistic: score ≤50.';
-  if (condition.includes('pancreatitis')) return '- PANCREATITIS: Severely penalize high-fat ingredients (+25 to +40). Holistic: score ≤40.';
-  if (condition.includes('liver')) return '- LIVER DISEASE: Penalize high-protein, copper-rich ingredients (+15 to +25). Holistic: score ≤50.';
-  if (condition.includes('urinary')) return '- URINARY ISSUES: Penalize high-mineral ingredients (+10 to +20).';
-  if (condition.includes('digestive')) return '- DIGESTIVE SENSITIVITY: Penalize hard-to-digest ingredients, dairy, fatty foods (+10 to +20).';
-  return `- ${condition.toUpperCase()}: Assess impact on this condition`;
-}).join('\n')}
-` : '';
-
     const hasPartialCache = ingredients.length < fullIngredients.length;
     
     const prompt = `You are a veterinary nutritionist. Perform a COMPLETE analysis of this pet food product.
 
 PRODUCT TYPE: ${productTypeLabel}
 PET: ${petType} named ${petName}
+
+PART 1: Per-ingredient — UNIVERSAL healthy-pet baseline (no disease or allergy personalization).
+PART 2: Holistic product score & summary — UNIVERSAL healthy-pet baseline (same; score overall product quality for a typical healthy ${petType}).
 HEALTH CONDITIONS: ${conditionsText}
 
 FULL INGREDIENT LIST (for holistic review - by weight, earlier = larger amount):
 ${fullIngredientDetails}
 
 TOTAL INGREDIENTS: ${totalIngredients}
-${conditionGuidelines}
 
 You must return TWO things in your response:
 
 ═══ PART 1: PER-INGREDIENT ASSESSMENT ═══
+Assume a typical healthy ${petType} — do NOT personalize per-ingredient text for specific diseases or named allergies.
 ${hasPartialCache ? `Assess ONLY these ${ingredients.length} ingredients (the others are already evaluated):
 ${uncachedDetails}` : `For EACH ingredient, provide a risk score and explanation.`}
 
@@ -1120,7 +988,7 @@ isTreat ? `- Quality proteins (chicken, beef, fish): -12 to -18 (very beneficial
 IMPORTANT: Do NOT mention ingredient position/order in explanations.
 
 ═══ PART 2: HOLISTIC PRODUCT REVIEW ═══
-Evaluate the ENTIRE product (all ${totalIngredients} ingredients in the FULL INGREDIENT LIST above) as a whole and provide an overall score.
+Evaluate the ENTIRE product (all ${totalIngredients} ingredients in the FULL INGREDIENT LIST above) for overall quality for a typical healthy ${petType}. Do not adjust the holistic score for specific medical conditions or allergies.
 
 ${isSupplement ? 'BASE SCORE: 80 (supplements start here)' : isTreat ? 'BASE SCORE: 75 (treats start here)' : 'BASE SCORE: 75 (daily food starts here)'}
 
@@ -1129,9 +997,7 @@ Scoring guide:
 - 80-89: Good (Grade B)
 - 70-79: Acceptable (Grade C)
 - 55-69: Below average (Grade D)
-- Below 55: ${hasConditions ? 'Avoid - harmful for this pet' : 'Avoid - significant issues'} (Grade F)
-
-${hasConditions ? `⚠️ REMINDER: ${petName} has ${conditionsText}. Health conditions MUST significantly impact the holistic score if problematic ingredients are present.` : ''}
+- Below 55: Avoid - significant issues (Grade F)
 
 Return VALID JSON (no + prefix on numbers):
 {

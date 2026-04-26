@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS scan_history (
     pet_name VARCHAR(100),   -- Store pet info directly (pets are local on device)
     pet_type ENUM('dog', 'cat'),
     product_id VARCHAR(36),
-    scan_type ENUM('label_photo', 'manual_input') NOT NULL,
+    scan_type ENUM('label_photo', 'manual_input', 'product_search') NOT NULL,
     -- Analysis results
     final_score INT NOT NULL,  -- 0-100
     grade ENUM('A', 'B', 'C', 'D', 'F') NOT NULL,

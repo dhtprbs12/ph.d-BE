@@ -1,4 +1,5 @@
 const express = require('express');
+const { v4: uuidv4 } = require('uuid');
 const router = express.Router();
 const { query } = require('../database/connection');
 const { authenticateToken, optionalAuth } = require('../middleware/auth');
@@ -11,6 +12,15 @@ const {
   gradeToNumber, 
   numberToGrade 
 } = require('../utils/cacheHelpers');
+
+const VALID_HISTORY_RECS = new Set([
+  'highly_recommended', 'recommended', 'acceptable', 'caution', 'not_recommended',
+]);
+function toHistoryRecommendation(grade, rec) {
+  if (rec && VALID_HISTORY_RECS.has(rec)) return rec;
+  const fromGrade = { A: 'highly_recommended', B: 'recommended', C: 'acceptable', D: 'caution', F: 'not_recommended' };
+  return fromGrade[grade] || 'acceptable';
+}
 
 // Debug middleware to log all product route requests
 router.use((req, res, next) => {
@@ -582,18 +592,18 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
             if (worstScore > 30) {
               worstBenefit = '';
             }
-            
-            ing.explanation = worstExplanation || ing.explanation;
-            ing.positiveBenefit = worstBenefit || ing.positiveBenefit;
-            ing.adjustedRiskScore = worstScore * (ing.positionWeight || 1);
-            
-            // Set risk level based on worst score
-            if (worstScore <= -10) ing.riskLevel = 'safe';
-            else if (worstScore <= 0) ing.riskLevel = 'low';
-            else if (worstScore <= 15) ing.riskLevel = 'moderate';
-            else if (worstScore <= 30) ing.riskLevel = 'high';
-            else ing.riskLevel = 'danger';
-            
+
+            if (!ing.isAllergenMatch && !ing.isToxic) {
+              ing.explanation = worstExplanation || ing.explanation;
+              ing.positiveBenefit = worstBenefit || ing.positiveBenefit;
+              ing.adjustedRiskScore = worstScore * (ing.positionWeight || 1);
+              if (worstScore <= -10) ing.riskLevel = 'safe';
+              else if (worstScore <= 0) ing.riskLevel = 'low';
+              else if (worstScore <= 15) ing.riskLevel = 'moderate';
+              else if (worstScore <= 30) ing.riskLevel = 'high';
+              else ing.riskLevel = 'danger';
+            }
+
             console.log(`🎯 [ANALYZE] ${ing.name}: score=${worstScore}, level=${ing.riskLevel}`);
           }
         }
@@ -807,6 +817,34 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
       } catch (err) {
         console.log('⚠️ [Image] Fetch failed:', err.message);
       }
+    }
+
+    const deviceId = req.get('x-device-id') || req.query.deviceId || null;
+    const recForHistory = toHistoryRecommendation(analysis.grade, analysis.recommendation);
+    if (deviceId) {
+      const scanId = uuidv4();
+      try {
+        await query(
+          `INSERT INTO scan_history (id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
+           VALUES (?, ?, ?, ?, ?, 'product_search', ?, ?, ?, NULL, ?)`,
+          [
+            scanId,
+            deviceId,
+            pet.name,
+            pet.pet_type,
+            product.id,
+            analysis.finalScore,
+            analysis.grade,
+            recForHistory,
+            JSON.stringify({ ...analysis, aiInsights }),
+          ]
+        );
+        console.log('📜 [ANALYZE] Scan history saved:', scanId);
+      } catch (historyErr) {
+        console.error('[ANALYZE] Failed to save scan history:', historyErr.message);
+      }
+    } else {
+      console.warn('[ANALYZE] No x-device-id — scan history not saved');
     }
 
     res.json({

@@ -420,19 +420,19 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
             worstBenefit = '';
           }
           
-          ing.explanation = worstExplanation || ing.explanation;
-          ing.positiveBenefit = worstBenefit || ing.positiveBenefit;
-          
-          if (hasConditions || ing.needsAIAssessment) {
-            ing.adjustedRiskScore = worstScore * ing.positionWeight;
+          // Keep rule-based allergen/toxic overrides; AI is always healthy-baseline text
+          if (!ing.isAllergenMatch && !ing.isToxic) {
+            ing.explanation = worstExplanation || ing.explanation;
+            ing.positiveBenefit = worstBenefit || ing.positiveBenefit;
+            if (hasConditions || ing.needsAIAssessment) {
+              ing.adjustedRiskScore = worstScore * ing.positionWeight;
+            }
+            if (worstScore <= -10) ing.riskLevel = 'safe';
+            else if (worstScore <= 0) ing.riskLevel = 'low';
+            else if (worstScore <= 15) ing.riskLevel = 'moderate';
+            else if (worstScore <= 30) ing.riskLevel = 'high';
+            else ing.riskLevel = 'danger';
           }
-          
-          // Set risk level based on worst score
-          if (worstScore <= -10) ing.riskLevel = 'safe';
-          else if (worstScore <= 0) ing.riskLevel = 'low';
-          else if (worstScore <= 15) ing.riskLevel = 'moderate';
-          else if (worstScore <= 30) ing.riskLevel = 'high';
-          else ing.riskLevel = 'danger';
         }
       }
       
@@ -748,6 +748,17 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`✅ [BG] Complete in ${duration}s`);
     
+    // Re-fetch product so `image_url` includes any image saved while analysis was running (async download / upload)
+    let productForResult = product;
+    if (product?.id) {
+      try {
+        const fresh = await productService.findById(product.id);
+        if (fresh) productForResult = fresh;
+      } catch (e) {
+        console.warn('[BG] Re-fetch product for result image failed:', e.message);
+      }
+    }
+
     // Store final result
     analysisStore.set(scanId, {
       status: 'complete',
@@ -758,13 +769,21 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
         scanType: 'label_photo',
         imageType: extracted.imageType,
         extracted: {
-          productName: extracted.productName || product?.name,
-          brand: extracted.brand || product?.brand,
+          productName: extracted.productName || productForResult?.name,
+          brand: extracted.brand || productForResult?.brand,
           targetPet: extracted.targetPet,
           ingredientCount: ingredientsList.length,
           confidence: extracted.confidence
         },
-        product: product ? { id: product.id, name: product.name, brand: product.brand, image_url: product.image_url } : null,
+        product: productForResult
+          ? {
+              id: productForResult.id,
+              name: productForResult.name,
+              brand: productForResult.brand,
+              image_url: productForResult.image_url,
+              product_type: productForResult.product_type
+            }
+          : null,
         analysis,
         aiInsights,
         pet: { id: pet.id || 'local', name: pet.name, petType: pet.pet_type }
@@ -1633,8 +1652,8 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
             uncachedIngredients,
             pet.pet_type,
             pet.name,
-            healthConditions,  // Pass health conditions for personalized assessment
-            productType        // Pass product type for context-aware scoring
+            healthConditions, // ignored: per-ingredient AI is universal healthy baseline
+            productType
           );
           console.log('🤖 AI returned assessments for:', Object.keys(aiAssessments));
         } catch (aiError) {
@@ -1666,31 +1685,28 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
         }
         
         if (assessment) {
-          // Update ingredient with personalized assessment
-          ing.explanation = assessment.explanation || ing.explanation;
-          ing.positiveBenefit = assessment.benefit || ing.positiveBenefit;
-          
-          // Track risk for scoring (negative = beneficial, positive = penalty)
           const riskScore = assessment.riskScore || 0;
-          
-          // For pets with conditions, use AI score directly
-          if (hasConditions || ing.needsAIAssessment) {
-            ing.adjustedRiskScore = riskScore * ing.positionWeight;
+
+          // AI text/scores are healthy-pet universal; do not clobber rule-based allergen/toxic
+          if (!ing.isAllergenMatch && !ing.isToxic) {
+            ing.explanation = assessment.explanation || ing.explanation;
+            ing.positiveBenefit = assessment.benefit || ing.positiveBenefit;
+            if (hasConditions || ing.needsAIAssessment) {
+              ing.adjustedRiskScore = riskScore * ing.positionWeight;
+            }
+            if (riskScore <= -10) {
+              ing.riskLevel = 'safe';
+            } else if (riskScore <= 0) {
+              ing.riskLevel = 'low';
+            } else if (riskScore <= 15) {
+              ing.riskLevel = 'moderate';
+            } else if (riskScore <= 30) {
+              ing.riskLevel = 'high';
+            } else {
+              ing.riskLevel = 'danger';
+            }
           }
-          
-          // Update risk level based on assessment
-          if (riskScore <= -10) {
-            ing.riskLevel = 'safe';
-          } else if (riskScore <= 0) {
-            ing.riskLevel = 'low';
-          } else if (riskScore <= 15) {
-            ing.riskLevel = 'moderate';
-          } else if (riskScore <= 30) {
-            ing.riskLevel = 'high';
-          } else {
-            ing.riskLevel = 'danger';
-          }
-          
+
           // Collect cache insert data (only for fresh AI assessments)
           const isFromAI = Object.values(aiAssessments).includes(assessment);
           if (isFromAI && ing.normalizedName) {
@@ -2360,17 +2376,16 @@ router.post('/manual', async (req, res, next) => {
           }
         }
         
-        // Update ingredient with AI data
-        ing.adjustedRiskScore = worstScore;
-        ing.explanation = worstExplanation;
-        ing.positiveBenefit = bestBenefit;
-        
-        // Convert score to risk level
-        if (worstScore > 30) ing.riskLevel = 'danger';
-        else if (worstScore > 15) ing.riskLevel = 'high';
-        else if (worstScore > 0) ing.riskLevel = 'moderate';
-        else if (worstScore > -10) ing.riskLevel = 'low';
-        else ing.riskLevel = 'safe';
+        if (!ing.isAllergenMatch && !ing.isToxic) {
+          ing.adjustedRiskScore = worstScore;
+          ing.explanation = worstExplanation;
+          ing.positiveBenefit = bestBenefit;
+          if (worstScore > 30) ing.riskLevel = 'danger';
+          else if (worstScore > 15) ing.riskLevel = 'high';
+          else if (worstScore > 0) ing.riskLevel = 'moderate';
+          else if (worstScore > -10) ing.riskLevel = 'low';
+          else ing.riskLevel = 'safe';
+        }
       }
     }
     
