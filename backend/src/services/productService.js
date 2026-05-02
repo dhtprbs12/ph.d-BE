@@ -2,6 +2,7 @@ const { query } = require('../database/connection');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 const ingredientAnalyzer = require('./ingredientAnalyzer');
+const ingredientMatch = require('./ingredientMatch');
 
 class ProductService {
   /**
@@ -25,16 +26,65 @@ class ProductService {
   }
 
   /**
-   * Find product by ingredient hash (exact ingredient match)
+   * Normalize a name/brand string for fuzzy comparison
+   * (lowercase, strip punctuation, collapse whitespace)
    */
-  async findByIngredientHash(hash) {
+  normalizeForMatch(text) {
+    if (!text) return '';
+    return String(text)
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * Find product by ingredient hash, optionally narrowing by brand + name.
+   *
+   * Why brand/name on top of hash:
+   * - Two different SKUs (e.g. same OEM private-label, or two trims in the
+   *   same product line) can share an identical ingredient list → same hash.
+   *   Without a brand/name guard we'd merge them into one DB row.
+   *
+   * Matching rules when brand/name are provided:
+   *   1. Exact-ish match: hash + brand fuzzy-equal + name fuzzy-equal → that row
+   *   2. Otherwise: hash + brand fuzzy-equal → first row (handles OCR noise on name)
+   *   3. Otherwise: null (treat as a new product even though ingredients match)
+   *
+   * If brand/name are not provided, falls back to hash-only (legacy behavior).
+   */
+  async findByIngredientHash(hash, brand = null, name = null) {
     if (!hash) return null;
-    
+
     const results = await query(
       'SELECT * FROM products WHERE ingredient_hash = ?',
       [hash]
     );
-    return results.length > 0 ? results[0] : null;
+    if (results.length === 0) return null;
+
+    if (!brand && !name) {
+      return results[0];
+    }
+
+    const normBrand = this.normalizeForMatch(brand);
+    const normName = this.normalizeForMatch(name);
+
+    if (normBrand && normName) {
+      const exact = results.find(r =>
+        this.normalizeForMatch(r.brand) === normBrand &&
+        this.normalizeForMatch(r.name) === normName
+      );
+      if (exact) return exact;
+    }
+
+    if (normBrand) {
+      const brandMatch = results.find(r =>
+        this.normalizeForMatch(r.brand) === normBrand
+      );
+      if (brandMatch) return brandMatch;
+    }
+
+    return null;
   }
 
   /**
@@ -336,27 +386,58 @@ class ProductService {
   }
 
   /**
-   * Get candidate alternative products (no scoring - that's done in the route)
+   * Get candidate alternative products (no scoring - that's done in the route).
+   *
+   * Two-stage filter:
+   *  1) SQL: same product_type, compatible pet type, has ingredient text,
+   *     allergen keywords excluded. No popularity ordering — final ranking is
+   *     decided by score in the route. A high SAFETY_CAP guards against
+   *     pathological catalogs.
+   *  2) JS (K1/K2 similarity): the source product's first two "meaningful"
+   *     ingredients (skip dictionary applied — water/broth/flavor/etc.) must
+   *     show up in the candidate's first two meaningful ingredients. K1 is
+   *     preferred; K2 is the fallback. If neither is mappable, the
+   *     similarity stage is skipped (legacy behavior).
+   *
+   * Returns every K1/K2-matched candidate (no slice). The route scores them
+   * and sorts by score with the ≥80 → ≥60 → ≥50 thresholds.
+   *
    * @param {string} productId - Source product to find alternatives for
    * @param {string} petType - 'dog' or 'cat'
-   * @param {number} limit - Max candidates to return
+   * @param {number} limit - Used only when the similarity filter cannot be
+   *   built (legacy path). Otherwise ignored.
    * @param {string[]} allergens - Allergen keywords to exclude (e.g., ['chicken', 'beef'])
    */
   async getCandidateAlternatives(productId, petType, limit = 10, allergens = []) {
     const product = await this.findById(productId);
     if (!product) return { product: null, candidates: [] };
 
-    // Find similar products that are compatible with pet type
-    // Exclude products containing allergen ingredients
+    const sourceIngredients = ingredientAnalyzer.parseIngredientText(product.raw_ingredients_text || '');
+    const { k1, k2 } = ingredientMatch.deriveSourceKeywords(sourceIngredients);
+    const hasSimilarityFilter = !!(k1 || k2);
+
+    if (hasSimilarityFilter) {
+      console.log(
+        `🎯 [ALT-K] Source K1=${k1 ? `${k1.category || 'raw'}:${k1.keywords.join('|')}` : '∅'} ` +
+        `K2=${k2 ? `${k2.category || 'raw'}:${k2.keywords.join('|')}` : '∅'}`
+      );
+    }
+
     let allergenFilter = '';
     const params = [productId, product.product_type, petType];
-    
+
     for (const allergen of allergens) {
       allergenFilter += ` AND LOWER(p.raw_ingredients_text) NOT LIKE ?`;
       params.push(`%${allergen.toLowerCase()}%`);
     }
 
-    params.push(limit);
+    // Safety cap to avoid hauling a pathological number of rows when the
+    // similarity filter is active. With a normal catalog, K1/K2 matches sit
+    // well under this. When the filter cannot be built, fall back to the
+    // caller-supplied `limit` for legacy behavior.
+    const SAFETY_CAP = 1500;
+    const sqlLimit = hasSimilarityFilter ? SAFETY_CAP : limit;
+    params.push(sqlLimit);
 
     const sql = `
       SELECT p.*,
@@ -368,14 +449,30 @@ class ProductService {
         AND p.raw_ingredients_text IS NOT NULL
         AND p.raw_ingredients_text != ''
         ${allergenFilter}
-      ORDER BY 
-        p.scan_count DESC
       LIMIT ?
     `;
 
-    const candidates = await query(sql, params);
+    const rows = await query(sql, params);
 
-    return { product, candidates };
+    if (!hasSimilarityFilter) {
+      return { product, candidates: rows };
+    }
+
+    const filtered = [];
+    for (const row of rows) {
+      const candIngs = ingredientAnalyzer.parseIngredientText(row.raw_ingredients_text || '');
+      if (k1 && ingredientMatch.candidateMatchesKeywords(candIngs, k1)) {
+        filtered.push(row);
+        continue;
+      }
+      if (k2 && ingredientMatch.candidateMatchesKeywords(candIngs, k2)) {
+        filtered.push(row);
+      }
+    }
+
+    console.log(`🎯 [ALT-K] Pool ${rows.length} → matched ${filtered.length} (no slice — route ranks by score)`);
+
+    return { product, candidates: filtered };
   }
 
   /**

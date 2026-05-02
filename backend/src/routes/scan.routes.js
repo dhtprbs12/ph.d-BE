@@ -883,41 +883,74 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
         const brandTerm = (extracted.brand || '').trim();
         const nameTerm = (extracted.productName || '').trim();
         const fullText = `${brandTerm} ${nameTerm}`.trim();
+        const productType = (extracted.productType || '').trim();
         
-        console.log(`🔍 [FRONT] Searching candidates: brand="${brandTerm}", name="${nameTerm}"`);
+        console.log(`🔍 [FRONT] Searching candidates: brand="${brandTerm}", name="${nameTerm}", type="${productType}"`);
         
         let candidateRows = [];
+        const nameKeywords = nameTerm.split(/\s+/).filter(w => w.length > 2);
         
-        // Strategy 1: Search by brand
-        if (brandTerm) {
+        // Strategy 1: Brand + name keywords (precise match)
+        if (brandTerm && nameKeywords.length > 0) {
+          const nameConditions = nameKeywords.map(() => 'name LIKE ?').join(' AND ');
+          const params = [`%${brandTerm}%`, ...nameKeywords.map(k => `%${k}%`)];
           candidateRows = await query(
             `SELECT id, name, brand, image_url, product_type, target_pet_type 
              FROM products 
-             WHERE brand LIKE ? AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
+             WHERE brand LIKE ? AND (${nameConditions})
+               AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
              ORDER BY scan_count DESC
              LIMIT 10`,
-            [`%${brandTerm}%`]
+            params
           );
         }
         
-        // Strategy 2: Search by name keywords
-        if (candidateRows.length === 0 && nameTerm) {
-          const keywords = nameTerm.split(/\s+/).filter(w => w.length > 2);
-          if (keywords.length > 0) {
-            const likeConditions = keywords.map(() => 'name LIKE ?').join(' AND ');
-            const likeParams = keywords.map(k => `%${k}%`);
-            candidateRows = await query(
-              `SELECT id, name, brand, image_url, product_type, target_pet_type 
-               FROM products 
-               WHERE (${likeConditions}) AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
-               ORDER BY scan_count DESC
-               LIMIT 10`,
-              likeParams
-            );
+        // Strategy 2: Brand only, but rank by name relevance and product type match
+        if (candidateRows.length === 0 && brandTerm) {
+          const relevanceParts = [];
+          const relevanceParams = [];
+          
+          nameKeywords.forEach(k => {
+            relevanceParts.push('(CASE WHEN name LIKE ? THEN 1 ELSE 0 END)');
+            relevanceParams.push(`%${k}%`);
+          });
+          
+          if (productType) {
+            relevanceParts.push('(CASE WHEN product_type = ? THEN 2 ELSE 0 END)');
+            relevanceParams.push(productType);
           }
+          
+          const relevanceExpr = relevanceParts.length > 0
+            ? relevanceParts.join(' + ')
+            : '0';
+          
+          candidateRows = await query(
+            `SELECT id, name, brand, image_url, product_type, target_pet_type,
+                    (${relevanceExpr}) AS relevance
+             FROM products 
+             WHERE brand LIKE ?
+               AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
+             ORDER BY relevance DESC, scan_count DESC
+             LIMIT 10`,
+            [...relevanceParams, `%${brandTerm}%`]
+          );
         }
         
-        // Strategy 3: Search brand+name keywords across both columns
+        // Strategy 3: Name keywords only (no brand match)
+        if (candidateRows.length === 0 && nameKeywords.length > 0) {
+          const likeConditions = nameKeywords.map(() => 'name LIKE ?').join(' AND ');
+          const likeParams = nameKeywords.map(k => `%${k}%`);
+          candidateRows = await query(
+            `SELECT id, name, brand, image_url, product_type, target_pet_type 
+             FROM products 
+             WHERE (${likeConditions}) AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
+             ORDER BY scan_count DESC
+             LIMIT 10`,
+            likeParams
+          );
+        }
+        
+        // Strategy 4: Broad keyword search across brand+name columns
         if (candidateRows.length === 0 && fullText) {
           const keywords = fullText.split(/\s+/).filter(w => w.length > 2);
           if (keywords.length > 0) {
@@ -952,24 +985,56 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       }
     }
 
-    // Background: search for product image (non-blocking)
+    // Background: get product image (non-blocking)
+    //
+    // Order of preference:
+    //   1. Reuse image from a DB row whose brand + all name keywords + product
+    //      type match precisely (AND, not OR — OR pulls unrelated products like
+    //      Wellness CORE wet when scanning Wellness Complete Health dry)
+    //   2. Same as (1) but without product type, in case type wasn't stored
+    //   3. Call SerpAPI only when nothing in our own DB matches
     if (extracted.productName || extracted.brand) {
       (async () => {
         try {
-          const existing = await query(
-            `SELECT image_url FROM products 
-             WHERE (name LIKE ? OR brand LIKE ?) AND image_url IS NOT NULL AND image_url != ''
-             LIMIT 1`,
-            [`%${extracted.productName || ''}%`, `%${extracted.brand || ''}%`]
-          );
+          const imgBrand = (extracted.brand || '').trim();
+          const imgName = (extracted.productName || '').trim();
+          const imgType = (extracted.productType || '').trim();
+          const imgNameKeywords = imgName.split(/\s+/).filter(w => w.length > 2);
+
+          let existing = [];
+
+          if (imgBrand && imgNameKeywords.length > 0 && imgType) {
+            const nameWhere = imgNameKeywords.map(() => 'name LIKE ?').join(' AND ');
+            existing = await query(
+              `SELECT image_url FROM products 
+               WHERE brand LIKE ? AND (${nameWhere}) AND product_type = ?
+                 AND image_url IS NOT NULL AND image_url != ''
+               LIMIT 1`,
+              [`%${imgBrand}%`, ...imgNameKeywords.map(k => `%${k}%`), imgType]
+            );
+          }
+
+          if (existing.length === 0 && imgBrand && imgNameKeywords.length > 0) {
+            const nameWhere = imgNameKeywords.map(() => 'name LIKE ?').join(' AND ');
+            existing = await query(
+              `SELECT image_url FROM products 
+               WHERE brand LIKE ? AND (${nameWhere})
+                 AND image_url IS NOT NULL AND image_url != ''
+               LIMIT 1`,
+              [`%${imgBrand}%`, ...imgNameKeywords.map(k => `%${k}%`)]
+            );
+          }
 
           const pending = pendingFrontLabels.get(pendingScanId);
           if (!pending) return;
 
           if (existing.length > 0 && existing[0].image_url) {
             pending.imageUrl = existing[0].image_url;
+            console.log(`⚡ [FRONT] Reused DB image for "${imgBrand} ${imgName}"`);
           } else {
-            const externalUrl = await imageService.searchProductImage(extracted.productName, extracted.brand);
+            const searchName = [imgName, imgType ? imgType.replace(/_/g, ' ') : '']
+              .filter(Boolean).join(' ');
+            const externalUrl = await imageService.searchProductImage(searchName, imgBrand);
             if (externalUrl && pendingFrontLabels.has(pendingScanId)) {
               pendingFrontLabels.get(pendingScanId).externalImageUrl = externalUrl;
             }
@@ -1112,8 +1177,14 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
     });
 
     // Find or create product
+    // Match on ingredient hash + brand + name to avoid merging different SKUs
+    // that happen to share an identical ingredient list (same OEM, etc.)
     const ingredientHash = productService.generateIngredientHash(ingredientsList);
-    let product = await productService.findByIngredientHash(ingredientHash);
+    let product = await productService.findByIngredientHash(
+      ingredientHash,
+      mergedExtracted.brand,
+      mergedExtracted.productName
+    );
     
     if (!product) {
       product = await productService.createFromScan({
@@ -1499,11 +1570,15 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
       });
     }
 
-    // Try to find or create product using INGREDIENT HASH
-    // Same ingredients = Same product (regardless of name variations)
+    // Try to find or create product using INGREDIENT HASH + brand/name
+    // Same ingredients alone is not enough — different SKUs can share a formula
     if (!product && ingredientsList.length > 0) {
       const ingredientHash = productService.generateIngredientHash(ingredientsList);
-      const existingProduct = await productService.findByIngredientHash(ingredientHash);
+      const existingProduct = await productService.findByIngredientHash(
+        ingredientHash,
+        extracted.brand,
+        extracted.productName
+      );
       
       if (existingProduct) {
         product = existingProduct;

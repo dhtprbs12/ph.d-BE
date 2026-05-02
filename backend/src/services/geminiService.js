@@ -110,7 +110,17 @@ CRITICAL RULES:
 - If imageType is "front_label" and no ingredients visible, set ingredientsList to [] and rawIngredientsText to null
 - If imageType is "ingredients_label" or "mixed", extract the COMPLETE ingredients list
 - Ingredients are listed in order of weight (most to least)
-- If you cannot read something clearly, note it but still extract what you can`;
+- If you cannot read something clearly, note it but still extract what you can
+
+INGREDIENT LIST EXTRACTION RULES (very important):
+- Include ONLY actual food/nutrient ingredients (e.g., "Deboned Chicken", "Vitamin E Supplement", "Rosemary Extract").
+- DO NOT include any of the following — they are NOT ingredients, even if they appear right next to the ingredient list:
+  * Manufacturing/facility statements: "Manufactured in a facility that also processes grains", "Made in the USA", "Packaged in...", "Processed in..."
+  * Preservation/marketing claims: "This is a naturally preserved product", "Naturally preserved", "Preserved with mixed tocopherols" (when written as a standalone sentence — but DO keep "Mixed Tocopherols" itself if listed as an ingredient)
+  * Allergen warnings: "May contain traces of...", "Contains: ..."
+  * Guaranteed analysis, feeding instructions, storage, expiration, net weight, or any sentence-like text
+- For "ingredientsList", each item must be a short noun phrase (typically 1–6 words). If you find yourself writing a full sentence as an item, it is not an ingredient — drop it.
+- For "rawIngredientsText", include ONLY the verbatim ingredient list itself, stopping at the first non-ingredient sentence (e.g., stop before "This is a naturally preserved product." or "Manufactured in...").`;
 
     try {
       const result = await this.model.generateContent([
@@ -166,6 +176,12 @@ Rules:
    - "chicken by-product meal" → "chicken by-product meal" (keep as is, it's different from chicken)
 5. Remove marketing language but keep scientific names if present
 6. Return in order of weight (as listed)
+7. EXCLUDE non-ingredient text that often appears around the ingredient list:
+   - Manufacturing/facility statements ("Manufactured in a facility...", "Made in the USA")
+   - Standalone marketing/preservation sentences ("This is a naturally preserved product")
+   - Allergen warnings ("May contain traces of...")
+   - Guaranteed analysis, feeding instructions, storage, expiration, net weight
+   - Any item that reads like a sentence (contains a verb like "is", "are", "may", "manufactured", "processed") is NOT an ingredient
 
 Return ONLY a JSON array of strings, no explanation:
 ["ingredient1", "ingredient2", ...]`;
@@ -406,19 +422,14 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
   }
 
   /**
-   * Simple ingredient parsing without AI
+   * Simple ingredient parsing without AI.
+   * Delegates to ingredientAnalyzer.parseIngredientText so the same disclaimer
+   * stripping and sentence filtering rules apply everywhere.
    */
   simpleParseIngredients(rawText) {
     if (!rawText) return [];
-
-    return rawText
-      .replace(/\n/g, ', ')
-      .replace(/\.\s/g, ', ')
-      .replace(/\([^)]*\)/g, '') // Remove parentheticals
-      .split(/,\s*/)
-      .map(i => i.trim())
-      .filter(i => i.length > 1 && i.length < 100)
-      .filter(i => !/^(ingredients|contains|and|or|with|for|the)$/i.test(i));
+    const ingredientAnalyzer = require('./ingredientAnalyzer');
+    return ingredientAnalyzer.parseIngredientText(rawText);
   }
 
   /**

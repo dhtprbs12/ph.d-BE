@@ -935,10 +935,35 @@ class IngredientAnalyzer {
   parseIngredientText(rawText) {
     if (!rawText) return [];
 
-    // First, strip common prefixes from the beginning of the text
-    let cleanedText = rawText
-      .replace(/^ingredients\s*:\s*/i, '')  // Remove "Ingredients:" prefix
-      .replace(/^contains\s*:\s*/i, '');    // Remove "Contains:" prefix
+    // Strip common ingredient-list header phrases from the start.
+    // Covers: "Ingredients:", "INGREDIENTS", "Our Ingredients", "Ingredient List",
+    //         "Composition:" (EU labels), "Recipe:", "Made With:", "Contains:"
+    // Requires plural "ingredients" or explicit "ingredient list" to avoid
+    // accidentally chopping a real ingredient name that begins with "Ingredient".
+    let cleanedText = rawText.replace(
+      /^\s*(?:our\s+)?(?:ingredients|ingredient\s+list|composition|recipe|made\s+with|contains)\s*[:\-]?\s*/i,
+      ''
+    );
+
+    // Cut off everything after the first disclaimer / non-ingredient sentence.
+    // Pet food labels commonly tail the ingredient list with statements like:
+    //   "This is a naturally preserved product."
+    //   "Manufactured in a facility that also processes grains."
+    //   "Made in the USA."
+    //   "Guaranteed Analysis ..."  /  "Feeding Instructions ..."
+    // Anything after these markers is NOT an ingredient.
+    //
+    // NOTE: We deliberately exclude soft phrases like "may contain" and
+    // "naturally preserved" from this cut — they sometimes appear inline
+    // (e.g. "Mixed Tocopherols, naturally preserved with...") and a wrong cut
+    // would drop later ingredients. The per-item sentence filter below still
+    // strips them when they end up as their own pseudo-ingredient.
+    const disclaimerStart = cleanedText.search(
+      /(?:^|[\.\s])(?:this\s+(?:is|product)|manufactured\s+in|made\s+in|produced\s+in|processed\s+in|packaged\s+in|guaranteed\s+analysis|feeding\s+(?:guide|instruction|direction)|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|use\s+(?:by|before)|net\s+(?:wt|weight))/i
+    );
+    if (disclaimerStart > 0) {
+      cleanedText = cleanedText.slice(0, disclaimerStart);
+    }
 
     // Normalize whitespace
     cleanedText = cleanedText.replace(/\n/g, ', ').replace(/\.\s/g, ', ');
@@ -977,11 +1002,23 @@ class IngredientAnalyzer {
       ingredients.push(last);
     }
 
-    // Remove common non-ingredient text
-    const filterWords = ['ingredients:', 'contains:', 'and', 'or', 'with', 'including'];
+    // Remove common non-ingredient text and sentence-like fragments.
+    // Heuristic: real ingredients are short noun phrases; disclaimers contain
+    // verbs ("is", "are", "may", "contain", "preserved") or process language
+    // ("manufactured", "processed", "packaged"). Anything matching gets dropped.
+    const filterWords = new Set(['ingredients:', 'contains:', 'and', 'or', 'with', 'including']);
+    const sentencePattern =
+      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|naturally\s+preserved|preserve(?:d|s)?\s+freshness|facility|guaranteed\s+analysis|feeding|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before))\b/i;
+
     return ingredients.filter(i => {
       const lower = i.toLowerCase();
-      return !filterWords.includes(lower) && !/^\d+%?$/.test(i);
+      if (filterWords.has(lower)) return false;
+      if (/^\d+%?$/.test(i)) return false;
+      if (sentencePattern.test(i)) return false;
+      // Real ingredients rarely exceed 8 words (even with parentheticals stripped)
+      const wordCount = i.replace(/\([^)]*\)/g, '').trim().split(/\s+/).filter(Boolean).length;
+      if (wordCount > 8) return false;
+      return true;
     });
   }
 

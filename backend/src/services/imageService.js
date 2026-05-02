@@ -94,9 +94,9 @@ class ImageService {
    */
   async searchViaSerpApi(productName, brand) {
     const queries = [
-      `${brand || ''} ${productName} pet food product`.trim(),
-      `${brand || ''} ${productName} dog cat treats`.trim(),
-      `"${brand || ''}" "${productName}"`.trim(),
+      `${brand || ''} ${productName} pet food product package`.trim(),
+      `"${brand || ''}" "${productName}" pet food`.trim(),
+      `${brand || ''} ${productName} dog cat food`.trim(),
     ];
 
     for (const searchQuery of queries) {
