@@ -307,6 +307,18 @@ Rules:
 - "ingredients" is the ordered list of ingredient noun phrases that
   appear in THIS photo, top-to-bottom / left-to-right exactly as
   printed. One short noun phrase per item.
+- BE GENEROUS, NOT CONSERVATIVE. Include every ingredient you can
+  read in this frame, including:
+    • Items near the very top, bottom, left, or right edges where
+      text may be slightly clipped, blurred, or curved away from
+      the camera (cylindrical can wrap).
+    • Tiny-print items (vitamin / mineral / preservative tail of
+      the list — "Niacin", "Zinc Proteinate", "Mixed Tocopherols",
+      "Rosemary Extract", etc.). These are easy to skip but they
+      are real ingredients and the merge step depends on you
+      surfacing them.
+    • Items where you can read the word but it's not 100% sharp.
+      Better to list a slightly uncertain reading than to drop it.
 - A word that is cut off at the edge of the photo (e.g. "Chicken Me…"
   or "…l, Brown Rice") IS still listed — keep your best read of the
   fragment so the merge step can stitch it.
@@ -413,7 +425,14 @@ printed on the panel. Procedure (in priority order):
      overlap. Do not list both halves.
   4. DEDUPLICATE case-insensitively. Treat clearly different items
      as distinct ("Chicken Meal" vs "Chicken By-Product Meal").
-  5. NEVER alphabetise. NEVER sort by length or plausibility. NEVER
+  5. KEEP SINGLETONS. If an ingredient appears in only ONE of the
+     partial lists and nowhere else, INCLUDE IT in the final list.
+     A single appearance is NOT noise — it just means that section
+     of the panel was only captured by one photo (small print at
+     the tail of the list, items at the edge of a frame, etc.).
+     Position it using the surrounding ingredients in the frame
+     where it appeared.
+  6. NEVER alphabetise. NEVER sort by length or plausibility. NEVER
      fall back to "the order I happened to encounter ingredients
      across the lists". Only the panel's printed order is correct.
 

@@ -1297,15 +1297,17 @@ router.post('/back-multi/:pendingScanId', upload.array('images', 8), async (req,
       return res.status(400).json({ error: 'At least one image is required' });
     }
 
-    // Each frame is downsized independently. We can't merge frames before
-    // resizing because they're separate viewpoints, but we can keep each
-    // frame small enough that 6–8 frames still fit comfortably in one
-    // Gemini multimodal request.
+    // Each frame is downsized independently. The new pipeline OCRs
+    // each frame in its own Gemini call, so per-frame cost matters
+    // less than per-frame text legibility — small ingredient text
+    // near the edge of the panel is the usual miss. 2000px on the
+    // long side + JPEG q90 keeps that text readable while still
+    // staying under the per-call multimodal limit.
     const optimizedBuffers = await Promise.all(
       req.files.map(file =>
         sharp(file.buffer)
-          .resize(1500, 1500, { fit: 'inside', withoutEnlargement: true })
-          .jpeg({ quality: 85 })
+          .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 90 })
           .toBuffer()
       )
     );
