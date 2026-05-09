@@ -869,6 +869,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       productType: extracted.productType,
       texture: extracted.texture,
       lifeStage: extracted.lifeStage,
+      packageShape: extracted.packageShape, // drives the back-label capture mode
       imageType: extracted.imageType,
       imageUrl: null, // Will be filled by background search
       createdAt: Date.now()
@@ -1052,7 +1053,8 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
         productName: extracted.productName,
         brand: extracted.brand,
         targetPet: extracted.targetPet,
-        productType: extracted.productType
+        productType: extracted.productType,
+        packageShape: extracted.packageShape, // hint for the back-label capture UI
       },
       candidates,
       nextStep: candidates.length > 0 
@@ -1251,6 +1253,263 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
 
   } catch (error) {
     console.error('[BACK] Error:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /api/scan/back-multi/:pendingScanId
+ *
+ * Step 2 (multi-frame variant): user rotated a cylindrical can / pouch and
+ * the app burst-captured 4–8 photos. We OCR them as a group, but we do NOT
+ * start the scoring pipeline yet — the client decides what to do based on
+ * the returned confidence:
+ *
+ *   confidence ≥ 0.85  → auto-commit (POST /scan/commit-back/...)
+ *   0.50 – 0.85        → show "are these ingredients right?" confirmation
+ *   < 0.50             → show recovery modal, user re-scans
+ *
+ * This split keeps Gemini scoring tokens from being wasted when the user
+ * cancels at the confirmation step.
+ *
+ * Body: multipart/form-data, field name "images" (1+ files)
+ * No pet fields needed yet — those come with /commit-back.
+ */
+router.post('/back-multi/:pendingScanId', upload.array('images', 8), async (req, res, next) => {
+  try {
+    const { pendingScanId } = req.params;
+
+    const frontData = pendingFrontLabels.get(pendingScanId);
+    if (!frontData) {
+      return res.status(404).json({
+        error: 'pending_scan_not_found',
+        message: 'Front label scan expired or not found. Please start over by scanning the front label.',
+      });
+    }
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'At least one image is required' });
+    }
+
+    // Each frame is downsized independently. We can't merge frames before
+    // resizing because they're separate viewpoints, but we can keep each
+    // frame small enough that 6–8 frames still fit comfortably in one
+    // Gemini multimodal request.
+    const optimizedBuffers = await Promise.all(
+      req.files.map(file =>
+        sharp(file.buffer)
+          .resize(1500, 1500, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 85 })
+          .toBuffer()
+      )
+    );
+
+    console.log(`📸 [BACK-MULTI] Processing ${optimizedBuffers.length} frames for ${pendingScanId}`);
+    const extracted = await geminiService.extractFromMultipleImages(optimizedBuffers, 'image/jpeg');
+
+    // Stash the extraction on the same pending entry so /commit-back can
+    // pick it up. We do NOT delete the front-label entry yet — that happens
+    // when commit-back finalizes (or when the 30-min cleanup fires).
+    pendingFrontLabels.set(pendingScanId, {
+      ...frontData,
+      multiExtraction: {
+        ingredientsList: extracted.ingredientsList,
+        rawIngredientsText: extracted.rawIngredientsText,
+        confidence: extracted.confidence,
+        isComplete: extracted.isComplete,
+        missingSection: extracted.missingSection,
+        notes: extracted.notes,
+        capturedAt: Date.now(),
+      },
+    });
+
+    return res.json({
+      pendingScanId,
+      ingredients: extracted.ingredientsList,
+      rawIngredientsText: extracted.rawIngredientsText,
+      confidence: extracted.confidence,
+      isComplete: extracted.isComplete,
+      missingSection: extracted.missingSection,
+      notes: extracted.notes,
+      imageCount: extracted.imageCount,
+      // UX hint so the client doesn't have to duplicate threshold logic.
+      // Source of truth is still the client; this is just a suggestion.
+      suggestedAction:
+        extracted.confidence >= 0.85
+          ? 'auto_commit'
+          : extracted.confidence >= 0.5
+            ? 'confirm'
+            : 'recapture',
+    });
+  } catch (error) {
+    console.error('[BACK-MULTI] Error:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /api/scan/commit-back/:pendingScanId
+ *
+ * Finalizes a back-label scan (single or multi-frame) using the ingredient
+ * list the user has CONFIRMED on the confirmation step.
+ *
+ * Body (JSON):
+ *   ingredients: string[]   (required, may be edited from /back-multi result)
+ *   petName, petType, petBreed, petAgeMonths, petWeightKg,
+ *   petAllergies, petHealthConditions, deviceId
+ *
+ * Mirrors the create-product / start-analysis tail of /back, minus the OCR
+ * step (the client already has the ingredients).
+ */
+router.post('/commit-back/:pendingScanId', express.json({ limit: '256kb' }), async (req, res, next) => {
+  try {
+    const { pendingScanId } = req.params;
+    const {
+      ingredients,
+      petName, petType, petBreed, petAgeMonths, petWeightKg,
+      petAllergies, petHealthConditions, deviceId,
+    } = req.body || {};
+
+    const frontData = pendingFrontLabels.get(pendingScanId);
+    if (!frontData) {
+      return res.status(404).json({
+        error: 'pending_scan_not_found',
+        message: 'Front label scan expired or not found. Please start over by scanning the front label.',
+      });
+    }
+
+    if (!Array.isArray(ingredients) || ingredients.length === 0) {
+      return res.status(400).json({ error: 'ingredients (non-empty array) is required' });
+    }
+    if (!petType || !['dog', 'cat'].includes(petType)) {
+      return res.status(400).json({ error: 'petType is required (dog or cat)' });
+    }
+
+    // Cap to a sensible upper bound — labels never list more than ~80
+    // ingredients in practice, and unbounded input is a DoS vector.
+    const cleanIngredients = ingredients
+      .map(s => String(s || '').trim())
+      .filter(s => s.length > 0 && s.length <= 200)
+      .slice(0, 120);
+
+    if (cleanIngredients.length === 0) {
+      return res.status(400).json({ error: 'ingredients list contained no usable entries' });
+    }
+
+    const pet = {
+      id: deviceId || 'local',
+      name: petName || 'Pet',
+      pet_type: petType,
+      breed: petBreed || null,
+      age_months: petAgeMonths ? parseInt(petAgeMonths) : null,
+      weight_kg: petWeightKg ? parseFloat(petWeightKg) : null,
+      healthConditions: [],
+    };
+    if (petHealthConditions) {
+      try { pet.healthConditions = JSON.parse(petHealthConditions); } catch (_) { pet.healthConditions = []; }
+    }
+    if (petAllergies) {
+      try {
+        const allergies = JSON.parse(petAllergies);
+        allergies.forEach(a => {
+          pet.healthConditions.push({ condition_type: `allergy_${a}`, severity: 'moderate' });
+        });
+      } catch (_) {}
+    }
+
+    const multi = frontData.multiExtraction || {};
+    const mergedExtracted = {
+      productName: frontData.productName || null,
+      brand: frontData.brand || null,
+      targetPet: frontData.targetPet || null,
+      productType: frontData.productType || null,
+      texture: frontData.texture || null,
+      lifeStage: frontData.lifeStage || null,
+      ingredientsList: cleanIngredients,
+      rawIngredientsText: multi.rawIngredientsText || cleanIngredients.join(', '),
+      confidence: multi.confidence ?? 0.95,
+    };
+
+    console.log(
+      `✅ [COMMIT-BACK] "${mergedExtracted.brand || ''} ${mergedExtracted.productName || ''}" ` +
+      `with ${cleanIngredients.length} ingredients (confidence=${mergedExtracted.confidence})`
+    );
+
+    const existingLocalImage = frontData.imageUrl || null;
+    const externalImageUrl = frontData.externalImageUrl || null;
+
+    pendingFrontLabels.delete(pendingScanId);
+
+    const scanId = uuidv4();
+    analysisStore.set(scanId, {
+      status: 'pending',
+      createdAt: Date.now(),
+      extracted: mergedExtracted,
+      ingredientCount: cleanIngredients.length,
+    });
+
+    const ingredientHash = productService.generateIngredientHash(cleanIngredients);
+    let product = await productService.findByIngredientHash(
+      ingredientHash,
+      mergedExtracted.brand,
+      mergedExtracted.productName
+    );
+
+    if (!product) {
+      product = await productService.createFromScan({
+        name: mergedExtracted.productName || 'Unknown Product',
+        brand: mergedExtracted.brand,
+        productType: mergedExtracted.productType || 'dry_food',
+        texture: mergedExtracted.texture,
+        targetPetType: mergedExtracted.targetPet || petType,
+        lifeStage: mergedExtracted.lifeStage || 'all',
+        rawIngredientsText: mergedExtracted.rawIngredientsText,
+        ingredientsList: cleanIngredients,
+        imageUrl: existingLocalImage || null,
+      });
+    }
+
+    if (!product.image_url) {
+      if (existingLocalImage) {
+        await query('UPDATE products SET image_url = ? WHERE id = ?', [existingLocalImage, product.id]);
+        product.image_url = existingLocalImage;
+      } else if (externalImageUrl) {
+        imageService.downloadAndSave(externalImageUrl, product.id)
+          .then(async (localUrl) => {
+            if (localUrl) {
+              await imageService.updateProductImageUrl(product.id, localUrl);
+            }
+          })
+          .catch(err => console.log('⚠️ [COMMIT-BACK] Image download failed:', err.message));
+      }
+    }
+
+    processAnalysisInBackground(scanId, cleanIngredients, pet, mergedExtracted, product, deviceId);
+
+    return res.json({
+      scanId,
+      status: 'processing',
+      scanType: 'two_step_scan_multi',
+      extracted: {
+        imageType: 'merged',
+        productName: mergedExtracted.productName,
+        brand: mergedExtracted.brand,
+        targetPet: mergedExtracted.targetPet,
+        ingredientCount: cleanIngredients.length,
+        confidence: mergedExtracted.confidence,
+      },
+      product: product ? {
+        id: product.id,
+        name: product.name,
+        brand: product.brand,
+        image_url: product.image_url,
+        isNew: !product.scan_count || product.scan_count === 0,
+      } : null,
+      pollUrl: `/api/scan/${scanId}/result`,
+      message: 'Analysis started. Poll for results.',
+    });
+  } catch (error) {
+    console.error('[COMMIT-BACK] Error:', error);
     next(error);
   }
 });

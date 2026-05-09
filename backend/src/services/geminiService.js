@@ -80,6 +80,7 @@ Return your response in this exact JSON format:
   "texture": "dry" | "wet" | "semi_moist" | "freeze_dried" | null,
   "targetPet": "dog" | "cat" | "both" | null,
   "lifeStage": "puppy_kitten" | "adult" | "senior" | "all" | null,
+  "packageShape": "flat" | "round" | "pouch" | null,
   "ingredientsList": ["ingredient1", "ingredient2", ...],
   "rawIngredientsText": "original text as written on label or null if not visible",
   "guaranteedAnalysis": {
@@ -91,6 +92,21 @@ Return your response in this exact JSON format:
   "confidence": number between 0 and 1,
   "notes": "any relevant notes about extraction quality"
 }
+
+Package shape inference (used by the app to pick a single-shot vs.
+multi-frame OCR pipeline — be conservative, default "flat" when
+genuinely uncertain):
+- "round": cylindrical can or bottle. Visible curvature on the body,
+  metal lid/seam visible, label clearly wraps around (text on the
+  edges runs off into perspective distortion). Typical wet food cans,
+  treat tins, supplement bottles.
+- "pouch": soft stand-up pouch / curved foil bag. Has a flexible /
+  curved face but is not a rigid cylinder. Often used for wet food
+  pouches, freeze-dried treats.
+- "flat": rigid box, kibble bag laid flat, sachet, or any package
+  where the ingredient panel is plausibly readable in a single
+  straight-on photo. THIS IS THE DEFAULT.
+- null: package not clearly visible (e.g. only a closeup of text).
 
 Product type hints:
 - "dry_food": kibble, dry food, crunchy food
@@ -147,6 +163,245 @@ INGREDIENT LIST EXTRACTION RULES (very important):
     } catch (error) {
       console.error('Gemini OCR error:', error);
       throw new Error(`OCR extraction failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Multi-image OCR for cylindrical / curved packages.
+   *
+   * The user rotated the can/pouch while the app burst-captured 4–8 photos.
+   * Each photo only shows part of the wrap-around label. We send them all in
+   * one Gemini call and ask for ONE deduplicated, ordered ingredient list,
+   * plus completeness/confidence metadata that the client uses to pick
+   * between the normal result screen, a confirmation step, or a recovery
+   * modal (see scan UX spec).
+   *
+   * @param {Buffer[]} imageBuffers - 1+ image buffers (typically 6)
+   * @param {string} mimeType
+   * @returns {{
+   *   ingredientsList: string[],
+   *   rawIngredientsText: string,
+   *   isComplete: boolean,
+   *   confidence: number,           // 0.0 – 1.0
+   *   missingSection: string|null,  // 'start'|'middle'|'end'|null
+   *   notes: string,
+   *   imageCount: number
+   * }}
+   */
+  async extractFromMultipleImages(imageBuffers, mimeType = 'image/jpeg') {
+    this.initialize();
+    if (!this.model) throw new Error('Gemini AI not initialized. Check API key.');
+    if (!Array.isArray(imageBuffers) || imageBuffers.length === 0) {
+      throw new Error('extractFromMultipleImages: imageBuffers must be a non-empty array');
+    }
+
+    // Cache key includes ALL buffers so two scans of the same can with the
+    // same captured frames hit cache. Multi-image cache hits are rare in
+    // practice but cheap to support.
+    const combinedHash = crypto
+      .createHash('sha256')
+      .update(Buffer.concat(imageBuffers.map(b => crypto.createHash('sha256').update(b).digest())))
+      .digest('hex');
+
+    const cached = await this.checkCache(combinedHash);
+    if (cached) {
+      console.log(`📦 [MULTI-OCR] Cache hit (${imageBuffers.length} frames)`);
+      return {
+        ingredientsList: cached.ingredientsList || [],
+        rawIngredientsText: cached.rawIngredientsText || '',
+        isComplete: true,
+        confidence: 0.95,
+        missingSection: null,
+        notes: 'cached',
+        imageCount: imageBuffers.length,
+      };
+    }
+
+    const prompt = this._buildMultiImagePrompt(imageBuffers.length);
+
+    const parts = imageBuffers.map(buf => ({
+      inlineData: {
+        mimeType,
+        data: buf.toString('base64'),
+      },
+    }));
+    parts.push({ text: prompt });
+
+    try {
+      console.log(`🤖 [MULTI-OCR] Sending ${imageBuffers.length} frames to Gemini`);
+      const result = await this.model.generateContent(parts);
+      const text = result.response.text();
+      const parsed = this._parseMultiImageResponse(text);
+
+      // Mirror the legacy single-image cache shape so cache hits still work.
+      await this.cacheResult(combinedHash, {
+        rawIngredientsText: parsed.rawIngredientsText,
+        ingredientsList: parsed.ingredientsList,
+      });
+
+      console.log(
+        `✅ [MULTI-OCR] ${parsed.ingredientsList.length} ingredients, ` +
+        `confidence=${parsed.confidence.toFixed(2)}, complete=${parsed.isComplete}, ` +
+        `missing=${parsed.missingSection || 'none'}`
+      );
+
+      return { ...parsed, imageCount: imageBuffers.length };
+    } catch (error) {
+      console.error('[MULTI-OCR] Gemini error:', error);
+      throw new Error(`Multi-image OCR failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Build the multi-image extraction prompt.
+   * Kept as a private helper so the giant string template doesn't crowd
+   * `extractFromMultipleImages`.
+   */
+  _buildMultiImagePrompt(frameCount) {
+    return `You are extracting the COMPLETE ingredient list from ${frameCount} photos of
+the same pet food package. The user rotated the package while the app
+captured the photos, so:
+- The same ingredient may appear in multiple photos (label wraps)
+- Photo order does NOT match label reading order
+- Some photos may be redundant (similar angles)
+- Some sections of the label may not be captured at all
+
+Your task: produce ONE clean, deduplicated, ORDERED list of all
+ingredients exactly as printed on the label.
+
+Output JSON only:
+{
+  "ingredients":      ["...", "...", ...],
+  "rawText":          "verbatim label text (the ingredient block) or empty string",
+  "is_complete":      true | false,
+  "confidence":       0.0,
+  "missing_section":  "start" | "middle" | "end" | null,
+  "notes":            "brief reason for confidence/missing"
+}
+
+═══════════════════════════════════════════════════
+ORDER PRESERVATION (critical)
+═══════════════════════════════════════════════════
+Pet food labels list ingredients in DESCENDING order by weight.
+This order drives our nutritional scoring, so it must be exact.
+Reconstruct the label's natural top-to-bottom reading order, NOT
+the order in which the photos were taken.
+
+═══════════════════════════════════════════════════
+DEDUPLICATION
+═══════════════════════════════════════════════════
+- Same ingredient in multiple photos → list ONCE.
+- Match by normalized form ("Chicken Meal" = "chicken meal").
+- Be conservative: similar-but-different ingredients
+  ("Chicken Meal" vs "Chicken By-Product Meal") → keep BOTH.
+
+═══════════════════════════════════════════════════
+CONFLICT RESOLUTION (verbatim policy)
+═══════════════════════════════════════════════════
+- Two photos disagree on a word due to glare/blur → pick the
+  clearer image's text VERBATIM. Copy what is printed.
+- DO NOT auto-correct to a more common ingredient name.
+  ("By-Product Meal" must stay "By-Product Meal", not "Meal".)
+- If you are genuinely uncertain about a word, KEEP it but
+  lower the confidence score and mention it in "notes".
+
+═══════════════════════════════════════════════════
+WHAT TO EXCLUDE
+═══════════════════════════════════════════════════
+- Each entry is a SHORT noun phrase (one ingredient).
+- Skip sentences containing: "manufactured", "processed",
+  "facility", "preserved", "guaranteed", "feeding", "store ",
+  "best by", "may contain", "this product", "this is".
+- Skip AAFCO statements ("complete and balanced for...").
+- Skip marketing copy and product descriptions.
+- If you cannot find a real ingredient list, return [].
+
+═══════════════════════════════════════════════════
+COMPLETENESS DETECTION
+═══════════════════════════════════════════════════
+"is_complete": true ONLY if BOTH visible:
+  - START: ingredient block opener ("Ingredients:" header
+    OR clearly the first ingredient of the recipe)
+  - END:   natural closing — preservative line ("Mixed
+    Tocopherols", "Rosemary Extract"), AAFCO statement, or
+    copyright/disclaimer paragraph
+
+"missing_section":
+  - "start"  → header / first ingredient never visible
+  - "end"    → sentence cuts mid-word, no closing marker
+  - "middle" → gap between captured photos
+  - null     → list looks complete
+
+═══════════════════════════════════════════════════
+CONFIDENCE
+═══════════════════════════════════════════════════
+0.90–1.00  clearly complete, all words readable, end marker present
+0.70–0.90  looks complete, a few words slightly blurry
+0.50–0.70  mostly captured, 1–2 ingredients uncertain
+0.30–0.50  significant gaps or many uncertain ingredients
+0.00–0.30  too little data — recommend recapture
+
+If you cannot reliably extract anything:
+  {"ingredients":[], "rawText":"", "is_complete":false,
+   "confidence":0.0, "missing_section":null,
+   "notes":"<why>"}`;
+  }
+
+  /**
+   * Parse the JSON shape produced by `_buildMultiImagePrompt` into the
+   * camelCase contract used by the rest of the backend (`isComplete`, etc.)
+   * Tolerates Gemini wrapping the JSON in prose or adding a leading "+".
+   */
+  _parseMultiImageResponse(text) {
+    const fallback = {
+      ingredientsList: [],
+      rawIngredientsText: '',
+      isComplete: false,
+      confidence: 0,
+      missingSection: null,
+      notes: 'failed_to_parse',
+    };
+
+    try {
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return fallback;
+
+      const cleanedJson = jsonMatch[0].replace(/:\s*\+(\d)/g, ': $1');
+      const parsed = JSON.parse(cleanedJson);
+
+      // Sanitize ingredients list: strip leading "Ingredients:" prefix on
+      // index 0 (Gemini sometimes leaves it in) and drop empty strings.
+      let ingredients = Array.isArray(parsed.ingredients) ? parsed.ingredients : [];
+      ingredients = ingredients
+        .map((ing, i) => {
+          let s = String(ing || '').trim();
+          if (i === 0) s = s.replace(/^ingredients?:?\s*/i, '');
+          return s.replace(/[.,;:]+$/, '').trim();
+        })
+        .filter(Boolean);
+
+      const rawConfidence = Number(parsed.confidence);
+      const confidence = Number.isFinite(rawConfidence)
+        ? Math.max(0, Math.min(1, rawConfidence))
+        : 0;
+
+      const missingRaw = parsed.missing_section;
+      const missingSection =
+        missingRaw === 'start' || missingRaw === 'middle' || missingRaw === 'end'
+          ? missingRaw
+          : null;
+
+      return {
+        ingredientsList: ingredients,
+        rawIngredientsText: String(parsed.rawText || ingredients.join(', ')),
+        isComplete: Boolean(parsed.is_complete),
+        confidence,
+        missingSection,
+        notes: String(parsed.notes || ''),
+      };
+    } catch (e) {
+      console.error('[MULTI-OCR] JSON parse error:', e.message);
+      return fallback;
     }
   }
 
@@ -387,6 +642,15 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
           }).filter(ing => ing.length > 0);
         }
         
+        // packageShape feeds the front-end's auto mode-toggle for the
+        // back-label step. Constrain to the closed set ("flat" / "round"
+        // / "pouch") and fall back to null so the client can apply its
+        // own default rather than getting an invalid value.
+        const allowedShapes = new Set(['flat', 'round', 'pouch']);
+        const packageShape = allowedShapes.has(parsed.packageShape)
+          ? parsed.packageShape
+          : null;
+
         return {
           imageType: parsed.imageType || null,  // front_label, ingredients_label, mixed
           productType: parsed.productType || null,  // dry_food, wet_food, treats, etc.
@@ -394,6 +658,7 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
           brand: parsed.brand || null,
           targetPet: parsed.targetPet || null,
           lifeStage: parsed.lifeStage || null,
+          packageShape,
           ingredientsList: ingredientsList,
           rawIngredientsText: parsed.rawIngredientsText || '',
           guaranteedAnalysis: parsed.guaranteedAnalysis || {},
@@ -413,6 +678,7 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
       brand: null,
       targetPet: null,
       lifeStage: null,
+      packageShape: null,
       ingredientsList: [],
       rawIngredientsText: text,
       guaranteedAnalysis: {},
