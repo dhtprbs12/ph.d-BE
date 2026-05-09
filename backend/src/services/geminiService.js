@@ -169,12 +169,27 @@ INGREDIENT LIST EXTRACTION RULES (very important):
   /**
    * Multi-image OCR for cylindrical / curved packages.
    *
-   * The user rotated the can/pouch while the app burst-captured 4–8 photos.
-   * Each photo only shows part of the wrap-around label. We send them all in
-   * one Gemini call and ask for ONE deduplicated, ordered ingredient list,
-   * plus completeness/confidence metadata that the client uses to pick
-   * between the normal result screen, a confirmation step, or a recovery
-   * modal (see scan UX spec).
+   * Two-stage pipeline (vs. the older single-shot multi-image approach):
+   *
+   *   Stage 1 — PER-FRAME OCR (parallel)
+   *     Each photo is OCR'd in isolation with a single-image call.
+   *     Within a single image Gemini reliably preserves the local
+   *     reading order; this is the part it's actually good at.
+   *
+   *   Stage 2 — TEXT MERGE (single call)
+   *     We feed the 6 partial ordered lists back to Gemini AS TEXT
+   *     and ask it to find the start anchor and stitch the lists into
+   *     one ordered list using overlapping ingredients as seams. No
+   *     spatial reasoning across images — just text reconstruction,
+   *     which Gemini does well.
+   *
+   * The reason for this split: the previous one-shot multi-image prompt
+   * was forcing the model to OCR + spatially reason about how 6 rotated
+   * photos fit together in one pass, and the spatial part is the model's
+   * weak spot. Splitting the work into "what does each frame contain"
+   * (visual) and "how do the frames stitch together" (textual) trades
+   * ~7x API calls for materially better ordering accuracy and
+   * reproducibility.
    *
    * @param {Buffer[]} imageBuffers - 1+ image buffers (typically 6)
    * @param {string} mimeType
@@ -189,6 +204,261 @@ INGREDIENT LIST EXTRACTION RULES (very important):
    * }}
    */
   async extractFromMultipleImages(imageBuffers, mimeType = 'image/jpeg') {
+    this.initialize();
+    if (!this.model) throw new Error('Gemini AI not initialized. Check API key.');
+    if (!Array.isArray(imageBuffers) || imageBuffers.length === 0) {
+      throw new Error('extractFromMultipleImages: imageBuffers must be a non-empty array');
+    }
+
+    // Cache key spans ALL frames so an exact re-scan hits cache.
+    const combinedHash = crypto
+      .createHash('sha256')
+      .update(Buffer.concat(imageBuffers.map(b => crypto.createHash('sha256').update(b).digest())))
+      .digest('hex');
+
+    const cached = await this.checkCache(combinedHash);
+    if (cached) {
+      console.log(`📦 [MULTI-OCR] Cache hit (${imageBuffers.length} frames)`);
+      return {
+        ingredientsList: cached.ingredientsList || [],
+        rawIngredientsText: cached.rawIngredientsText || '',
+        isComplete: true,
+        confidence: 0.95,
+        missingSection: null,
+        notes: 'cached',
+        imageCount: imageBuffers.length,
+      };
+    }
+
+    // ── STAGE 1: per-frame OCR (parallel) ──────────────────────────
+    console.log(`🤖 [MULTI-OCR] Stage 1: per-frame OCR for ${imageBuffers.length} frames`);
+    const frames = await Promise.all(
+      imageBuffers.map((buf, i) =>
+        this._extractFrameForMerge(buf, mimeType, i + 1).catch(err => {
+          // Don't let a single bad frame (RECITATION, glare, network)
+          // tank the whole burst — drop it and let Stage 2 work with
+          // what we have. The lower frame count is reflected in the
+          // final confidence score.
+          console.warn(`[MULTI-OCR] Frame ${i + 1} extraction failed: ${err.message}`);
+          return { frameIndex: i + 1, ingredients: [], hasStartAnchor: false };
+        })
+      )
+    );
+
+    const usableFrames = frames.filter(f => f.ingredients.length > 0);
+    if (usableFrames.length === 0) {
+      console.warn('[MULTI-OCR] No frames yielded any ingredients');
+      const empty = {
+        ingredientsList: [],
+        rawIngredientsText: '',
+        isComplete: false,
+        confidence: 0,
+        missingSection: null,
+        notes: 'no_ingredients_visible',
+        imageCount: imageBuffers.length,
+      };
+      return empty;
+    }
+
+    // ── STAGE 2: text merge ────────────────────────────────────────
+    console.log(
+      `🧩 [MULTI-OCR] Stage 2: merging ${usableFrames.length}/${imageBuffers.length} frame results`
+    );
+    const merged = await this._mergeFramesWithGemini(usableFrames, imageBuffers.length);
+
+    await this.cacheResult(combinedHash, {
+      rawIngredientsText: merged.rawIngredientsText,
+      ingredientsList: merged.ingredientsList,
+    });
+
+    console.log(
+      `✅ [MULTI-OCR] ${merged.ingredientsList.length} ingredients, ` +
+      `confidence=${merged.confidence.toFixed(2)}, complete=${merged.isComplete}, ` +
+      `missing=${merged.missingSection || 'none'}`
+    );
+
+    return { ...merged, imageCount: imageBuffers.length };
+  }
+
+  /**
+   * Stage-1 helper: OCR a single frame for the merge pipeline.
+   * Returns just enough for the text merger — the ordered partial list
+   * and a flag for whether the "Ingredients:" header / first protein
+   * is visible in this frame (used as the start anchor in Stage 2).
+   *
+   * Deliberately does NOT use `extractFromImage`: that helper is shaped
+   * for a one-shot back-label scan with brand inference / disclaimer
+   * filtering / package-shape detection — none of which we want here.
+   */
+  async _extractFrameForMerge(imageBuffer, mimeType, frameIndex) {
+    const prompt = `You are OCRing photo #${frameIndex} of a pet-food package.
+This photo shows ONE viewpoint of a wrap-around ingredient panel —
+other photos cover the rest of the panel. Your job for this frame is
+just to read what THIS image shows, in the order it's printed.
+
+Return ONLY this JSON (no prose, no code fences):
+{
+  "ingredients":     ["...", "...", ...],
+  "has_start_anchor": true | false,
+  "start_anchor":    "ingredients_header" | "first_protein" | null
+}
+
+Rules:
+- "ingredients" is the ordered list of ingredient noun phrases that
+  appear in THIS photo, top-to-bottom / left-to-right exactly as
+  printed. One short noun phrase per item.
+- A word that is cut off at the edge of the photo (e.g. "Chicken Me…"
+  or "…l, Brown Rice") IS still listed — keep your best read of the
+  fragment so the merge step can stitch it.
+- Skip sentences and disclaimers ("manufactured", "preserved with",
+  "guaranteed analysis", "feeding", "store ", "best by", "may contain",
+  AAFCO statements, marketing copy).
+- "has_start_anchor": true iff EITHER the literal text "Ingredients:"
+  is visible in this photo OR the first ingredient of the recipe is
+  visible (typically a protein source — "Chicken", "Beef", "Salmon",
+  "Deboned <meat>", "<meat> Meal", "Lamb"...).
+- "start_anchor": "ingredients_header" if the header is visible,
+  "first_protein" if only the first protein is visible, null if
+  neither.
+- If no ingredient panel is visible at all, return:
+  { "ingredients": [], "has_start_anchor": false, "start_anchor": null }`;
+
+    const parts = [
+      { inlineData: { mimeType, data: imageBuffer.toString('base64') } },
+      { text: prompt },
+    ];
+
+    const result = await this.model.generateContent({
+      contents: [{ role: 'user', parts }],
+      generationConfig: { temperature: 0.0, candidateCount: 1 },
+    });
+
+    const text = this._extractFirstText(result?.response);
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return { frameIndex, ingredients: [], hasStartAnchor: false, startAnchor: null };
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch {
+      return { frameIndex, ingredients: [], hasStartAnchor: false, startAnchor: null };
+    }
+
+    const ingredients = (Array.isArray(parsed.ingredients) ? parsed.ingredients : [])
+      .map(s => String(s || '').trim().replace(/[.,;:]+$/, '').trim())
+      .filter(Boolean);
+
+    return {
+      frameIndex,
+      ingredients,
+      hasStartAnchor: Boolean(parsed.has_start_anchor),
+      startAnchor:
+        parsed.start_anchor === 'ingredients_header' || parsed.start_anchor === 'first_protein'
+          ? parsed.start_anchor
+          : null,
+    };
+  }
+
+  /**
+   * Stage-2 helper: merge the per-frame partial lists into one ordered
+   * list using a text-only Gemini call. No images involved — Gemini's
+   * text reasoning is much stronger than its multi-image spatial
+   * reasoning, which is the whole point of the split.
+   */
+  async _mergeFramesWithGemini(frames, totalFrameCount) {
+    const framesBlock = frames
+      .map(f => {
+        const anchorTag = f.hasStartAnchor
+          ? ` [START ANCHOR: ${f.startAnchor || 'visible'}]`
+          : '';
+        const list = f.ingredients.map((ing, i) => `    ${i + 1}. ${ing}`).join('\n');
+        return `Photo ${f.frameIndex}${anchorTag}:\n${list}`;
+      })
+      .join('\n\n');
+
+    const prompt = `You are merging ${frames.length} partial ingredient lists OCR'd
+from ${totalFrameCount} photos of the same pet-food package as the user
+rotated it in their hand. Each list preserves the LOCAL reading order
+within its photo. Lists overlap at rotational seams — the same
+ingredient may appear at the end of one photo and at the start of the
+next, possibly with one of the two views being a partial fragment.
+
+The photos are listed in capture / rotation order. Photo "[START
+ANCHOR: ...]" tags mark frames where you (the OCR pass) saw the
+panel's start — either the literal "Ingredients:" header or the
+first protein-source ingredient. Use those tags as your starting
+point.
+
+PARTIAL LISTS:
+
+${framesBlock}
+
+Reconstruct the COMPLETE, deduplicated, ordered ingredient list as
+printed on the panel. Procedure (in priority order):
+
+  1. ANCHOR: pick the starting frame.
+       a. Prefer a frame tagged [START ANCHOR: ingredients_header].
+       b. Else prefer a frame tagged [START ANCHOR: first_protein].
+       c. Else use the frame whose first item is the most likely
+          first-ingredient (a protein source — "Chicken", "Beef",
+          "Salmon", "Deboned <meat>", "<meat> Meal", "Lamb"...).
+       d. Else use Photo 1 and lower confidence.
+  2. WALK FORWARD from the anchor, hopping into adjacent frames using
+     overlapping ingredients as the seam. The user rotated in ONE
+     direction, so consecutive photos are rotationally adjacent.
+  3. STITCH fragments: a word broken across photos ("Chicken Me" +
+     "al, Brown Rice…") is ONE ingredient — combine using the
+     overlap. Do not list both halves.
+  4. DEDUPLICATE case-insensitively. Treat clearly different items
+     as distinct ("Chicken Meal" vs "Chicken By-Product Meal").
+  5. NEVER alphabetise. NEVER sort by length or plausibility. NEVER
+     fall back to "the order I happened to encounter ingredients
+     across the lists". Only the panel's printed order is correct.
+
+Return ONLY this JSON (no prose, no code fences):
+{
+  "ingredients":      ["...", "...", ...],
+  "is_complete":      true | false,
+  "confidence":       0.0,
+  "missing_section":  "start" | "middle" | "end" | null,
+  "notes":            "brief reason for confidence/missing"
+}
+
+Confidence calibration:
+  0.90–1.00  start anchor visible AND a natural end marker reached
+             (preservatives line / AAFCO statement / disclaimer)
+  0.70–0.90  one of start anchor or end marker missing
+  0.50–0.70  both missing but the chain stitched cleanly
+  0.30–0.50  significant gaps, multiple un-stitched fragments
+  0.00–0.30  too little data — recommend recapture
+
+is_complete = true ONLY when BOTH a start anchor and a natural end
+marker are present in the final list.
+
+missing_section:
+  "start"  → no start anchor in any photo
+  "end"    → list cuts off mid-word, no closing marker
+  "middle" → unrecoverable gap between adjacent photos
+  null     → list looks complete`;
+
+    const result = await this.model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.0, candidateCount: 1 },
+    });
+
+    const text = this._extractFirstText(result?.response);
+    return this._parseMultiImageResponse(text);
+  }
+
+  /**
+   * Legacy one-shot multi-image OCR. Kept for the rare case where the
+   * two-stage pipeline above fails completely (e.g. all per-frame
+   * calls error out). Not currently wired in — left here as a fallback
+   * we can reach for if telemetry shows the new pipeline regressing.
+   */
+  async _extractFromMultipleImagesOneShot(imageBuffers, mimeType = 'image/jpeg') {
     this.initialize();
     if (!this.model) throw new Error('Gemini AI not initialized. Check API key.');
     if (!Array.isArray(imageBuffers) || imageBuffers.length === 0) {
