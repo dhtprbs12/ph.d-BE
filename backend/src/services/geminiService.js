@@ -248,11 +248,14 @@ INGREDIENT LIST EXTRACTION RULES (very important):
         const result = await this.model.generateContent({
           contents: [{ role: 'user', parts }],
           generationConfig: {
-            // Slight diversity helps Gemini avoid generating output that
-            // happens to match a memorised label verbatim.
-            temperature: 0.3,
-            // Two candidates → if one trips RECITATION the other often
-            // doesn't. We pick the first usable one in extractFirstText().
+            // Determinism matters more than diversity here:
+            // - Order accuracy is fragile, and any sampling jitter
+            //   produces a different sequence on re-scan of the same
+            //   can (the user complaint we're optimising for).
+            // - RECITATION is mitigated separately via the prompt
+            //   itself + the alt-prompt retry path below, not via
+            //   temperature.
+            temperature: 0.0,
             candidateCount: 1,
           },
         });
@@ -330,10 +333,15 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 ${frameCount} photos taken as the user rotated it in their hand. Use
 all photos together to reconstruct the panel.
 
-Things to expect:
+Photos are given in CAPTURE order (photo 1 first, photo ${frameCount} last)
+as the user rotated the package in one direction. They are NOT
+guaranteed to start at the panel's first ingredient — the user could
+have started rotating from any point on the can.
+
+What to expect:
 - The same ingredient may appear in several photos (label wrap).
-- Photo order does NOT necessarily follow the label reading order.
 - Some photos may be redundant; some parts of the panel may be missing.
+- Words may break across photos (e.g. "Chicken Me" / "al, Brown Rice").
 
 Produce ONE deduplicated, ordered list of ingredient names as they
 appear on the panel. This is data extraction, not transcription —
@@ -349,17 +357,44 @@ Return ONLY this JSON object (no prose, no code fences):
 }
 
 ═══════════════════════════════════════════════════
-ORDER (critical)
+ORDER (most important step — do this first)
 ═══════════════════════════════════════════════════
 Pet-food panels list ingredients in descending order by weight, and
-that order drives our nutrition scoring. Rebuild the panel's natural
-top-to-bottom reading order — NOT the order the photos were taken in.
+that order drives our nutrition scoring, so getting it wrong is
+worse than missing an ingredient.
+
+Reconstruct order with this procedure, in this exact priority:
+
+  1. ANCHOR THE START. Scan all photos for a clear "start signal":
+       a. The literal text "Ingredients:" (or "Ingredients :") —
+          the first ingredient is the noun phrase right after it.
+       b. If no header is visible, use the first ingredient of
+          the recipe (typically a meat: "Chicken", "Beef", "Salmon",
+          "Deboned <meat>", "<meat> Meal", "Lamb"…). Pet-food panels
+          almost always start with the protein source.
+       c. If neither (a) nor (b) is visible in any photo, set
+          "missing_section": "start" and lower confidence; sequence
+          the rest the best you can.
+
+  2. WALK FORWARD FROM THE ANCHOR. Once you know which photo / position
+     the first ingredient is in, follow the panel's natural reading
+     order from there, jumping between photos as the text wraps.
+     Use overlapping ingredients (the same name appearing in two
+     adjacent photos) as your guide — that overlap is your seam.
+
+  3. NEVER fall back to "list ingredients in the order I happened
+     to read them across photos". Photo order ≠ label order.
+
+  4. NEVER alphabetise, never sort by length, never reorder by
+     plausibility. Only the panel's printed order is correct.
 
 ═══════════════════════════════════════════════════
 DEDUPLICATION
 ═══════════════════════════════════════════════════
 - Same ingredient appearing in multiple photos → list it once.
 - Match case-insensitively ("Chicken Meal" = "chicken meal").
+- A word broken across photos ("Chicken Me" + "al") is still ONE
+  ingredient — stitch it together using the overlap.
 - Treat clearly different items as distinct ("Chicken Meal" vs
   "Chicken By-Product Meal" → keep both).
 
@@ -426,9 +461,26 @@ pet-food package taken from different angles, and emit it as
 structured data only. Do not reproduce any other paragraphs from the
 package — only the ordered ingredient names belong in the output.
 
-Combine the photos to reconstruct the panel's reading order, drop
-duplicates that come from label wrap, and skip sentences /
-disclaimers / nutrition statements / marketing copy.
+Photos are in capture order (photo 1 oldest, photo ${frameCount} newest)
+as the user rotated the package. Capture order is NOT label reading
+order. To rebuild the panel:
+
+  step 1 — find the START: the photo containing "Ingredients:"
+           (or the first protein-source ingredient like "Chicken",
+           "Beef", "Salmon", "Deboned Chicken", "Chicken Meal",
+           "Lamb", etc.). That is item index 0.
+  step 2 — walk FORWARD from that anchor through the panel's
+           natural reading order, hopping between photos using
+           overlapping (duplicated) ingredients as seams.
+  step 3 — drop every duplicate; stitch words split across photos
+           ("Chicken Me" + "al" → "Chicken Meal").
+  step 4 — never alphabetise, never sort by length / plausibility.
+           Only the panel's printed order is correct.
+
+If the start anchor never appears in any photo, set
+"missing": "start" and lower "score".
+
+Skip sentences / disclaimers / nutrition statements / marketing copy.
 
 Return ONLY this JSON (no markdown, no commentary):
 {

@@ -1265,9 +1265,15 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
  * start the scoring pipeline yet — the client decides what to do based on
  * the returned confidence:
  *
- *   confidence ≥ 0.85  → auto-commit (POST /scan/commit-back/...)
- *   0.50 – 0.85        → show "are these ingredients right?" confirmation
+ *   confidence ≥ 0.95  → auto-commit (POST /scan/commit-back/...)
+ *   0.50 – 0.95        → show "are these ingredients right?" confirmation
  *   < 0.50             → show recovery modal, user re-scans
+ *
+ * The auto-commit bar is intentionally very high for multi-frame
+ * scans: Gemini's confidence reflects completeness (did we capture
+ * every ingredient), NOT ordering. Order is reconstructed from
+ * spatial reasoning across photos, which the model gets wrong often
+ * enough that we want a human eye on the result almost every time.
  *
  * This split keeps Gemini scoring tokens from being wasted when the user
  * cancels at the confirmation step.
@@ -1335,7 +1341,7 @@ router.post('/back-multi/:pendingScanId', upload.array('images', 8), async (req,
       // UX hint so the client doesn't have to duplicate threshold logic.
       // Source of truth is still the client; this is just a suggestion.
       suggestedAction:
-        extracted.confidence >= 0.85
+        extracted.confidence >= 0.95
           ? 'auto_commit'
           : extracted.confidence >= 0.5
             ? 'confirm'
