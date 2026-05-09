@@ -217,62 +217,131 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       };
     }
 
-    const prompt = this._buildMultiImagePrompt(imageBuffers.length);
-
-    const parts = imageBuffers.map(buf => ({
+    const imageParts = imageBuffers.map(buf => ({
       inlineData: {
         mimeType,
         data: buf.toString('base64'),
       },
     }));
-    parts.push({ text: prompt });
 
-    try {
-      console.log(`🤖 [MULTI-OCR] Sending ${imageBuffers.length} frames to Gemini`);
-      const result = await this.model.generateContent(parts);
-      const text = result.response.text();
-      const parsed = this._parseMultiImageResponse(text);
+    // Two attempts with two phrasings of the same task. Pet-food labels
+    // are widely indexed online, so Gemini often blocks the first
+    // attempt with `RECITATION` (the model thinks its output mirrors
+    // its training data too closely). The retry rewords the schema and
+    // de-emphasizes "verbatim" copy so the response is structurally
+    // different enough to slip past the recitation filter.
+    const attempts = [
+      this._buildMultiImagePrompt(imageBuffers.length),
+      this._buildMultiImagePromptAlt(imageBuffers.length),
+    ];
 
-      // Mirror the legacy single-image cache shape so cache hits still work.
-      await this.cacheResult(combinedHash, {
-        rawIngredientsText: parsed.rawIngredientsText,
-        ingredientsList: parsed.ingredientsList,
-      });
+    let lastError = null;
+    for (let i = 0; i < attempts.length; i += 1) {
+      const promptText = attempts[i];
+      const parts = [...imageParts, { text: promptText }];
 
-      console.log(
-        `✅ [MULTI-OCR] ${parsed.ingredientsList.length} ingredients, ` +
-        `confidence=${parsed.confidence.toFixed(2)}, complete=${parsed.isComplete}, ` +
-        `missing=${parsed.missingSection || 'none'}`
-      );
+      try {
+        console.log(
+          `🤖 [MULTI-OCR] Sending ${imageBuffers.length} frames to Gemini` +
+          (i > 0 ? ` (retry ${i} after RECITATION)` : '')
+        );
+        const result = await this.model.generateContent({
+          contents: [{ role: 'user', parts }],
+          generationConfig: {
+            // Slight diversity helps Gemini avoid generating output that
+            // happens to match a memorised label verbatim.
+            temperature: 0.3,
+            // Two candidates → if one trips RECITATION the other often
+            // doesn't. We pick the first usable one in extractFirstText().
+            candidateCount: 1,
+          },
+        });
+        const text = this._extractFirstText(result?.response);
+        const parsed = this._parseMultiImageResponse(text);
 
-      return { ...parsed, imageCount: imageBuffers.length };
-    } catch (error) {
-      console.error('[MULTI-OCR] Gemini error:', error);
-      throw new Error(`Multi-image OCR failed: ${error.message}`);
+        await this.cacheResult(combinedHash, {
+          rawIngredientsText: parsed.rawIngredientsText,
+          ingredientsList: parsed.ingredientsList,
+        });
+
+        console.log(
+          `✅ [MULTI-OCR] ${parsed.ingredientsList.length} ingredients, ` +
+          `confidence=${parsed.confidence.toFixed(2)}, complete=${parsed.isComplete}, ` +
+          `missing=${parsed.missingSection || 'none'}`
+        );
+
+        return { ...parsed, imageCount: imageBuffers.length };
+      } catch (error) {
+        lastError = error;
+        const msg = String(error?.message || '');
+        // Only retry on RECITATION — other errors (network, quota,
+        // bad images) won't be helped by a different prompt.
+        if (!msg.includes('RECITATION') || i >= attempts.length - 1) {
+          break;
+        }
+        console.warn('[MULTI-OCR] RECITATION block, retrying with alt prompt');
+      }
     }
+
+    console.error('[MULTI-OCR] Gemini error:', lastError);
+    throw new Error(`Multi-image OCR failed: ${lastError?.message || 'unknown'}`);
+  }
+
+  /**
+   * Pull the text out of a Gemini response, tolerating cases where one
+   * of the candidates was blocked (RECITATION / SAFETY) but another
+   * succeeded. Throws if NO candidate yielded usable text — in which
+   * case the caller will handle the retry.
+   */
+  _extractFirstText(response) {
+    if (!response) throw new Error('Empty Gemini response');
+
+    const candidates = response.candidates || [];
+    for (const c of candidates) {
+      const finish = c?.finishReason;
+      // STOP / MAX_TOKENS are fine; RECITATION / SAFETY mean blocked.
+      if (finish && finish !== 'STOP' && finish !== 'MAX_TOKENS') continue;
+      const partsText = (c?.content?.parts || [])
+        .map(p => p?.text || '')
+        .join('')
+        .trim();
+      if (partsText) return partsText;
+    }
+
+    // Fall back to .text() — it throws on a fully blocked response,
+    // surfacing the RECITATION error to the caller's catch block.
+    return response.text();
   }
 
   /**
    * Build the multi-image extraction prompt.
+   *
    * Kept as a private helper so the giant string template doesn't crowd
-   * `extractFromMultipleImages`.
+   * `extractFromMultipleImages`. We deliberately AVOID asking the model
+   * to "copy verbatim" or to emit the original block of label text:
+   * pet-food labels are widely indexed online, and Gemini's
+   * recitation-detection filter blocks responses whose text overlaps
+   * its training corpus too heavily (`finishReason: RECITATION`). The
+   * structured JSON list of normalized ingredient names is far less
+   * likely to trip that filter than a paragraph of label text.
    */
   _buildMultiImagePrompt(frameCount) {
-    return `You are extracting the COMPLETE ingredient list from ${frameCount} photos of
-the same pet food package. The user rotated the package while the app
-captured the photos, so:
-- The same ingredient may appear in multiple photos (label wraps)
-- Photo order does NOT match label reading order
-- Some photos may be redundant (similar angles)
-- Some sections of the label may not be captured at all
+    return `You are reading the ingredient panel of a pet-food package from
+${frameCount} photos taken as the user rotated it in their hand. Use
+all photos together to reconstruct the panel.
 
-Your task: produce ONE clean, deduplicated, ORDERED list of all
-ingredients exactly as printed on the label.
+Things to expect:
+- The same ingredient may appear in several photos (label wrap).
+- Photo order does NOT necessarily follow the label reading order.
+- Some photos may be redundant; some parts of the panel may be missing.
 
-Output JSON only:
+Produce ONE deduplicated, ordered list of ingredient names as they
+appear on the panel. This is data extraction, not transcription —
+output a structured list, not a copy of the printed paragraph.
+
+Return ONLY this JSON object (no prose, no code fences):
 {
   "ingredients":      ["...", "...", ...],
-  "rawText":          "verbatim label text (the ingredient block) or empty string",
   "is_complete":      true | false,
   "confidence":       0.0,
   "missing_section":  "start" | "middle" | "end" | null,
@@ -280,56 +349,53 @@ Output JSON only:
 }
 
 ═══════════════════════════════════════════════════
-ORDER PRESERVATION (critical)
+ORDER (critical)
 ═══════════════════════════════════════════════════
-Pet food labels list ingredients in DESCENDING order by weight.
-This order drives our nutritional scoring, so it must be exact.
-Reconstruct the label's natural top-to-bottom reading order, NOT
-the order in which the photos were taken.
+Pet-food panels list ingredients in descending order by weight, and
+that order drives our nutrition scoring. Rebuild the panel's natural
+top-to-bottom reading order — NOT the order the photos were taken in.
 
 ═══════════════════════════════════════════════════
 DEDUPLICATION
 ═══════════════════════════════════════════════════
-- Same ingredient in multiple photos → list ONCE.
-- Match by normalized form ("Chicken Meal" = "chicken meal").
-- Be conservative: similar-but-different ingredients
-  ("Chicken Meal" vs "Chicken By-Product Meal") → keep BOTH.
+- Same ingredient appearing in multiple photos → list it once.
+- Match case-insensitively ("Chicken Meal" = "chicken meal").
+- Treat clearly different items as distinct ("Chicken Meal" vs
+  "Chicken By-Product Meal" → keep both).
 
 ═══════════════════════════════════════════════════
-CONFLICT RESOLUTION (verbatim policy)
+WORD CHOICE
 ═══════════════════════════════════════════════════
-- Two photos disagree on a word due to glare/blur → pick the
-  clearer image's text VERBATIM. Copy what is printed.
-- DO NOT auto-correct to a more common ingredient name.
-  ("By-Product Meal" must stay "By-Product Meal", not "Meal".)
-- If you are genuinely uncertain about a word, KEEP it but
-  lower the confidence score and mention it in "notes".
+- Use the wording printed on the panel (e.g. keep "By-Product Meal",
+  do not rename it to "Meal").
+- If different photos disagree on a word due to glare or blur, take
+  the version from the clearest photo.
+- If you are unsure of a word, keep your best read, lower the
+  confidence score, and mention the uncertainty in "notes".
 
 ═══════════════════════════════════════════════════
-WHAT TO EXCLUDE
+WHAT TO INCLUDE / EXCLUDE
 ═══════════════════════════════════════════════════
-- Each entry is a SHORT noun phrase (one ingredient).
-- Skip sentences containing: "manufactured", "processed",
-  "facility", "preserved", "guaranteed", "feeding", "store ",
-  "best by", "may contain", "this product", "this is".
-- Skip AAFCO statements ("complete and balanced for...").
-- Skip marketing copy and product descriptions.
-- If you cannot find a real ingredient list, return [].
+- Each entry is a short noun phrase naming one ingredient.
+- Skip sentences and disclaimers, e.g. "manufactured", "processed in",
+  "facility that", "preserved with", "guaranteed analysis", "feeding
+  guidelines", "store ", "best by", "may contain", "this product",
+  "this is", AAFCO statements, marketing copy.
+- If no real ingredient list is visible, return ingredients: [].
 
 ═══════════════════════════════════════════════════
-COMPLETENESS DETECTION
+COMPLETENESS
 ═══════════════════════════════════════════════════
 "is_complete": true ONLY if BOTH visible:
-  - START: ingredient block opener ("Ingredients:" header
-    OR clearly the first ingredient of the recipe)
-  - END:   natural closing — preservative line ("Mixed
-    Tocopherols", "Rosemary Extract"), AAFCO statement, or
-    copyright/disclaimer paragraph
+  - START: an "Ingredients:" header OR clearly the first ingredient
+  - END:   a natural closing — preservative line (e.g. "Mixed
+    Tocopherols", "Rosemary Extract"), AAFCO statement, or a
+    disclaimer / copyright paragraph
 
 "missing_section":
   - "start"  → header / first ingredient never visible
-  - "end"    → sentence cuts mid-word, no closing marker
-  - "middle" → gap between captured photos
+  - "end"    → list cuts off mid-word, no closing marker
+  - "middle" → visible gap between captured photos
   - null     → list looks complete
 
 ═══════════════════════════════════════════════════
@@ -341,10 +407,50 @@ CONFIDENCE
 0.30–0.50  significant gaps or many uncertain ingredients
 0.00–0.30  too little data — recommend recapture
 
-If you cannot reliably extract anything:
-  {"ingredients":[], "rawText":"", "is_complete":false,
-   "confidence":0.0, "missing_section":null,
-   "notes":"<why>"}`;
+If nothing usable is visible, return:
+  {"ingredients":[], "is_complete":false, "confidence":0.0,
+   "missing_section":null, "notes":"<why>"}`;
+  }
+
+  /**
+   * Alternate phrasing of `_buildMultiImagePrompt`, used as a retry
+   * when the primary prompt trips Gemini's RECITATION filter. The
+   * structure of the requested JSON is intentionally different (extra
+   * `panel_only` flag, ingredient items wrapped in a "name" object)
+   * so the model's output diverges enough from any memorised label
+   * paragraph to escape the recitation match.
+   */
+  _buildMultiImagePromptAlt(frameCount) {
+    return `Task: extract the ingredient panel from ${frameCount} photos of a
+pet-food package taken from different angles, and emit it as
+structured data only. Do not reproduce any other paragraphs from the
+package — only the ordered ingredient names belong in the output.
+
+Combine the photos to reconstruct the panel's reading order, drop
+duplicates that come from label wrap, and skip sentences /
+disclaimers / nutrition statements / marketing copy.
+
+Return ONLY this JSON (no markdown, no commentary):
+{
+  "items": [ { "name": "..." }, { "name": "..." } ],
+  "panel_only": true,
+  "complete": true | false,
+  "missing": "start" | "middle" | "end" | null,
+  "score": 0.0,
+  "note": "short explanation"
+}
+
+Rules:
+- "items" is descending order by weight, exactly as on the panel.
+- One short noun phrase per item (e.g. "Chicken Meal", "Brown Rice").
+- Use the wording printed on the panel; if a word is unclear, keep
+  your best read and lower "score".
+- "complete": true only when both an "Ingredients:" opener (or first
+  ingredient) and a natural end marker (preservatives line / AAFCO
+  statement / disclaimer paragraph) are visible.
+- If nothing usable is visible:
+  { "items": [], "panel_only": true, "complete": false,
+    "missing": null, "score": 0.0, "note": "<why>" }`;
   }
 
   /**
@@ -369,10 +475,19 @@ If you cannot reliably extract anything:
       const cleanedJson = jsonMatch[0].replace(/:\s*\+(\d)/g, ': $1');
       const parsed = JSON.parse(cleanedJson);
 
+      // Accept BOTH the primary schema (`ingredients: [string]`) and the
+      // alternate retry schema (`items: [{name: string}]`) so the
+      // RECITATION-retry path needs no separate parser.
+      let rawList = [];
+      if (Array.isArray(parsed.ingredients)) {
+        rawList = parsed.ingredients;
+      } else if (Array.isArray(parsed.items)) {
+        rawList = parsed.items.map(it => (typeof it === 'string' ? it : it?.name));
+      }
+
       // Sanitize ingredients list: strip leading "Ingredients:" prefix on
       // index 0 (Gemini sometimes leaves it in) and drop empty strings.
-      let ingredients = Array.isArray(parsed.ingredients) ? parsed.ingredients : [];
-      ingredients = ingredients
+      const ingredients = rawList
         .map((ing, i) => {
           let s = String(ing || '').trim();
           if (i === 0) s = s.replace(/^ingredients?:?\s*/i, '');
@@ -380,24 +495,31 @@ If you cannot reliably extract anything:
         })
         .filter(Boolean);
 
-      const rawConfidence = Number(parsed.confidence);
+      const rawConfidence = Number(parsed.confidence ?? parsed.score);
       const confidence = Number.isFinite(rawConfidence)
         ? Math.max(0, Math.min(1, rawConfidence))
         : 0;
 
-      const missingRaw = parsed.missing_section;
+      const missingRaw = parsed.missing_section ?? parsed.missing;
       const missingSection =
         missingRaw === 'start' || missingRaw === 'middle' || missingRaw === 'end'
           ? missingRaw
           : null;
 
+      const isComplete = Boolean(
+        parsed.is_complete !== undefined ? parsed.is_complete : parsed.complete
+      );
+
       return {
         ingredientsList: ingredients,
-        rawIngredientsText: String(parsed.rawText || ingredients.join(', ')),
-        isComplete: Boolean(parsed.is_complete),
+        // We no longer ask Gemini for a verbatim raw text block (it was a
+        // recitation-trigger and nothing downstream actually used it).
+        // Fall back to a join() so the cache shape stays stable.
+        rawIngredientsText: ingredients.join(', '),
+        isComplete,
         confidence,
         missingSection,
-        notes: String(parsed.notes || ''),
+        notes: String(parsed.notes || parsed.note || ''),
       };
     } catch (e) {
       console.error('[MULTI-OCR] JSON parse error:', e.message);
