@@ -877,110 +877,138 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
 
     console.log(`✅ [FRONT] Captured: "${extracted.brand || ''} ${extracted.productName || ''}" (pendingId: ${pendingScanId})`);
 
-    // Search DB for matching products (candidates for quick selection)
+    // ============================================================
+    // CANDIDATE SEARCH — score-based with hard threshold.
+    //
+    // Old behaviour was a 4-tier waterfall whose Tier 2 ("brand only,
+    // sorted by relevance DESC, scan_count DESC") would surface up to
+    // 10 products from the source brand even when ZERO name keywords
+    // matched. So scanning a new "Wellness Lamb & Barley" returned
+    // every popular Wellness Chicken / Turkey / etc. variant in the
+    // DB and the user thought their product had been mis-identified.
+    //
+    // New rule: a candidate must clear a real signal threshold —
+    // brand + at least one name keyword (≥8 points), or two strong
+    // name keywords without brand. Anything below that is silently
+    // dropped so the empty state ("New product") becomes the obvious
+    // next action instead of being buried under noise.
     let candidates = [];
     if (extracted.productName || extracted.brand) {
       try {
         const brandTerm = (extracted.brand || '').trim();
         const nameTerm = (extracted.productName || '').trim();
-        const fullText = `${brandTerm} ${nameTerm}`.trim();
         const productType = (extracted.productType || '').trim();
-        
-        console.log(`🔍 [FRONT] Searching candidates: brand="${brandTerm}", name="${nameTerm}", type="${productType}"`);
-        
+        const targetPet = (extracted.targetPet || '').trim();
+
+        console.log(
+          `🔍 [FRONT] Searching candidates: brand="${brandTerm}", name="${nameTerm}", type="${productType}"`
+        );
+
+        // Tokenize the name into meaningful words. Drop common filler
+        // tokens that match almost any pet food and would inflate
+        // scores without adding signal.
+        // Stopwords are tokens that appear in nearly every product name
+        // and would inflate scores without adding signal. We deliberately
+        // KEEP life-stage tokens (puppy/kitten/adult/senior) — they're
+        // genuinely discriminating ("Adult Chicken & Rice" should score
+        // higher than "Senior Chicken & Rice" when the user scanned the
+        // adult formula).
+        const NAME_STOPWORDS = new Set([
+          'and', 'with', 'for', 'the',
+          'food', 'recipe', 'formula',
+          'natural', 'premium',
+          'dry', 'wet',         // captured by product_type column
+          'dog', 'cat',         // captured by target_pet_type column
+        ]);
+        const nameKeywords = nameTerm
+          .toLowerCase()
+          .split(/\s+/)
+          .map(w => w.replace(/[^a-z0-9]/g, ''))
+          .filter(w => w.length > 2 && !NAME_STOPWORDS.has(w));
+
+        // Pull a focused candidate pool. We only consider rows that
+        // share the brand OR contain at least one name keyword in the
+        // name column — anything else can't possibly clear the score
+        // threshold below, so there's no point loading it.
+        const where = [];
+        const params = [];
+        if (brandTerm) {
+          where.push('brand LIKE ?');
+          params.push(`%${brandTerm}%`);
+        }
+        for (const kw of nameKeywords) {
+          where.push('LOWER(name) LIKE ?');
+          params.push(`%${kw}%`);
+        }
+
         let candidateRows = [];
-        const nameKeywords = nameTerm.split(/\s+/).filter(w => w.length > 2);
-        
-        // Strategy 1: Brand + name keywords (precise match)
-        if (brandTerm && nameKeywords.length > 0) {
-          const nameConditions = nameKeywords.map(() => 'name LIKE ?').join(' AND ');
-          const params = [`%${brandTerm}%`, ...nameKeywords.map(k => `%${k}%`)];
+        if (where.length > 0) {
           candidateRows = await query(
-            `SELECT id, name, brand, image_url, product_type, target_pet_type 
-             FROM products 
-             WHERE brand LIKE ? AND (${nameConditions})
+            `SELECT id, name, brand, image_url, product_type, target_pet_type, scan_count
+             FROM products
+             WHERE (${where.join(' OR ')})
                AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
-             ORDER BY scan_count DESC
-             LIMIT 10`,
+             LIMIT 100`,
             params
           );
         }
-        
-        // Strategy 2: Brand only, but rank by name relevance and product type match
-        if (candidateRows.length === 0 && brandTerm) {
-          const relevanceParts = [];
-          const relevanceParams = [];
-          
-          nameKeywords.forEach(k => {
-            relevanceParts.push('(CASE WHEN name LIKE ? THEN 1 ELSE 0 END)');
-            relevanceParams.push(`%${k}%`);
-          });
-          
-          if (productType) {
-            relevanceParts.push('(CASE WHEN product_type = ? THEN 2 ELSE 0 END)');
-            relevanceParams.push(productType);
+
+        // Score every row and keep those above MIN_SCORE.
+        // Scoring (intentionally simple so it's debuggable):
+        //   +5  brand match
+        //   +3  per matched name keyword (case-insensitive substring)
+        //   +2  product_type match
+        //   +1  target_pet_type match
+        //
+        // MIN_SCORE = 8 means a hit needs at least:
+        //   brand + 1 name keyword,           (5 + 3 = 8)   OR
+        //   2 name keywords + product_type,   (6 + 2 = 8)   OR
+        //   3 name keywords,                  (9)
+        // Anything weaker is dropped.
+        const MIN_SCORE = 8;
+        const MAX_CANDIDATES = 5;
+
+        const brandLower = brandTerm.toLowerCase();
+        const scored = candidateRows.map(r => {
+          let score = 0;
+          const cBrand = (r.brand || '').toLowerCase();
+          const cName = (r.name || '').toLowerCase();
+
+          if (brandLower && cBrand.includes(brandLower)) score += 5;
+          for (const kw of nameKeywords) {
+            if (cName.includes(kw)) score += 3;
           }
-          
-          const relevanceExpr = relevanceParts.length > 0
-            ? relevanceParts.join(' + ')
-            : '0';
-          
-          candidateRows = await query(
-            `SELECT id, name, brand, image_url, product_type, target_pet_type,
-                    (${relevanceExpr}) AS relevance
-             FROM products 
-             WHERE brand LIKE ?
-               AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
-             ORDER BY relevance DESC, scan_count DESC
-             LIMIT 10`,
-            [...relevanceParams, `%${brandTerm}%`]
-          );
-        }
-        
-        // Strategy 3: Name keywords only (no brand match)
-        if (candidateRows.length === 0 && nameKeywords.length > 0) {
-          const likeConditions = nameKeywords.map(() => 'name LIKE ?').join(' AND ');
-          const likeParams = nameKeywords.map(k => `%${k}%`);
-          candidateRows = await query(
-            `SELECT id, name, brand, image_url, product_type, target_pet_type 
-             FROM products 
-             WHERE (${likeConditions}) AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
-             ORDER BY scan_count DESC
-             LIMIT 10`,
-            likeParams
-          );
-        }
-        
-        // Strategy 4: Broad keyword search across brand+name columns
-        if (candidateRows.length === 0 && fullText) {
-          const keywords = fullText.split(/\s+/).filter(w => w.length > 2);
-          if (keywords.length > 0) {
-            const likeConditions = keywords.map(() => '(name LIKE ? OR brand LIKE ?)').join(' AND ');
-            const likeParams = keywords.flatMap(k => [`%${k}%`, `%${k}%`]);
-            candidateRows = await query(
-              `SELECT id, name, brand, image_url, product_type, target_pet_type 
-               FROM products 
-               WHERE (${likeConditions}) AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
-               ORDER BY scan_count DESC
-               LIMIT 10`,
-              likeParams
-            );
+          if (productType && r.product_type === productType) score += 2;
+          if (
+            targetPet &&
+            (r.target_pet_type === targetPet || r.target_pet_type === 'both')
+          ) {
+            score += 1;
           }
-        }
-        
-        if (candidateRows.length > 0) {
-          candidates = candidateRows.map(r => ({
-            id: r.id,
-            name: r.name,
-            brand: r.brand,
-            imageUrl: r.image_url,
-            productType: r.product_type,
-            targetPetType: r.target_pet_type
-          }));
-          console.log(`🔍 [FRONT] Found ${candidates.length} candidate(s) for "${fullText}"`);
-        } else {
-          console.log(`🔍 [FRONT] No candidates found for "${fullText}"`);
-        }
+          return { row: r, score };
+        });
+
+        const passing = scored
+          .filter(s => s.score >= MIN_SCORE)
+          .sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            return (b.row.scan_count || 0) - (a.row.scan_count || 0);
+          })
+          .slice(0, MAX_CANDIDATES);
+
+        candidates = passing.map(({ row: r }) => ({
+          id: r.id,
+          name: r.name,
+          brand: r.brand,
+          imageUrl: r.image_url,
+          productType: r.product_type,
+          targetPetType: r.target_pet_type,
+        }));
+
+        console.log(
+          `🔍 [FRONT] Pool ${candidateRows.length} → ${passing.length} above score ${MIN_SCORE} ` +
+          `(top scores: ${passing.slice(0, 3).map(p => p.score).join(',') || 'none'})`
+        );
       } catch (err) {
         console.log('⚠️ [FRONT] Candidate search failed:', err.message);
       }
