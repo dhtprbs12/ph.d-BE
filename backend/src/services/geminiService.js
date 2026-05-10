@@ -1804,16 +1804,24 @@ Return JSON:
     // product_review_cache, polluting every future scan that hashed to
     // the same ingredient list. Instead, throw — the call sites are all
     // wrapped in try/catch and will simply skip caching.
+    // NOTE: We intentionally don't set responseMimeType: 'application/json'
+    // here — the @google/generative-ai SDK pinned in this project is too
+    // old to translate that field, and the v1 REST endpoint rejects it
+    // (HTTP 400 "Unknown name 'responseMimeType' at 'generation_config'").
+    // Strict-JSON behaviour comes from the prompt + the tolerant parser
+    // + the retry below; not from the SDK option.
     const baseGenerationConfig = {
       temperature: 0.0,
       candidateCount: 1,
-      responseMimeType: 'application/json',
     };
 
     const attempts = [
-      { suffix: '', config: baseGenerationConfig },
       {
-        suffix: '\n\nReturn ONLY a single valid JSON object with no markdown fences, no commentary, and no trailing text.',
+        suffix: '\n\nReturn ONLY a single valid JSON object. No markdown fences, no prose, no comments, no trailing text. Start the response with `{` and end with `}`.',
+        config: baseGenerationConfig,
+      },
+      {
+        suffix: '\n\nIMPORTANT: Your previous attempt produced invalid JSON. Output exactly one JSON object that JSON.parse() can read. Do not wrap it in ```. No commentary before or after. Begin with `{` and end with `}`.',
         config: baseGenerationConfig,
       },
     ];
