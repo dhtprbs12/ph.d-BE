@@ -17,6 +17,12 @@ const { connectDB } = require('./database/connection');
 
 const app = express();
 
+// We run on Railway, which fronts the container with a single proxy hop.
+// Without this, express-rate-limit can't read the real client IP from
+// X-Forwarded-For (it logs ERR_ERL_UNEXPECTED_X_FORWARDED_FOR and treats
+// every request as coming from the proxy IP — defeating per-IP limits).
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet());
 app.use(cors());

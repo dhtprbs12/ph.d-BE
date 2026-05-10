@@ -1793,15 +1793,43 @@ Return JSON:
 
     const prompt = isSupplement ? supplementPrompt : (isTreat ? treatPrompt : foodPrompt);
 
-    try {
-      const result = await this.model.generateContent(prompt);
-      const text = result.response.text();
-      
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        
-        // Validate and normalize response
+    // Two-pass strategy:
+    //   Pass 1 — model returns JSON directly via responseMimeType.
+    //   Pass 2 — if that still returns malformed JSON (rare but happens
+    //            when the model tries to "explain"), reissue with an even
+    //            stricter prompt suffix.
+    //
+    // We deliberately do NOT silently return a placeholder ("Unable to
+    // complete AI analysis"). That fallback used to be cached forever in
+    // product_review_cache, polluting every future scan that hashed to
+    // the same ingredient list. Instead, throw — the call sites are all
+    // wrapped in try/catch and will simply skip caching.
+    const baseGenerationConfig = {
+      temperature: 0.0,
+      candidateCount: 1,
+      responseMimeType: 'application/json',
+    };
+
+    const attempts = [
+      { suffix: '', config: baseGenerationConfig },
+      {
+        suffix: '\n\nReturn ONLY a single valid JSON object with no markdown fences, no commentary, and no trailing text.',
+        config: baseGenerationConfig,
+      },
+    ];
+
+    let lastError = null;
+
+    for (let attempt = 0; attempt < attempts.length; attempt++) {
+      const { suffix, config } = attempts[attempt];
+      try {
+        const result = await this.model.generateContent({
+          contents: [{ role: 'user', parts: [{ text: prompt + suffix }] }],
+          generationConfig: config,
+        });
+        const text = this._extractFirstText(result?.response) || '';
+        const parsed = this._parseHolisticReviewJson(text);
+
         return {
           finalScore: Math.max(0, Math.min(100, parseInt(parsed.finalScore) || 50)),
           grade: ['A', 'B', 'C', 'D', 'F'].includes(parsed.grade) ? parsed.grade : 'C',
@@ -1813,24 +1841,67 @@ Return JSON:
           positives: Array.isArray(parsed.positives) ? parsed.positives : [],
           aiSummary: parsed.aiSummary || ''
         };
+      } catch (error) {
+        lastError = error;
+        console.warn(
+          `[reviewProductHolistically] attempt ${attempt + 1}/${attempts.length} failed: ${error.message}`
+        );
       }
-      
-      throw new Error('Invalid JSON response from AI');
-    } catch (error) {
-      console.error('Holistic review error:', error.message);
-      // Return a conservative fallback
-      return {
-        finalScore: 50,
-        grade: 'C',
-        recommendation: 'acceptable',
-        proteinQuality: 'unknown',
-        primaryIngredientType: 'unknown',
-        hasArtificialAdditives: false,
-        keyIssues: ['Unable to complete AI analysis'],
-        positives: [],
-        aiSummary: 'Analysis could not be completed. Please review ingredients manually.'
-      };
     }
+
+    // Both passes failed → surface the error so callers skip caching.
+    const finalErr = new Error(
+      `Holistic AI review failed after ${attempts.length} attempts: ${lastError?.message || 'unknown error'}`
+    );
+    finalErr.cause = lastError;
+    throw finalErr;
+  }
+
+  /**
+   * Tolerant JSON extractor for holistic-review responses.
+   *
+   * Tries (in order):
+   *   1. Strip ``` / ```json fences, then JSON.parse the whole thing
+   *      (responseMimeType: application/json should already give clean JSON,
+   *       but Gemini still occasionally wraps it).
+   *   2. Pull the first {...} block out and parse that.
+   *   3. Apply a couple of targeted fixups (trailing commas) before re-parsing.
+   *
+   * Throws if nothing parseable is found — caller should retry or give up.
+   */
+  _parseHolisticReviewJson(text) {
+    if (!text || typeof text !== 'string') {
+      throw new Error('Empty AI response');
+    }
+
+    const stripFences = (s) =>
+      s
+        .trim()
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/```\s*$/i, '')
+        .trim();
+
+    const cleaned = stripFences(text);
+
+    try {
+      return JSON.parse(cleaned);
+    } catch (_) { /* try the next strategy */ }
+
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('No JSON object found in AI response');
+    }
+
+    try {
+      return JSON.parse(jsonMatch[0]);
+    } catch (_) { /* try one more fixup */ }
+
+    // Last-chance cleanup: drop trailing commas before } or ].
+    const fixed = jsonMatch[0]
+      .replace(/,(\s*[}\]])/g, '$1')
+      .replace(/[\u0000-\u001F]+/g, ' ');
+
+    return JSON.parse(fixed);
   }
 
   /**

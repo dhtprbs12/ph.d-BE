@@ -43,4 +43,33 @@ router.delete('/cache/clear', async (req, res, next) => {
   }
 });
 
+/**
+ * DELETE /api/admin/cache/poisoned
+ *
+ * One-shot cleanup for product_review_cache rows that were saved when the
+ * holistic-review Gemini call returned malformed JSON. The old code path
+ * silently swallowed the parse error and stored a placeholder row
+ * (score=50, grade=C, key_issues='["Unable to complete AI analysis"]').
+ * Once stored, every future scan of any product with the same
+ * ingredient_hash served that placeholder forever.
+ *
+ * This deletes those rows so the next scan recomputes them through the
+ * fixed pipeline (responseMimeType=application/json + retry + throw).
+ */
+router.delete('/cache/poisoned', async (req, res, next) => {
+  try {
+    const result = await query(
+      `DELETE FROM product_review_cache
+       WHERE JSON_CONTAINS(key_issues, JSON_QUOTE('Unable to complete AI analysis'))
+          OR ai_summary LIKE 'Analysis could not be completed%'`
+    );
+    const deleted = result?.affectedRows ?? 0;
+    console.log(`🧹 [Admin] Purged ${deleted} poisoned product_review_cache row(s)`);
+    res.json({ deleted });
+  } catch (error) {
+    console.error('[Admin] cache/poisoned error:', error);
+    next(error);
+  }
+});
+
 module.exports = router;
