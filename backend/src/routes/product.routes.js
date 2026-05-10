@@ -1172,6 +1172,74 @@ router.post('/:id/reviews', authenticateToken, async (req, res, next) => {
 });
 
 /**
+ * DELETE /api/products/:id
+ *
+ * TEST-ONLY ENDPOINT — used during the OCR-tuning phase so we can purge a
+ * product from the DB when its ingredients were extracted incorrectly.
+ *
+ * What it removes:
+ *   - products row → CASCADE: product_ingredients, product_alternatives, product_reviews
+ *   - product_review_cache rows that share the deleted product's ingredient_hash
+ *     (otherwise another user with the same ingredients would still get the bad
+ *      cached holistic AI review)
+ *
+ * What it intentionally does NOT touch:
+ *   - ocr_cache (we don't track which cache rows produced which product, and
+ *     a re-capture will yield a different image hash anyway)
+ *   - ai_assessment_cache (per-ingredient cache, shared with other products)
+ *   - scan_history (FK is SET NULL — history rows survive with product_id = NULL)
+ *
+ * TODO(prod): gate behind an admin flag or remove before public launch.
+ */
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const rows = await query(
+      'SELECT id, name, brand, ingredient_hash FROM products WHERE id = ? LIMIT 1',
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const product = rows[0];
+    const result = {
+      productId: product.id,
+      name: product.name,
+      brand: product.brand,
+      ingredientHash: product.ingredient_hash || null,
+      reviewCacheRowsDeleted: 0,
+    };
+
+    if (product.ingredient_hash) {
+      try {
+        const cacheResult = await query(
+          'DELETE FROM product_review_cache WHERE ingredient_hash = ?',
+          [product.ingredient_hash]
+        );
+        result.reviewCacheRowsDeleted = cacheResult?.affectedRows ?? 0;
+      } catch (err) {
+        console.warn('[DELETE product] product_review_cache cleanup failed:', err.message);
+      }
+    }
+
+    await query('DELETE FROM products WHERE id = ?', [id]);
+
+    console.log(
+      `🗑️  [DELETE product] ${product.brand || '?'} / ${product.name} (id=${id}) ` +
+      `→ purged + ${result.reviewCacheRowsDeleted} review_cache row(s)`
+    );
+
+    res.json({ success: true, deleted: result });
+  } catch (error) {
+    console.error('[DELETE product] Error:', error);
+    next(error);
+  }
+});
+
+/**
  * GET /api/products/barcode/:barcode
  * Get product by barcode
  */
