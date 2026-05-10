@@ -878,20 +878,32 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     console.log(`✅ [FRONT] Captured: "${extracted.brand || ''} ${extracted.productName || ''}" (pendingId: ${pendingScanId})`);
 
     // ============================================================
-    // CANDIDATE SEARCH — score-based with hard threshold.
+    // CANDIDATE SEARCH — brand-as-hard-filter + token-exact match.
     //
-    // Old behaviour was a 4-tier waterfall whose Tier 2 ("brand only,
-    // sorted by relevance DESC, scan_count DESC") would surface up to
-    // 10 products from the source brand even when ZERO name keywords
-    // matched. So scanning a new "Wellness Lamb & Barley" returned
-    // every popular Wellness Chicken / Turkey / etc. variant in the
-    // DB and the user thought their product had been mis-identified.
+    // Two earlier mistakes that this version fixes:
     //
-    // New rule: a candidate must clear a real signal threshold —
-    // brand + at least one name keyword (≥8 points), or two strong
-    // name keywords without brand. Anything below that is silently
-    // dropped so the empty state ("New product") becomes the obvious
-    // next action instead of being buried under noise.
+    //  1) Brand used to be a +5 score component, so a high-keyword
+    //     match from a completely different brand could clear the
+    //     threshold ("Hill's Healthy Chicken & Barley" passing for a
+    //     Wellness scan because "chicken" + "healthy".includes("health")
+    //     piled up). Different brand = different product, period.
+    //     When Gemini extracts a brand, it's now a SQL hard filter.
+    //
+    //  2) Keyword matching used case-insensitive substring containment,
+    //     which silently matched word fragments — "health" matched
+    //     "healthy", "complete" matched "completely", etc. Replaced
+    //     with EXACT TOKEN match against the candidate name's
+    //     tokenization. "deboned" no longer matches "debone-free", and
+    //     so on.
+    //
+    // Scoring (post brand filter, when brand was extracted):
+    //   +3 per matched name token
+    //   +2 product_type match
+    //   +1 target_pet_type match
+    //   threshold ≥5 (i.e. 1 token + product_type, or 2 tokens)
+    //
+    // When brand was NOT extracted we fall back to token-only scoring
+    // with a stricter threshold (≥8) to avoid cross-brand noise.
     let candidates = [];
     if (extracted.productName || extracted.brand) {
       try {
@@ -904,15 +916,10 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
           `🔍 [FRONT] Searching candidates: brand="${brandTerm}", name="${nameTerm}", type="${productType}"`
         );
 
-        // Tokenize the name into meaningful words. Drop common filler
-        // tokens that match almost any pet food and would inflate
-        // scores without adding signal.
         // Stopwords are tokens that appear in nearly every product name
-        // and would inflate scores without adding signal. We deliberately
-        // KEEP life-stage tokens (puppy/kitten/adult/senior) — they're
-        // genuinely discriminating ("Adult Chicken & Rice" should score
-        // higher than "Senior Chicken & Rice" when the user scanned the
-        // adult formula).
+        // and would inflate scores without adding signal. We KEEP life-
+        // stage tokens (puppy/kitten/adult/senior) since they're
+        // genuinely discriminating between SKUs.
         const NAME_STOPWORDS = new Set([
           'and', 'with', 'for', 'the',
           'food', 'recipe', 'formula',
@@ -920,64 +927,63 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
           'dry', 'wet',         // captured by product_type column
           'dog', 'cat',         // captured by target_pet_type column
         ]);
-        const nameKeywords = nameTerm
-          .toLowerCase()
-          .split(/\s+/)
-          .map(w => w.replace(/[^a-z0-9]/g, ''))
-          .filter(w => w.length > 2 && !NAME_STOPWORDS.has(w));
 
-        // Pull a focused candidate pool. We only consider rows that
-        // share the brand OR contain at least one name keyword in the
-        // name column — anything else can't possibly clear the score
-        // threshold below, so there's no point loading it.
+        const tokenize = (text) =>
+          (text || '')
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter(w => w.length > 2 && !NAME_STOPWORDS.has(w));
+
+        const nameKeywords = tokenize(nameTerm);
+
+        // SQL pool: brand match is REQUIRED if we have one (eliminates
+        // cross-brand noise at the source). Without a brand, fall back
+        // to "any name token appears in name" to keep some pool.
+        const hasBrand = !!brandTerm;
         const where = [];
         const params = [];
-        if (brandTerm) {
+
+        if (hasBrand) {
           where.push('brand LIKE ?');
           params.push(`%${brandTerm}%`);
-        }
-        for (const kw of nameKeywords) {
-          where.push('LOWER(name) LIKE ?');
-          params.push(`%${kw}%`);
+        } else {
+          for (const kw of nameKeywords) {
+            where.push('LOWER(name) LIKE ?');
+            params.push(`%${kw}%`);
+          }
         }
 
         let candidateRows = [];
         if (where.length > 0) {
+          // Brand path uses AND (single condition); name path uses OR
+          // so that any token match brings the row into the pool.
+          const joiner = hasBrand ? ' AND ' : ' OR ';
           candidateRows = await query(
             `SELECT id, name, brand, image_url, product_type, target_pet_type, scan_count
              FROM products
-             WHERE (${where.join(' OR ')})
+             WHERE (${where.join(joiner)})
                AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
-             LIMIT 100`,
+             LIMIT 200`,
             params
           );
         }
 
-        // Score every row and keep those above MIN_SCORE.
-        // Scoring (intentionally simple so it's debuggable):
-        //   +5  brand match
-        //   +3  per matched name keyword (case-insensitive substring)
-        //   +2  product_type match
-        //   +1  target_pet_type match
-        //
-        // MIN_SCORE = 8 means a hit needs at least:
-        //   brand + 1 name keyword,           (5 + 3 = 8)   OR
-        //   2 name keywords + product_type,   (6 + 2 = 8)   OR
-        //   3 name keywords,                  (9)
-        // Anything weaker is dropped.
-        const MIN_SCORE = 8;
+        const MIN_SCORE = hasBrand ? 5 : 8;
         const MAX_CANDIDATES = 5;
 
-        const brandLower = brandTerm.toLowerCase();
         const scored = candidateRows.map(r => {
           let score = 0;
-          const cBrand = (r.brand || '').toLowerCase();
-          const cName = (r.name || '').toLowerCase();
 
-          if (brandLower && cBrand.includes(brandLower)) score += 5;
+          // Token-exact match against the candidate name (no substring).
+          const candTokens = new Set(tokenize(r.name));
+          let matchedKeywordCount = 0;
           for (const kw of nameKeywords) {
-            if (cName.includes(kw)) score += 3;
+            if (candTokens.has(kw)) {
+              score += 3;
+              matchedKeywordCount += 1;
+            }
           }
+
           if (productType && r.product_type === productType) score += 2;
           if (
             targetPet &&
@@ -985,11 +991,15 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
           ) {
             score += 1;
           }
-          return { row: r, score };
+
+          return { row: r, score, matchedKeywordCount };
         });
 
+        // Drop anything that didn't match at least one name token —
+        // product_type + pet_type alone isn't enough signal to suggest
+        // "this might be your product".
         const passing = scored
-          .filter(s => s.score >= MIN_SCORE)
+          .filter(s => s.matchedKeywordCount > 0 && s.score >= MIN_SCORE)
           .sort((a, b) => {
             if (b.score !== a.score) return b.score - a.score;
             return (b.row.scan_count || 0) - (a.row.scan_count || 0);
@@ -1007,7 +1017,8 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
 
         console.log(
           `🔍 [FRONT] Pool ${candidateRows.length} → ${passing.length} above score ${MIN_SCORE} ` +
-          `(top scores: ${passing.slice(0, 3).map(p => p.score).join(',') || 'none'})`
+          `[brand=${hasBrand ? 'hard-filter' : 'no-brand-fallback'}; ` +
+          `top: ${passing.slice(0, 3).map(p => `${p.score}`).join(',') || 'none'}]`
         );
       } catch (err) {
         console.log('⚠️ [FRONT] Candidate search failed:', err.message);
