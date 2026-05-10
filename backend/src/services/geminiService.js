@@ -2,6 +2,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const crypto = require('crypto');
 const { query } = require('../database/connection');
 const { v4: uuidv4 } = require('uuid');
+const cloudVisionService = require('./cloudVisionService');
 
 /**
  * GEMINI AI SERVICE
@@ -169,27 +170,36 @@ INGREDIENT LIST EXTRACTION RULES (very important):
   /**
    * Multi-image OCR for cylindrical / curved packages.
    *
-   * Two-stage pipeline (vs. the older single-shot multi-image approach):
+   * Two-stage pipeline:
    *
-   *   Stage 1 — PER-FRAME OCR (parallel)
-   *     Each photo is OCR'd in isolation with a single-image call.
-   *     Within a single image Gemini reliably preserves the local
-   *     reading order; this is the part it's actually good at.
+   *   Stage 1 — PER-FRAME RAW OCR (parallel, Cloud Vision)
+   *     Each photo is OCR'd in isolation by Google Cloud Vision's
+   *     DOCUMENT_TEXT_DETECTION. Cloud Vision is a dedicated OCR
+   *     engine — materially more accurate at reading small / blurred
+   *     / curved label text than Gemini's general vision model, and
+   *     it doesn't hallucinate "corrections" the way Gemini sometimes
+   *     does. Output is the raw text block of everything visible in
+   *     that frame (ingredient panel + nutrition facts + disclaimers
+   *     all mixed together).
    *
-   *   Stage 2 — TEXT MERGE (single call)
-   *     We feed the 6 partial ordered lists back to Gemini AS TEXT
-   *     and ask it to find the start anchor and stitch the lists into
-   *     one ordered list using overlapping ingredients as seams. No
-   *     spatial reasoning across images — just text reconstruction,
-   *     which Gemini does well.
+   *   Stage 2 — TEXT MERGE (single call, Gemini)
+   *     The N raw text blocks are fed to Gemini as TEXT. Gemini's
+   *     job is the part it's actually good at: reasoning over text
+   *     to (a) pick out the ingredient lines, (b) discard nutrition /
+   *     marketing / disclaimer copy, (c) find the start anchor, (d)
+   *     stitch overlapping seams across frames, (e) deduplicate, and
+   *     (f) emit the ordered list.
    *
-   * The reason for this split: the previous one-shot multi-image prompt
-   * was forcing the model to OCR + spatially reason about how 6 rotated
-   * photos fit together in one pass, and the spatial part is the model's
-   * weak spot. Splitting the work into "what does each frame contain"
-   * (visual) and "how do the frames stitch together" (textual) trades
-   * ~7x API calls for materially better ordering accuracy and
-   * reproducibility.
+   * Why this split (vs. asking Gemini to do everything in one
+   * multimodal call): doing pixels→characters AND
+   * characters→structured-list in the same model means the visual
+   * weakness (small text, glare, curvature) bleeds into the
+   * extraction and the model silently drops or "corrects" ingredients.
+   * With Cloud Vision owning the visual half, every legible character
+   * makes it into Stage 2, where Gemini can reason about it cleanly.
+   *
+   * Falls back to the legacy Gemini multi-image one-shot when the
+   * Vision API key isn't configured (local dev without GCP setup).
    *
    * @param {Buffer[]} imageBuffers - 1+ image buffers (typically 6)
    * @param {string} mimeType
@@ -230,41 +240,59 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       };
     }
 
-    // ── STAGE 1: per-frame OCR (parallel) ──────────────────────────
-    console.log(`🤖 [MULTI-OCR] Stage 1: per-frame OCR for ${imageBuffers.length} frames`);
+    // No Vision key → fall back to the legacy Gemini-per-frame
+    // pipeline so local dev / staging without GCP setup still works.
+    if (!cloudVisionService.isAvailable()) {
+      console.warn(
+        '[MULTI-OCR] Cloud Vision key missing — falling back to Gemini per-frame OCR'
+      );
+      return this._extractFromMultipleImagesGeminiOnly(imageBuffers, mimeType, combinedHash);
+    }
+
+    // ── STAGE 1: Cloud Vision per-frame OCR (parallel) ─────────────
+    console.log(
+      `👁️  [MULTI-OCR] Stage 1: Cloud Vision OCR for ${imageBuffers.length} frames`
+    );
+    const t0 = Date.now();
     const frames = await Promise.all(
       imageBuffers.map((buf, i) =>
-        this._extractFrameForMerge(buf, mimeType, i + 1).catch(err => {
-          // Don't let a single bad frame (RECITATION, glare, network)
-          // tank the whole burst — drop it and let Stage 2 work with
-          // what we have. The lower frame count is reflected in the
-          // final confidence score.
-          console.warn(`[MULTI-OCR] Frame ${i + 1} extraction failed: ${err.message}`);
-          return { frameIndex: i + 1, ingredients: [], hasStartAnchor: false };
-        })
+        cloudVisionService
+          .detectDocumentText(buf, { languageHints: ['en'] })
+          .then(({ rawText }) => ({
+            frameIndex: i + 1,
+            rawText: rawText.trim(),
+          }))
+          .catch(err => {
+            // One bad frame (network blip, transient 5xx) shouldn't
+            // tank the burst. Drop it; Stage 2 still works with the
+            // surviving frames and the missing coverage shows up in
+            // the final confidence.
+            console.warn(`[MULTI-OCR] Frame ${i + 1} Vision OCR failed: ${err.message}`);
+            return { frameIndex: i + 1, rawText: '' };
+          })
       )
     );
+    console.log(`👁️  [MULTI-OCR] Stage 1 done in ${Date.now() - t0}ms`);
 
-    const usableFrames = frames.filter(f => f.ingredients.length > 0);
+    const usableFrames = frames.filter(f => f.rawText.length > 0);
     if (usableFrames.length === 0) {
-      console.warn('[MULTI-OCR] No frames yielded any ingredients');
-      const empty = {
+      console.warn('[MULTI-OCR] No frames yielded any text');
+      return {
         ingredientsList: [],
         rawIngredientsText: '',
         isComplete: false,
         confidence: 0,
         missingSection: null,
-        notes: 'no_ingredients_visible',
+        notes: 'no_text_visible',
         imageCount: imageBuffers.length,
       };
-      return empty;
     }
 
-    // ── STAGE 2: text merge ────────────────────────────────────────
+    // ── STAGE 2: Gemini text merge ─────────────────────────────────
     console.log(
-      `🧩 [MULTI-OCR] Stage 2: merging ${usableFrames.length}/${imageBuffers.length} frame results`
+      `🧩 [MULTI-OCR] Stage 2: Gemini merge of ${usableFrames.length}/${imageBuffers.length} frame texts`
     );
-    const merged = await this._mergeFramesWithGemini(usableFrames, imageBuffers.length);
+    const merged = await this._mergeRawTextWithGemini(usableFrames, imageBuffers.length);
 
     await this.cacheResult(combinedHash, {
       rawIngredientsText: merged.rawIngredientsText,
@@ -276,6 +304,49 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       `confidence=${merged.confidence.toFixed(2)}, complete=${merged.isComplete}, ` +
       `missing=${merged.missingSection || 'none'}`
     );
+
+    return { ...merged, imageCount: imageBuffers.length };
+  }
+
+  /**
+   * Legacy fallback path: Gemini-only per-frame + merge. Used when
+   * GOOGLE_CLOUD_VISION_API_KEY is missing (local dev without GCP).
+   * Keeps the public contract of extractFromMultipleImages stable so
+   * the route handler doesn't need to branch on env config.
+   */
+  async _extractFromMultipleImagesGeminiOnly(imageBuffers, mimeType, combinedHash) {
+    console.log(`🤖 [MULTI-OCR] Stage 1 (Gemini fallback): per-frame OCR for ${imageBuffers.length} frames`);
+    const frames = await Promise.all(
+      imageBuffers.map((buf, i) =>
+        this._extractFrameForMerge(buf, mimeType, i + 1).catch(err => {
+          console.warn(`[MULTI-OCR] Frame ${i + 1} Gemini OCR failed: ${err.message}`);
+          return { frameIndex: i + 1, ingredients: [], hasStartAnchor: false };
+        })
+      )
+    );
+
+    const usableFrames = frames.filter(f => f.ingredients.length > 0);
+    if (usableFrames.length === 0) {
+      return {
+        ingredientsList: [],
+        rawIngredientsText: '',
+        isComplete: false,
+        confidence: 0,
+        missingSection: null,
+        notes: 'no_ingredients_visible',
+        imageCount: imageBuffers.length,
+      };
+    }
+
+    console.log(
+      `🧩 [MULTI-OCR] Stage 2 (Gemini fallback): merging ${usableFrames.length}/${imageBuffers.length} frame results`
+    );
+    const merged = await this._mergeFramesWithGemini(usableFrames, imageBuffers.length);
+
+    await this.cacheResult(combinedHash, {
+      rawIngredientsText: merged.rawIngredientsText,
+      ingredientsList: merged.ingredientsList,
+    });
 
     return { ...merged, imageCount: imageBuffers.length };
   }
@@ -374,9 +445,133 @@ Rules:
   }
 
   /**
-   * Stage-2 helper: merge the per-frame partial lists into one ordered
-   * list using a text-only Gemini call. No images involved — Gemini's
-   * text reasoning is much stronger than its multi-image spatial
+   * Stage-2 helper for the Cloud-Vision pipeline: take the raw text
+   * blocks Cloud Vision extracted from each rotated frame and turn
+   * them into one ordered, deduped ingredient list.
+   *
+   * Cloud Vision returns EVERYTHING visible in the photo — the
+   * ingredient panel, nutrition facts, marketing copy, disclaimer
+   * paragraphs, even barcode digits. The first job of this prompt is
+   * to discard all of that noise; the second is to do the same
+   * "anchor → walk forward, stitch seams" reconstruction the older
+   * merge prompt did.
+   */
+  async _mergeRawTextWithGemini(frames, totalFrameCount) {
+    const framesBlock = frames
+      .map(
+        f =>
+          `Photo ${f.frameIndex} (raw OCR):\n"""\n${f.rawText}\n"""`
+      )
+      .join('\n\n');
+
+    const prompt = `You are reconstructing the ingredient panel of a pet-food
+package from raw OCR text dumps of ${frames.length} photos that the
+user took while rotating the package in their hand. Each dump
+contains EVERYTHING the camera saw in that frame — the ingredient
+panel itself, plus nutrition facts, AAFCO statements, feeding
+guidelines, marketing copy, barcode digits, sometimes random package
+text. Your job is to extract just the ingredient list, in the
+correct order, from across all the dumps.
+
+Photos are listed in capture / rotation order — the user rotated in
+ONE direction, so consecutive photos are rotationally adjacent on
+the can / pouch.
+
+RAW OCR DUMPS:
+
+${framesBlock}
+
+Procedure (in priority order):
+
+  1. ANCHOR THE START. Scan all dumps for a clear start signal:
+       a. The literal text "Ingredients:" (or "INGREDIENTS:",
+          "Ingredients :"). The first ingredient is the noun phrase
+          immediately after it.
+       b. Else the first ingredient of the recipe — typically a
+          protein source ("Chicken", "Beef", "Salmon", "Deboned
+          <meat>", "<meat> Meal", "Lamb", "Turkey"...).
+       c. Else use Photo 1 as the start and lower confidence; set
+          missing_section: "start".
+
+  2. WALK FORWARD from the anchor through the rotational order,
+     hopping into adjacent photos using overlapping ingredients as
+     seams. The same ingredient often appears at the END of one
+     photo and the START of the next, possibly with one of the two
+     views being a partial fragment (e.g. "Chicken Me…" vs
+     "…al, Brown Rice"). Treat those as ONE ingredient; combine
+     using the overlap. Do not list both halves.
+
+  3. KEEP SINGLETONS. If an ingredient appears in only ONE of the
+     raw dumps and nowhere else, INCLUDE IT. A single appearance is
+     not noise — it just means that section of the panel was only
+     captured by one photo. Tail-of-panel items (vitamins,
+     minerals, preservatives like "Niacin", "Zinc Proteinate",
+     "Mixed Tocopherols", "Rosemary Extract") are especially common
+     in the singleton bucket because the print is small.
+
+  4. EXCLUDE non-ingredient text. Discard anything that is clearly:
+       - "Guaranteed Analysis" / "Crude Protein" / "Crude Fat" /
+         "Crude Fiber" / "Moisture" lines and the percentages
+         beneath them.
+       - "Feeding Guidelines" / "Storage" / "Best By" / "Made in".
+       - AAFCO statements ("complete and balanced for all life
+         stages", "formulated to meet the nutritional levels...").
+       - Marketing copy ("naturally preserved", "real chicken
+         #1 ingredient", "no fillers").
+       - Disclaimers ("manufactured in a facility that...",
+         "may contain traces of...").
+       - Barcode digits, batch codes, weights ("12 oz", "340g").
+       - Brand names, product names, and recipe names (those are
+         already known from the front label).
+
+  5. DEDUPLICATE case-insensitively across photos. Treat clearly
+     different items as distinct ("Chicken Meal" vs "Chicken
+     By-Product Meal" → keep both).
+
+  6. NEVER alphabetise. NEVER sort by length / plausibility. NEVER
+     fall back to "the order I happened to encounter ingredients
+     across the dumps". Only the panel's printed order is correct.
+
+Return ONLY this JSON (no prose, no code fences):
+{
+  "ingredients":      ["...", "...", ...],
+  "is_complete":      true | false,
+  "confidence":       0.0,
+  "missing_section":  "start" | "middle" | "end" | null,
+  "notes":            "brief reason for confidence/missing"
+}
+
+Confidence calibration:
+  0.90–1.00  start anchor visible AND a natural end marker reached
+             (preservatives line / AAFCO statement / disclaimer)
+  0.70–0.90  one of start anchor or end marker missing
+  0.50–0.70  both missing but the chain stitched cleanly
+  0.30–0.50  significant gaps, multiple un-stitched fragments
+  0.00–0.30  too little usable text — recommend recapture
+
+is_complete = true ONLY when BOTH a start anchor and a natural end
+marker are present in the final list.
+
+missing_section:
+  "start"  → no start anchor in any photo
+  "end"    → list cuts off mid-word, no closing marker
+  "middle" → unrecoverable gap between adjacent photos
+  null     → list looks complete`;
+
+    const result = await this.model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.0, candidateCount: 1 },
+    });
+
+    const text = this._extractFirstText(result?.response);
+    return this._parseMultiImageResponse(text);
+  }
+
+  /**
+   * Stage-2 helper for the legacy Gemini-only fallback pipeline:
+   * merge the per-frame partial lists into one ordered list using a
+   * text-only Gemini call. No images involved — Gemini's text
+   * reasoning is much stronger than its multi-image spatial
    * reasoning, which is the whole point of the split.
    */
   async _mergeFramesWithGemini(frames, totalFrameCount) {
