@@ -1178,6 +1178,20 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
       ingredientsList = ingredientAnalyzer.parseIngredientText(extracted.rawIngredientsText);
     }
 
+    // Same parenthetical premix recovery as multi-frame: Gemini sometimes
+    // drops "Vitamins (…)" even when rawIngredientsText still contains it.
+    const premixHaystack =
+      typeof extracted.rawIngredientsText === 'string' &&
+      extracted.rawIngredientsText.trim().length > 30
+        ? extracted.rawIngredientsText
+        : ingredientsList.join('\n');
+    if (premixHaystack.length > 30 && ingredientsList.length > 0) {
+      ingredientsList = geminiService._injectParentheticalPremixFromHaystack(
+        premixHaystack,
+        ingredientsList
+      );
+    }
+
     if (ingredientsList.length === 0) {
       return res.status(422).json({
         error: 'no_ingredients_found',

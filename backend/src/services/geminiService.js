@@ -241,7 +241,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-premix-inject-v4', 'utf8'),
+          Buffer.from('multiocr-premix-inject-v5', 'utf8'),
         ])
       )
       .digest('hex');
@@ -538,8 +538,9 @@ Rules:
       .trim();
   }
 
-  _isLikelyGaRegionBefore(haystack, headerStartIdx) {
-    const lo = Math.max(0, headerStartIdx - 260);
+  _isLikelyGaRegionBefore(haystack, headerStartIdx, opts = {}) {
+    const win = opts.narrowWindow === true ? 90 : 260;
+    const lo = Math.max(0, headerStartIdx - win);
     const slice = haystack.slice(lo, headerStartIdx);
     return (
       /\bGuaranteed\s+Analysis\b/i.test(slice) ||
@@ -571,21 +572,26 @@ Rules:
    */
   _namedParenPremixRegexes() {
     return [
-      /\bVitamins?\s*\(/gi,
-      /\bMinerals?\s*\(/gi,
-      /\bTrace\s+Minerals?\s*\(/gi,
-      /\bAmino\s+Acids?\s*\(/gi,
-      /\bProbiotics?\s*\(/gi,
-      /\b(?:Direct-?fed\s+)?Microbials?\s*\(/gi,
-      /\bEnzymes?\s*\(/gi,
-      /\bChelated\s+Minerals?\s*\(/gi,
-      /\b(?:Trace\s+)?Elements?\s*\(/gi,
-      /\bMicronutrients?\s*\(/gi,
-      /\bNutrient\s+(?:Premix|Blend|Package)\s*\(/gi,
-      /\bElectrolytes?\s*\(/gi,
-      /\bPreservatives?\s*\(/gi,
-      /\bNatural\s+Flavors?\s*\(/gi,
-      /\b(?:Added\s+)?(?:Vitamins|Minerals)\s+and\s+Minerals\s*\(/gi,
+      // "Vitamins (" / "Vitamin (" — also colon or line-break before '(' (common on labels).
+      /\bVitamins?\s*(?:\n\s*)?\s*\(/gi,
+      /\bVitamins?\s*:\s*\(/gi,
+      /\bMinerals?\s*(?:\n\s*)?\s*\(/gi,
+      /\bMinerals?\s*:\s*\(/gi,
+      /\bTrace\s+Minerals?\s*(?:\n\s*)?\s*\(/gi,
+      /\bTrace\s+Minerals?\s*:\s*\(/gi,
+      /\bAmino\s+Acids?\s*(?:\n\s*)?\s*\(/gi,
+      /\bAmino\s+Acids?\s*:\s*\(/gi,
+      /\bProbiotics?\s*(?:\n\s*)?\s*\(/gi,
+      /\b(?:Direct-?fed\s+)?Microbials?\s*(?:\n\s*)?\s*\(/gi,
+      /\bEnzymes?\s*(?:\n\s*)?\s*\(/gi,
+      /\bChelated\s+Minerals?\s*(?:\n\s*)?\s*\(/gi,
+      /\b(?:Trace\s+)?Elements?\s*(?:\n\s*)?\s*\(/gi,
+      /\bMicronutrients?\s*(?:\n\s*)?\s*\(/gi,
+      /\bNutrient\s+(?:Premix|Blend|Package)\s*(?:\n\s*)?\s*\(/gi,
+      /\bElectrolytes?\s*(?:\n\s*)?\s*\(/gi,
+      /\bPreservatives?\s*(?:\n\s*)?\s*\(/gi,
+      /\bNatural\s+Flavors?\s*(?:\n\s*)?\s*\(/gi,
+      /\b(?:Added\s+)?(?:Vitamins|Minerals)\s+and\s+Minerals\s*(?:\n\s*)?\s*\(/gi,
     ];
   }
 
@@ -625,7 +631,7 @@ Rules:
   /** Inner text of parentheses looks like a premix / cluster, not "(min 5%)". */
   _parenInnerLooksLikePremix(header, inner) {
     const hi = this._normIngHay(inner);
-    const commas = (hi.match(/,/g) || []).length;
+    const commas = (hi.match(/[,;·]/g) || []).length;
     const len = hi.length;
 
     if (len < 18) return false;
@@ -694,11 +700,27 @@ Rules:
           const start = m.index;
           const openIdx = m.index + m[0].length - 1;
           if (text[openIdx] !== '(') continue;
-          if (this._isLikelyGaRegionBefore(text, start)) continue;
+          // Vitamins/Minerals/… blocks live in the ingredient panel — a long
+          // lookback can pick up "Crude Protein …%" from elsewhere in the
+          // concatenated multi-frame dump and wrongly skip a real match.
+          const header = text.slice(start, openIdx).replace(/\s+/g, ' ').trim();
+          const isCorePremixHeader =
+            /\b(vitamins?|minerals?|trace\s+minerals?|amino\s+acids?)\b/i.test(header);
+          if (
+            !isCorePremixHeader &&
+            this._isLikelyGaRegionBefore(text, start)
+          ) {
+            continue;
+          }
+          if (
+            isCorePremixHeader &&
+            this._isLikelyGaRegionBefore(text, start, { narrowWindow: true })
+          ) {
+            continue;
+          }
           const closeIdx = this._closingParenIndex(text, openIdx);
           if (closeIdx === -1) continue;
           const inner = text.slice(openIdx + 1, closeIdx);
-          const header = text.slice(start, openIdx).replace(/\s+/g, ' ').trim();
           if (this._isDeniedParenHeader(header)) continue;
           if (!this._parenInnerLooksLikePremix(header, inner)) continue;
           pushSpan(start, closeIdx, text.slice(start, closeIdx + 1));
@@ -1059,7 +1081,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-premix-inject-v4', 'utf8'),
+          Buffer.from('multiocr-premix-inject-v5', 'utf8'),
         ])
       )
       .digest('hex');
