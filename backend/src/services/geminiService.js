@@ -136,6 +136,14 @@ INGREDIENT LIST EXTRACTION RULES (very important):
   * Preservation/marketing claims: "This is a naturally preserved product", "Naturally preserved", "Preserved with mixed tocopherols" (when written as a standalone sentence — but DO keep "Mixed Tocopherols" itself if listed as an ingredient)
   * Allergen warnings: "May contain traces of...", "Contains: ..."
   * Guaranteed analysis, feeding instructions, storage, expiration, net weight, or any sentence-like text
+- REGULATORY TABLE vs INGREDIENT PANEL (many backs show both side by side):
+  The "Guaranteed Analysis" / "Typical Analysis" / "Analytical Constituents" block
+  (Crude Protein/Fat/Fiber, Moisture with min/max and %, Calorie Content) is NOT
+  part of the ingredient statement. Never copy those rows into ingredientsList or
+  rawIngredientsText — only populate the structured guaranteedAnalysis numbers when
+  visible. Ingredient premix lines ("Vitamins (...)", "Minerals (...)", etc.) list
+  additives by name; do not relabel them as "Moisture" or other GA headers just because
+  GA text appeared nearby in the photo.
 - For "ingredientsList", each item is usually a short noun phrase (1–6 words).
   EXCEPTION — PARENTHETICAL ENUMERATION (any group header): The panel may
   show ONE legal ingredient as a header word or short phrase immediately
@@ -241,7 +249,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-premix-inject-v5', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v6', 'utf8'),
         ])
       )
       .digest('hex');
@@ -294,7 +302,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
     );
     console.log(`👁️  [MULTI-OCR] Stage 1 done in ${Date.now() - t0}ms`);
 
-    const usableFrames = frames.filter(f => f.rawText.length > 0);
+    const usableFrames = this._sortFramesByCaptureOrder(frames.filter(f => f.rawText.length > 0));
     if (usableFrames.length === 0) {
       console.warn('[MULTI-OCR] No frames yielded any text');
       return {
@@ -356,7 +364,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       )
     );
 
-    const usableFrames = frames.filter(f => f.ingredients.length > 0);
+    const usableFrames = this._sortFramesByCaptureOrder(frames.filter(f => f.ingredients.length > 0));
     if (usableFrames.length === 0) {
       return {
         ingredientsList: [],
@@ -798,6 +806,32 @@ Rules:
     return Math.max(0, list.length - 3);
   }
 
+  /** Stable capture order for Stage 1 → Stage 2 handoff. */
+  _sortFramesByCaptureOrder(frames) {
+    if (!Array.isArray(frames)) return [];
+    return frames.slice().sort((a, b) => (a.frameIndex || 0) - (b.frameIndex || 0));
+  }
+
+  /**
+   * Regex-only tags prepended to each Vision OCR dump. Helps Gemini
+   * separate regulatory tables from the ingredient narrative before merging.
+   */
+  _structuralOcrHintsForMerge(rawText) {
+    const t = String(rawText || '');
+    if (!t.trim()) return '';
+    const tags = [];
+    if (/\bIngredients?\s*:/i.test(t)) tags.push('ingredients_header');
+    if (/\bComposition\s*:/i.test(t)) tags.push('composition_header');
+    if (/\bGuaranteed\s+Analysis\b/i.test(t)) tags.push('guaranteed_analysis');
+    if (/\bAnalytical\s+(?:constituents|components)\b/i.test(t)) tags.push('analytical_table');
+    if (/\bTypical\s+Analysis\b/i.test(t)) tags.push('typical_analysis');
+    if (/\bCalorie\s+Content\b/i.test(t)) tags.push('calorie_content');
+    if (/\bNutritional\s+Additives\b/i.test(t)) tags.push('nutritional_additives');
+    if (/\bCrude\s+(?:Protein|Fat|Fiber)\b/i.test(t)) tags.push('crude_nutrient_tokens');
+    if (/\bMoisture\b.*(?:%|\bmin\b|\bmax\b)/i.test(t)) tags.push('moisture_percent_pattern');
+    return tags.length > 0 ? `[merge_hints: ${tags.join(', ')}]\n` : '';
+  }
+
   /**
    * Stage-2 helper for the Cloud-Vision pipeline: take the raw text
    * blocks Cloud Vision extracted from each rotated frame and turn
@@ -814,7 +848,7 @@ Rules:
     const framesBlock = frames
       .map(
         f =>
-          `Photo ${f.frameIndex} (raw OCR):\n"""\n${f.rawText}\n"""`
+          `Photo ${f.frameIndex} (raw OCR):\n${this._structuralOcrHintsForMerge(f.rawText)}"""\n${f.rawText}\n"""`
       )
       .join('\n\n');
 
@@ -831,11 +865,34 @@ Photos are listed in capture / rotation order — the user rotated in
 ONE direction, so consecutive photos are rotationally adjacent on
 the can / pouch.
 
+Each photo may start with a single server line "[merge_hints: …]"
+listing cheap regex hits detected in THAT dump's text (e.g.
+guaranteed_analysis, ingredients_header). Use hints only as weak
+structure — the quoted OCR body always wins if they disagree.
+
+REGION SEPARATION (do this mentally before step 1):
+Many frames interleave two vertical columns or adjacent blocks: (A)
+regulatory analysis (Guaranteed / Typical / Analytical constituents,
+Crude Protein/Fat/Fiber, Moisture with min/max and %, Calorie Content)
+and (B) the ingredient statement under "Ingredients:". OCR reading
+order can splice them into one linear stream. GA rows are NOT
+ingredients: they pair a nutrient label with regulatory min/max and a
+percentage. Ingredient premix lines ("Vitamins (...)", "Minerals (...)",
+etc.) enumerate additives by name inside parentheses — they are NOT
+GA moisture rows even if the word "Moisture" or "Crude" leaked in from
+a neighboring column. Never attach GA headers to premix parentheses.
+
 RAW OCR DUMPS:
 
 ${framesBlock}
 
 Procedure (in priority order):
+
+  0. MAP REGIONS (silent, mandatory). For each photo, mark which spans
+     are GA / calorie / feeding vs true ingredient-list narrative. When
+     two printed regions collide in the OCR text, follow the
+     Ingredients: comma-list continuity — do not pull GA table rows into
+     the ingredient output.
 
   1. ANCHOR THE START. Scan all dumps for a clear start signal:
        a. The literal text "Ingredients:" (or "INGREDIENTS:",
@@ -877,13 +934,16 @@ Procedure (in priority order):
      explode inner commas into separate top-level ingredients unless
      the label clearly prints them outside the parentheses; (d) NEVER
      drop this block because inner tokens resemble a Guaranteed
-     Analysis table — it is still part of the ingredient list unless
-     it clearly sits under a GA heading with crude protein/fat/etc.
+     Analysis table — it is still part of the ingredient list when it
+     follows the ingredient narrative, even if GA text appears earlier
+     in the same OCR dump. Reject ONLY when the "(" … ")" block is
+     clearly the GA table itself (percentages, min/max for crude
+     nutrients on those lines).
 
   4. EXCLUDE non-ingredient text. Discard anything that is clearly:
        - "Guaranteed Analysis" / "Crude Protein" / "Crude Fat" /
-         "Crude Fiber" / "Moisture" lines and the percentages
-         beneath them.
+         "Crude Fiber" / "Moisture" **as regulatory GA rows** (with
+         min/max and % on those lines).
        - "Feeding Guidelines" / "Storage" / "Best By" / "Made in".
        - AAFCO statements ("complete and balanced for all life
          stages", "formulated to meet the nutritional levels...").
@@ -984,7 +1044,16 @@ PARTIAL LISTS:
 ${framesBlock}
 
 Reconstruct the COMPLETE, deduplicated, ordered ingredient list as
-printed on the panel. Procedure (in priority order):
+printed on the panel.
+
+REGULATORY vs INGREDIENT: A partial list may still contain Guaranteed
+Analysis-style lines ("Crude Protein", "Moisture (max) …%") if the
+per-frame OCR bled columns together. Those are NOT ingredients — drop
+them. Ingredient premix clusters ("Vitamins (...)", "Minerals (...)")
+remain ingredients; never replace their header with GA words like
+"Moisture" just because GA lines appeared nearby in the same frame.
+
+Procedure (in priority order):
 
   1. ANCHOR: pick the starting frame.
        a. Prefer a frame tagged [START ANCHOR: ingredients_header].
@@ -1009,11 +1078,13 @@ printed on the panel. Procedure (in priority order):
      Position it using the surrounding ingredients in the frame
      where it appeared.
 
-  5b. PARENTHETICAL ENUMERATION (same as raw-merge 3b). Any printed
+  5b. PARENTHETICAL ENUMERATION (same intent as raw-merge 3b). Any printed
      HEADER "(" long comma-list ")" cluster is ONE ingredient even if
      wrapped or split across partial lists / photos — reassemble; do
-     not drop or explode inner commas; do not confuse with GA unless
-     under a GA heading with percentages.
+     not drop or explode inner commas. GA rows use min/max and % for
+     crude nutrients; premix lines list additive names — if both appear
+     intertwined in a partial list, keep premix as ingredients and drop
+     GA table lines.
 
   6. NEVER alphabetise. NEVER sort by length or plausibility. NEVER
      fall back to "the order I happened to encounter ingredients
@@ -1081,7 +1152,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-premix-inject-v5', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v6', 'utf8'),
         ])
       )
       .digest('hex');
