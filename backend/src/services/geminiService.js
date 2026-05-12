@@ -136,7 +136,20 @@ INGREDIENT LIST EXTRACTION RULES (very important):
   * Preservation/marketing claims: "This is a naturally preserved product", "Naturally preserved", "Preserved with mixed tocopherols" (when written as a standalone sentence — but DO keep "Mixed Tocopherols" itself if listed as an ingredient)
   * Allergen warnings: "May contain traces of...", "Contains: ..."
   * Guaranteed analysis, feeding instructions, storage, expiration, net weight, or any sentence-like text
-- For "ingredientsList", each item must be a short noun phrase (typically 1–6 words). If you find yourself writing a full sentence as an item, it is not an ingredient — drop it.
+- For "ingredientsList", each item is usually a short noun phrase (1–6 words).
+  EXCEPTION — PARENTHETICAL ENUMERATION (any group header): The panel may
+  show ONE legal ingredient as a header word or short phrase immediately
+  followed by "(" then many comma-separated sub-items ending with ")",
+  often wrapping across several printed lines (common for vitamin/mineral
+  premixes, trace-mineral packs, amino-acid packs, probiotics/enzymes
+  listed in a cluster, etc.). Treat that whole header + one balanced
+  "(" … ")" span as ONE list item. Do NOT split on inner commas into
+  separate top-level items; do NOT drop the block for length; do NOT
+  discard it just because inner tokens look "table-like" — it is still
+  ingredient-list text unless it clearly sits under a Guaranteed Analysis
+  heading with crude protein/fat/fiber/moisture percentages.
+- If you find yourself writing a full standalone marketing sentence as
+  an item, it is not an ingredient — drop it.
 - For "rawIngredientsText", include ONLY the verbatim ingredient list itself, stopping at the first non-ingredient sentence (e.g., stop before "This is a naturally preserved product." or "Manufactured in...").`;
 
     try {
@@ -393,6 +406,15 @@ Rules:
 - A word that is cut off at the edge of the photo (e.g. "Chicken Me…"
   or "…l, Brown Rice") IS still listed — keep your best read of the
   fragment so the merge step can stitch it.
+- If you see a noun-phrase HEADER immediately followed by "(" and a long
+  comma-separated list inside parentheses spanning multiple lines in this
+  photo (vitamin/mineral premixes, trace minerals, amino acids, probiotics,
+  etc. — examples are NOT exhaustive), treat the ENTIRE header + one balanced
+  "(" … ")" span as ONE ingredient string — either one array element, or
+  consecutive elements that are obvious fragments of the SAME span so the
+  merge step can join them. Do NOT split on inner commas into separate
+  ingredients unless the label clearly prints those items OUTSIDE the
+  parentheses as top-level comma-separated entries.
 - Skip sentences and disclaimers ("manufactured", "preserved with",
   "guaranteed analysis", "feeding", "store ", "best by", "may contain",
   AAFCO statements, marketing copy).
@@ -508,6 +530,23 @@ Procedure (in priority order):
      minerals, preservatives like "Niacin", "Zinc Proteinate",
      "Mixed Tocopherols", "Rosemary Extract") are especially common
      in the singleton bucket because the print is small.
+
+  3b. PARENTHETICAL ENUMERATION = ONE INGREDIENT (critical).
+     Labels often print ONE legal ingredient as: a short HEADER (noun
+     phrase) immediately followed by "(" then many comma-separated
+     sub-items ending with ")", wrapping across 2+ physical lines.
+     Examples include but are NOT limited to: "Vitamins (...)",
+     "Minerals (...)", "Trace Minerals (...)", "Amino Acids (...)",
+     probiotic/enzyme clusters, etc. Raw OCR splits these across lines
+     or across adjacent photos (small type, left edge of a can).
+     You MUST: (a) concatenate fragments until the closing ")" that
+     balances the "(" that opened right after the header; (b) output
+     exactly ONE string in "ingredients" for that block; (c) do NOT
+     explode inner commas into separate top-level ingredients unless
+     the label clearly prints them outside the parentheses; (d) NEVER
+     drop this block because inner tokens resemble a Guaranteed
+     Analysis table — it is still part of the ingredient list unless
+     it clearly sits under a GA heading with crude protein/fat/etc.
 
   4. EXCLUDE non-ingredient text. Discard anything that is clearly:
        - "Guaranteed Analysis" / "Crude Protein" / "Crude Fat" /
@@ -637,6 +676,13 @@ printed on the panel. Procedure (in priority order):
      the tail of the list, items at the edge of a frame, etc.).
      Position it using the surrounding ingredients in the frame
      where it appeared.
+
+  5b. PARENTHETICAL ENUMERATION (same as raw-merge 3b). Any printed
+     HEADER "(" long comma-list ")" cluster is ONE ingredient even if
+     wrapped or split across partial lists / photos — reassemble; do
+     not drop or explode inner commas; do not confuse with GA unless
+     under a GA heading with percentages.
+
   6. NEVER alphabetise. NEVER sort by length or plausibility. NEVER
      fall back to "the order I happened to encounter ingredients
      across the lists". Only the panel's printed order is correct.
