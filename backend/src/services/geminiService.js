@@ -249,7 +249,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v6', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v8', 'utf8'),
         ])
       )
       .digest('hex');
@@ -576,13 +576,18 @@ Rules:
 
   /**
    * Headers that almost always introduce a comma-enumerated premix on
-   * pet-food labels (high precision — still validated for GA context).
+   * pet-food labels. Matches here are validated with _isDeniedParenHeader
+   * and _parenInnerLooksLikePremix; they are NOT subject to GA-region
+   * lookback (that heuristic is only for the generic "(" walk in branch B).
    */
   _namedParenPremixRegexes() {
     return [
       // "Vitamins (" / "Vitamin (" — also colon or line-break before '(' (common on labels).
       /\bVitamins?\s*(?:\n\s*)?\s*\(/gi,
       /\bVitamins?\s*:\s*\(/gi,
+      // OCR drops leading V on "Vitamins"
+      /\bitamins\s*(?:\n\s*)?\s*\(/gi,
+      /\bitamins\s*:\s*\(/gi,
       /\bMinerals?\s*(?:\n\s*)?\s*\(/gi,
       /\bMinerals?\s*:\s*\(/gi,
       /\bTrace\s+Minerals?\s*(?:\n\s*)?\s*\(/gi,
@@ -655,18 +660,39 @@ Rules:
     if (commas >= 5) return true;
     if (len >= 85 && commas >= 3) return true;
 
-    // Named headers: allow slightly looser inner (OCR may garble one token)
-    const hn = this._normIngHay(header);
-    if (
-      /\b(vitamins?|minerals?|trace|amino|probiotic|microbial|enzyme|chelat|micronutrient|nutrient|electrolyte|preservative|flavors?)\b/i.test(
-        hn
-      ) &&
-      (commas >= 2 || len >= 48)
-    ) {
+    // Named premix header: same keyword coverage as _namedParenPremixRegexes()
+    // (looser inner threshold when header clearly labels a legal cluster).
+    if (this._headerLooksLikeNamedPremixKeyword(header) && (commas >= 2 || len >= 48)) {
       return true;
     }
 
     return false;
+  }
+
+  /**
+   * True when header matches any premix opener we scan for in branch A
+   * (mirrors _namedParenPremixRegexes intent for inner heuristics).
+   */
+  _headerLooksLikeNamedPremixKeyword(header) {
+    const h = this._normIngHay(header);
+    if (h.length < 2 || h.length > 56) return false;
+    return (
+      /\b(?:vitamins?|itamins)\b/i.test(h) ||
+      /\bminerals?\b/i.test(h) ||
+      /\btrace\s+minerals?\b/i.test(h) ||
+      /\b(?:trace\s+)?elements?\b/i.test(h) ||
+      /\bamino\s+acids?\b/i.test(h) ||
+      /\bprobiotics?\b/i.test(h) ||
+      /\b(?:direct[- ]?fed\s+)?microbials?\b/i.test(h) ||
+      /\benzymes?\b/i.test(h) ||
+      /\bchelated\s+minerals?\b/i.test(h) ||
+      /\bmicronutrients?\b/i.test(h) ||
+      /\bnutrient\s+(?:premix|blend|package)\b/i.test(h) ||
+      /\belectrolytes?\b/i.test(h) ||
+      /\bpreservatives?\b/i.test(h) ||
+      /\bnatural\s+flavors?\b/i.test(h) ||
+      /\b(?:added\s+)?(?:vitamins|minerals)\s+and\s+minerals\b/i.test(h)
+    );
   }
 
   _wholeBlockLooksDisclaimed(block) {
@@ -708,24 +734,10 @@ Rules:
           const start = m.index;
           const openIdx = m.index + m[0].length - 1;
           if (text[openIdx] !== '(') continue;
-          // Vitamins/Minerals/… blocks live in the ingredient panel — a long
-          // lookback can pick up "Crude Protein …%" from elsewhere in the
-          // concatenated multi-frame dump and wrongly skip a real match.
           const header = text.slice(start, openIdx).replace(/\s+/g, ' ').trim();
-          const isCorePremixHeader =
-            /\b(vitamins?|minerals?|trace\s+minerals?|amino\s+acids?)\b/i.test(header);
-          if (
-            !isCorePremixHeader &&
-            this._isLikelyGaRegionBefore(text, start)
-          ) {
-            continue;
-          }
-          if (
-            isCorePremixHeader &&
-            this._isLikelyGaRegionBefore(text, start, { narrowWindow: true })
-          ) {
-            continue;
-          }
+          // Named regexes are ingredient-panel headers only; GA lookback
+          // produced false negatives for probiotics, minerals, flavors, etc.
+          // when Crude Protein / Calorie Content appeared above on the label.
           const closeIdx = this._closingParenIndex(text, openIdx);
           if (closeIdx === -1) continue;
           const inner = text.slice(openIdx + 1, closeIdx);
@@ -892,7 +904,11 @@ Procedure (in priority order):
      are GA / calorie / feeding vs true ingredient-list narrative. When
      two printed regions collide in the OCR text, follow the
      Ingredients: comma-list continuity — do not pull GA table rows into
-     the ingredient output.
+     the ingredient output. This step must NOT cause you to omit any
+     legal parenthetical premix cluster from the dumps (vitamins,
+     minerals, probiotics, enzymes, natural flavors, preservatives, etc.
+     — see 3b), even if merge_hints lists guaranteed_analysis for the
+     same photo.
 
   1. ANCHOR THE START. Scan all dumps for a clear start signal:
        a. The literal text "Ingredients:" (or "INGREDIENTS:",
@@ -1152,7 +1168,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v6', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v8', 'utf8'),
         ])
       )
       .digest('hex');
