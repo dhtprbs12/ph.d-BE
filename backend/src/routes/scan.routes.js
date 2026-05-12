@@ -1191,6 +1191,7 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
         ingredientsList
       );
     }
+    ingredientsList = ingredientAnalyzer.postProcessExtractedIngredientList(ingredientsList);
 
     if (ingredientsList.length === 0) {
       return res.status(422).json({
@@ -1448,10 +1449,11 @@ router.post('/commit-back/:pendingScanId', express.json({ limit: '256kb' }), asy
 
     // Cap to a sensible upper bound — labels never list more than ~80
     // ingredients in practice, and unbounded input is a DoS vector.
-    const cleanIngredients = ingredients
+    let cleanIngredients = ingredients
       .map(s => String(s || '').trim())
       .filter(s => s.length > 0 && s.length <= 200)
       .slice(0, 120);
+    cleanIngredients = ingredientAnalyzer.postProcessExtractedIngredientList(cleanIngredients);
 
     if (cleanIngredients.length === 0) {
       return res.status(400).json({ error: 'ingredients list contained no usable entries' });

@@ -315,9 +315,9 @@ INGREDIENT LIST EXTRACTION RULES (very important):
     const merged = await this._mergeRawTextWithGemini(usableFrames, imageBuffers.length);
 
     const haystack = usableFrames.map(f => f.rawText).join('\n\n');
-    const recoveredList = this._injectParentheticalPremixFromHaystack(
-      haystack,
-      merged.ingredientsList || []
+    const ingredientAnalyzer = require('./ingredientAnalyzer');
+    const recoveredList = ingredientAnalyzer.postProcessExtractedIngredientList(
+      this._injectParentheticalPremixFromHaystack(haystack, merged.ingredientsList || [])
     );
     const mergedOut = {
       ...merged,
@@ -375,9 +375,9 @@ INGREDIENT LIST EXTRACTION RULES (very important):
     const merged = await this._mergeFramesWithGemini(usableFrames, imageBuffers.length);
 
     const haystack = usableFrames.map(f => (Array.isArray(f.ingredients) ? f.ingredients : []).join('\n')).join('\n\n');
-    const recoveredList = this._injectParentheticalPremixFromHaystack(
-      haystack,
-      merged.ingredientsList || []
+    const ingredientAnalyzer = require('./ingredientAnalyzer');
+    const recoveredList = ingredientAnalyzer.postProcessExtractedIngredientList(
+      this._injectParentheticalPremixFromHaystack(haystack, merged.ingredientsList || [])
     );
     const mergedOut = {
       ...merged,
@@ -1698,7 +1698,11 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
             return cleaned;
           }).filter(ing => ing.length > 0);
         }
-        
+        {
+          const ingredientAnalyzer = require('./ingredientAnalyzer');
+          ingredientsList = ingredientAnalyzer.postProcessExtractedIngredientList(ingredientsList);
+        }
+
         // packageShape feeds the front-end's auto mode-toggle for the
         // back-label step. Constrain to the closed set ("flat" / "round"
         // / "pouch") and fall back to null so the client can apply its

@@ -49,6 +49,19 @@ class IngredientAnalyzer {
       };
     }
 
+    ingredientsList = this.postProcessExtractedIngredientList(
+      ingredientsList.map(s => String(s || '').trim()).filter(Boolean)
+    );
+    if (!ingredientsList || ingredientsList.length === 0) {
+      return {
+        ...analysis,
+        finalScore: 0,
+        grade: 'F',
+        recommendation: 'not_recommended',
+        summary: 'No ingredients found to analyze.'
+      };
+    }
+
     // Get pet's health conditions - use passed data first, fallback to DB lookup
     const petConditions = pet.healthConditions && pet.healthConditions.length > 0
       ? pet.healthConditions
@@ -1010,7 +1023,7 @@ class IngredientAnalyzer {
     const sentencePattern =
       /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|naturally\s+preserved|preserve(?:d|s)?\s+freshness|facility|guaranteed\s+analysis|feeding|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before))\b/i;
 
-    return ingredients.filter(i => {
+    const filtered = ingredients.filter(i => {
       const lower = i.toLowerCase();
       if (filterWords.has(lower)) return false;
       if (/^\d+%?$/.test(i)) return false;
@@ -1020,6 +1033,129 @@ class IngredientAnalyzer {
       if (wordCount > 8) return false;
       return true;
     });
+    return this.postProcessExtractedIngredientList(filtered);
+  }
+
+  /**
+   * First balanced (... span in a string (top-level).
+   * @returns {{ inner: string, closeIdx: number } | null}
+   */
+  _firstBalancedParenSpan(line) {
+    const open = line.indexOf('(');
+    if (open === -1) return null;
+    let depth = 0;
+    for (let i = open; i < line.length; i++) {
+      const c = line[i];
+      if (c === '(') depth++;
+      else if (c === ')') {
+        depth--;
+        if (depth === 0) return { inner: line.slice(open + 1, i), closeIdx: i };
+      }
+    }
+    return null;
+  }
+
+  /** OCR / GA-merge garbage inside premix parentheses (not exact token fixes). */
+  _premixInnerNoiseScore(inner) {
+    if (!inner) return 0;
+    const lo = inner.toLowerCase();
+    let n = 0;
+    if (/\bcrude\s+fiber\b/i.test(lo)) n += 12;
+    if (/fiberima/i.test(lo)) n += 10;
+    if (/calorie\s*conte/i.test(lo)) n += 10;
+    if (/\bguaranteed\s+analysis\b/i.test(lo)) n += 14;
+    if (/\bcrude\s+protein\b/i.test(lo)) n += 8;
+    if (/\bprotein\s*%\b/i.test(lo)) n += 6;
+    return n;
+  }
+
+  /**
+   * Fix common OCR / layout errors on extracted lines, then drop duplicate
+   * Minerals(/Vitamins( rows when one copy is clearly corrupted.
+   */
+  postProcessExtractedIngredientList(list) {
+    if (!Array.isArray(list) || list.length === 0) return list;
+    const step1 = list.map(s => this._fixOCRPremixLine(String(s || '').trim())).filter(Boolean);
+    return this._dedupeNoisyPremixDuplicates(step1);
+  }
+
+  _fixOCRPremixLine(line) {
+    let s = line.trim();
+    if (!s) return s;
+
+    // Dropped leading "M" on Minerals (Vision / seam splice)
+    s = s.replace(/^\s*rinerals\b/i, 'Minerals');
+    s = s.replace(/^\s*inerals\b/i, 'Minerals');
+    s = s.replace(/^\s*winerals\b/i, 'Minerals');
+
+    // GA "Moisture" line fused with a vitamin/mineral premix enumerator
+    if (/^\s*moisture\s*\(/i.test(s)) {
+      const span = this._firstBalancedParenSpan(s);
+      if (span) {
+        const hi = span.inner;
+        const vitLike =
+          /\b(vitamin|thiam|riboflav|niacin|pyridox|pantothen|folic|folate|biotin|cyanocobal|choline|supplement|tocopherol|calciferol|ascorb|menadione)\b/i.test(
+            hi
+          );
+        const minLike =
+          /\b(proteinate|proteinates|zinc|copper|manganese|iron|selenium|iodide|iodate|chloride|oxide|sulfate|carbonate|phosphate|chelat)\b/i.test(
+            hi
+          ) && !vitLike;
+        const suffix = s.slice(span.closeIdx + 1);
+        if (vitLike) {
+          return `Vitamins (${span.inner})${suffix}`;
+        }
+        if (minLike) {
+          return `Minerals (${span.inner})${suffix}`;
+        }
+      }
+    }
+
+    return s;
+  }
+
+  /**
+   * When two "Minerals (" or two "Vitamins (" rows exist and one has heavy
+   * GA/OCR noise, keep the cleaner row.
+   */
+  _dedupeNoisyPremixDuplicates(items) {
+    const headerRe = /^\s*(vitamins?|minerals?)\s*\(/i;
+
+    const kindOf = line => {
+      const m = line.match(headerRe);
+      if (!m) return null;
+      return /^v/i.test(m[1]) ? 'vitamins' : 'minerals';
+    };
+
+    const byKind = { vitamins: [], minerals: [] };
+    items.forEach((line, idx) => {
+      const k = kindOf(line);
+      if (k) byKind[k].push(idx);
+    });
+
+    const removeIdx = new Set();
+
+    for (const kind of ['minerals', 'vitamins']) {
+      const idxs = byKind[kind];
+      if (idxs.length < 2) continue;
+
+      const scored = idxs.map(idx => {
+        const span = this._firstBalancedParenSpan(items[idx]);
+        const inner = span ? span.inner : '';
+        return { idx, noise: this._premixInnerNoiseScore(inner), innerLen: inner.length };
+      });
+      scored.sort((a, b) => a.noise - b.noise || b.innerLen - a.innerLen);
+
+      const best = scored[0];
+      for (let i = 1; i < scored.length; i++) {
+        const o = scored[i];
+        if (best.noise >= 8) break;
+        if (o.noise >= 8 && best.noise <= 3) removeIdx.add(o.idx);
+        else if (o.noise > best.noise + 4) removeIdx.add(o.idx);
+      }
+    }
+
+    return items.filter((_, i) => !removeIdx.has(i));
   }
 
   /**
