@@ -234,9 +234,16 @@ INGREDIENT LIST EXTRACTION RULES (very important):
     }
 
     // Cache key spans ALL frames so an exact re-scan hits cache.
+    // Pipeline-salt suffix busts stale ocr_cache rows when post-merge
+    // heuristics change (same pixels → new extraction).
     const combinedHash = crypto
       .createHash('sha256')
-      .update(Buffer.concat(imageBuffers.map(b => crypto.createHash('sha256').update(b).digest())))
+      .update(
+        Buffer.concat([
+          ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
+          Buffer.from('multiocr-premix-inject-v4', 'utf8'),
+        ])
+      )
       .digest('hex');
 
     const cached = await this.checkCache(combinedHash);
@@ -307,18 +314,29 @@ INGREDIENT LIST EXTRACTION RULES (very important):
     );
     const merged = await this._mergeRawTextWithGemini(usableFrames, imageBuffers.length);
 
+    const haystack = usableFrames.map(f => f.rawText).join('\n\n');
+    const recoveredList = this._injectParentheticalPremixFromHaystack(
+      haystack,
+      merged.ingredientsList || []
+    );
+    const mergedOut = {
+      ...merged,
+      ingredientsList: recoveredList,
+      rawIngredientsText: recoveredList.join(', '),
+    };
+
     await this.cacheResult(combinedHash, {
-      rawIngredientsText: merged.rawIngredientsText,
-      ingredientsList: merged.ingredientsList,
+      rawIngredientsText: mergedOut.rawIngredientsText,
+      ingredientsList: mergedOut.ingredientsList,
     });
 
     console.log(
-      `✅ [MULTI-OCR] ${merged.ingredientsList.length} ingredients, ` +
-      `confidence=${merged.confidence.toFixed(2)}, complete=${merged.isComplete}, ` +
-      `missing=${merged.missingSection || 'none'}`
+      `✅ [MULTI-OCR] ${mergedOut.ingredientsList.length} ingredients, ` +
+      `confidence=${mergedOut.confidence.toFixed(2)}, complete=${mergedOut.isComplete}, ` +
+      `missing=${mergedOut.missingSection || 'none'}`
     );
 
-    return { ...merged, imageCount: imageBuffers.length };
+    return { ...mergedOut, imageCount: imageBuffers.length };
   }
 
   /**
@@ -356,12 +374,23 @@ INGREDIENT LIST EXTRACTION RULES (very important):
     );
     const merged = await this._mergeFramesWithGemini(usableFrames, imageBuffers.length);
 
+    const haystack = usableFrames.map(f => (Array.isArray(f.ingredients) ? f.ingredients : []).join('\n')).join('\n\n');
+    const recoveredList = this._injectParentheticalPremixFromHaystack(
+      haystack,
+      merged.ingredientsList || []
+    );
+    const mergedOut = {
+      ...merged,
+      ingredientsList: recoveredList,
+      rawIngredientsText: recoveredList.join(', '),
+    };
+
     await this.cacheResult(combinedHash, {
-      rawIngredientsText: merged.rawIngredientsText,
-      ingredientsList: merged.ingredientsList,
+      rawIngredientsText: mergedOut.rawIngredientsText,
+      ingredientsList: mergedOut.ingredientsList,
     });
 
-    return { ...merged, imageCount: imageBuffers.length };
+    return { ...mergedOut, imageCount: imageBuffers.length };
   }
 
   /**
@@ -464,6 +493,287 @@ Rules:
           ? parsed.start_anchor
           : null,
     };
+  }
+
+  /**
+   * Deterministic recovery: LLM merge often drops long legal ingredients
+   * printed as "Header (a, b, c, …)" — vitamin/mineral premixes,
+   * probiotics, amino packs, chelates, etc. We scan Cloud Vision raw
+   * text for (1) high-precision named headers and (2) a generic
+   * balanced-parenthesis enumerator with inner heuristics + denylists
+   * to avoid GA rows, "(source of …)", and marketing sentences.
+   *
+   * @param {string} haystack  Raw OCR text (multi-frame join is fine).
+   * @param {string[]} ingredientsList  Gemini merge output.
+   * @returns {string[]}
+   */
+  _injectParentheticalPremixFromHaystack(haystack, ingredientsList) {
+    const list = Array.isArray(ingredientsList)
+      ? ingredientsList.map(s => String(s || '').trim()).filter(Boolean)
+      : [];
+    if (!haystack || typeof haystack !== 'string' || haystack.length < 40) {
+      return list;
+    }
+
+    const spans = this._extractPremixParentheticalSpans(haystack);
+    if (spans.length === 0) return list;
+
+    let out = list.slice();
+    for (const { block, start } of spans) {
+      if (this._ingredientListAlreadyContainsPremixBlock(out, block)) continue;
+      const insertAt = this._premixInsertIndex(haystack, out, start);
+      out.splice(insertAt, 0, block);
+      console.log(
+        `[MULTI-OCR] Paren-cluster inject @${insertAt}: "${block.slice(0, 72)}${block.length > 72 ? '…' : ''}"`
+      );
+    }
+    return out;
+  }
+
+  /** Lowercase + collapse whitespace for fuzzy substring tests. */
+  _normIngHay(s) {
+    return String(s || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  _isLikelyGaRegionBefore(haystack, headerStartIdx) {
+    const lo = Math.max(0, headerStartIdx - 260);
+    const slice = haystack.slice(lo, headerStartIdx);
+    return (
+      /\bGuaranteed\s+Analysis\b/i.test(slice) ||
+      /\bAnalytical\s+(?:constituents|components)\b/i.test(slice) ||
+      /\bTypical\s+Analysis\b/i.test(slice) ||
+      /\bCalorie\s+Content\b/i.test(slice) ||
+      /\bNutritional\s+Additives\b/i.test(slice) ||
+      /\bCrude\s+Protein\b[\s\S]{0,120}%/i.test(slice)
+    );
+  }
+
+  /** @returns {number} index of closing ')' that balances openParenIdx, or -1 */
+  _closingParenIndex(haystack, openParenIdx) {
+    let depth = 0;
+    for (let i = openParenIdx; i < haystack.length; i++) {
+      const c = haystack[i];
+      if (c === '(') depth++;
+      else if (c === ')') {
+        depth--;
+        if (depth === 0) return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Headers that almost always introduce a comma-enumerated premix on
+   * pet-food labels (high precision — still validated for GA context).
+   */
+  _namedParenPremixRegexes() {
+    return [
+      /\bVitamins?\s*\(/gi,
+      /\bMinerals?\s*\(/gi,
+      /\bTrace\s+Minerals?\s*\(/gi,
+      /\bAmino\s+Acids?\s*\(/gi,
+      /\bProbiotics?\s*\(/gi,
+      /\b(?:Direct-?fed\s+)?Microbials?\s*\(/gi,
+      /\bEnzymes?\s*\(/gi,
+      /\bChelated\s+Minerals?\s*\(/gi,
+      /\b(?:Trace\s+)?Elements?\s*\(/gi,
+      /\bMicronutrients?\s*\(/gi,
+      /\bNutrient\s+(?:Premix|Blend|Package)\s*\(/gi,
+      /\bElectrolytes?\s*\(/gi,
+      /\bPreservatives?\s*\(/gi,
+      /\bNatural\s+Flavors?\s*\(/gi,
+      /\b(?:Added\s+)?(?:Vitamins|Minerals)\s+and\s+Minerals\s*\(/gi,
+    ];
+  }
+
+  /** Reject marketing / GA / facility / allergen clause openers. */
+  _isDeniedParenHeader(header) {
+    const h = this._normIngHay(header);
+    if (h.length < 2 || h.length > 56) return true;
+    return (
+      /^(manufactured|guaranteed|feeding|storage|distributor|packaged|processed|allergen|warning|disclaimer|not\s+for|for\s+use|questions|contact|website|best\s+by|use\s+by)/i.test(
+        h
+      ) ||
+      /^(contains|may\s+contain|ingredients)\s*$/i.test(h) ||
+      /\b(guaranteed|analysis|calorie\s+content)\b/i.test(h) ||
+      /^crude\b/i.test(h) ||
+      /^if\s+/i.test(h)
+    );
+  }
+
+  /**
+   * Walk back from '(' to capture a plausible header noun phrase
+   * (letters/digits/punctuation used in ingredient names).
+   * @returns {{ headerStart: number, header: string } | null}
+   */
+  _walkBackParenHeader(text, openParenIdx) {
+    let j = openParenIdx - 1;
+    while (j >= 0 && /\s/.test(text[j])) j--;
+    if (j < 0) return null;
+    let k = j;
+    while (k >= 0 && /[A-Za-z0-9,.\-&'\/]/.test(text[k])) k--;
+    const headerStart = k + 1;
+    const header = text.slice(headerStart, openParenIdx).replace(/\s+/g, ' ').trim();
+    if (header.length < 2 || header.length > 56) return null;
+    if (!/[A-Za-z]/.test(header)) return null;
+    return { headerStart, header };
+  }
+
+  /** Inner text of parentheses looks like a premix / cluster, not "(min 5%)". */
+  _parenInnerLooksLikePremix(header, inner) {
+    const hi = this._normIngHay(inner);
+    const commas = (hi.match(/,/g) || []).length;
+    const len = hi.length;
+
+    if (len < 18) return false;
+    if (/\bmin\b.*%|\bmax\b.*%|\bnot\s+less\s+than\b.*%/i.test(hi) && commas <= 2 && len < 90) {
+      return false;
+    }
+    if (/\bcrude\s+(protein|fat|fiber)\b/i.test(hi)) return false;
+
+    // Strong inner vocabulary typical of vitamin/mineral/probiotic tails
+    const PREMIX_INNER =
+      /(supplement|proteinate|proteinates?|chloride|hydrochloride|mononitrate|thiamine|riboflavin|pyridoxine|pantothenate|folic|folate|biotin|niacin|choline|tocopherol|chelate|chelated|fermentation\s+product|lactobacillus|enterococcus|bacillus|acidophilus|bifidobacterium|streptococcus|subtilis|faecium|licheniformis|ascorb|citrate|oxide|sulfate|selenite|iodate|carbonate|phosphate|polynicotinate|methionine|taurine|lysine|carnitine|glucosamine|chondroitin|extract|derivative|enzyme|lipase|protease|cellulase|amylase)/i;
+    if (PREMIX_INNER.test(hi) && (commas >= 2 || len >= 55)) return true;
+    if (commas >= 5) return true;
+    if (len >= 85 && commas >= 3) return true;
+
+    // Named headers: allow slightly looser inner (OCR may garble one token)
+    const hn = this._normIngHay(header);
+    if (
+      /\b(vitamins?|minerals?|trace|amino|probiotic|microbial|enzyme|chelat|micronutrient|nutrient|electrolyte|preservative|flavors?)\b/i.test(
+        hn
+      ) &&
+      (commas >= 2 || len >= 48)
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  _wholeBlockLooksDisclaimed(block) {
+    const b = this._normIngHay(block);
+    return (
+      /\bmanufactured\s+in\b/i.test(b) ||
+      /\bmay\s+contain\s+traces\b/i.test(b) ||
+      /\bthis\s+is\s+a\s+naturally\b/i.test(b)
+    );
+  }
+
+  /**
+   * @param {string} haystack
+   * @returns {{ block: string, start: number }[]}
+   */
+  _extractPremixParentheticalSpans(haystack) {
+    const collectFromText = text => {
+      const spans = [];
+      const seen = new Set();
+
+      const pushSpan = (start, closeIdx, rawBlock) => {
+        let block = String(rawBlock || '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (block.length < 48) return;
+        if (this._wholeBlockLooksDisclaimed(block)) return;
+        if (/\bcrude\s+(protein|fat|fiber)\b/i.test(block)) return;
+        const key = block.toLowerCase().slice(0, 140);
+        if (seen.has(key)) return;
+        seen.add(key);
+        spans.push({ block, start });
+      };
+
+      // --- A) Named high-precision headers ---
+      for (const re of this._namedParenPremixRegexes()) {
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          const start = m.index;
+          const openIdx = m.index + m[0].length - 1;
+          if (text[openIdx] !== '(') continue;
+          if (this._isLikelyGaRegionBefore(text, start)) continue;
+          const closeIdx = this._closingParenIndex(text, openIdx);
+          if (closeIdx === -1) continue;
+          const inner = text.slice(openIdx + 1, closeIdx);
+          const header = text.slice(start, openIdx).replace(/\s+/g, ' ').trim();
+          if (this._isDeniedParenHeader(header)) continue;
+          if (!this._parenInnerLooksLikePremix(header, inner)) continue;
+          pushSpan(start, closeIdx, text.slice(start, closeIdx + 1));
+        }
+      }
+
+      // --- B) Generic: any '(' with a plausible header + enumerator inner ---
+      for (let i = 0; i < text.length; i++) {
+        if (text[i] !== '(') continue;
+        if (this._isLikelyGaRegionBefore(text, i)) continue;
+        const wb = this._walkBackParenHeader(text, i);
+        if (!wb) continue;
+        if (this._isDeniedParenHeader(wb.header)) continue;
+        const closeIdx = this._closingParenIndex(text, i);
+        if (closeIdx === -1) continue;
+        const inner = text.slice(i + 1, closeIdx);
+        if (!this._parenInnerLooksLikePremix(wb.header, inner)) continue;
+        // Skip very common short sourcing clauses
+        if (/^source\s+of\b/i.test(this._normIngHay(inner)) && inner.length < 120) continue;
+        pushSpan(wb.headerStart, closeIdx, text.slice(wb.headerStart, closeIdx + 1));
+      }
+
+      spans.sort((a, b) => a.start - b.start);
+      // Drop near-duplicates (OCR doubled the same line)
+      const merged = [];
+      for (const s of spans) {
+        const prev = merged[merged.length - 1];
+        if (!prev) {
+          merged.push(s);
+          continue;
+        }
+        if (Math.abs(s.start - prev.start) <= 2 && s.block === prev.block) continue;
+        if (prev.block.length >= 60 && s.block.includes(prev.block.slice(0, 40))) continue;
+        merged.push(s);
+      }
+      return merged;
+    };
+
+    const a = collectFromText(haystack);
+    if (a.length) return a;
+    const flattened = haystack.replace(/[\r\n]+/g, ' ');
+    return collectFromText(flattened);
+  }
+
+  _ingredientListAlreadyContainsPremixBlock(list, block) {
+    const nb = this._normIngHay(block);
+    if (nb.length < 24) return true;
+    const head = nb.slice(0, Math.min(56, nb.length));
+    return list.some(ing => {
+      const ni = this._normIngHay(ing);
+      if (ni.includes(head)) return true;
+      if (head.length >= 28 && ni.length >= 50 && ni.slice(0, 28) === nb.slice(0, 28)) return true;
+      return false;
+    });
+  }
+
+  /**
+   * Pick splice index so the premix lands near its printed neighbours.
+   * Falls back to near-tail when OCR alignment is weak.
+   */
+  _premixInsertIndex(haystack, list, blockStart) {
+    let bestI = -1;
+    let bestPos = -1;
+    for (let i = 0; i < list.length; i++) {
+      const ing = list[i];
+      if (!ing || ing.length < 5) continue;
+      const p = haystack.lastIndexOf(ing, Math.max(0, blockStart - 1));
+      if (p === -1) continue;
+      if (p + ing.length <= blockStart && p >= bestPos) {
+        bestPos = p;
+        bestI = i;
+      }
+    }
+    if (bestI >= 0) return bestI + 1;
+    return Math.max(0, list.length - 3);
   }
 
   /**
@@ -746,7 +1056,12 @@ missing_section:
     // practice but cheap to support.
     const combinedHash = crypto
       .createHash('sha256')
-      .update(Buffer.concat(imageBuffers.map(b => crypto.createHash('sha256').update(b).digest())))
+      .update(
+        Buffer.concat([
+          ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
+          Buffer.from('multiocr-premix-inject-v4', 'utf8'),
+        ])
+      )
       .digest('hex');
 
     const cached = await this.checkCache(combinedHash);
