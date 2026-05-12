@@ -1456,9 +1456,11 @@ router.post('/commit-back/:pendingScanId', express.json({ limit: '256kb' }), asy
 
     // Cap to a sensible upper bound — labels never list more than ~80
     // ingredients in practice, and unbounded input is a DoS vector.
+    // Parenthetical premix lines (Vitamins/Minerals/…) often exceed 200
+    // chars on real labels — do not truncate them here.
     let cleanIngredients = ingredients
       .map(s => String(s || '').trim())
-      .filter(s => s.length > 0 && s.length <= 200)
+      .filter(s => s.length > 0 && s.length <= 2000)
       .slice(0, 120);
     cleanIngredients = ingredientAnalyzer.postProcessExtractedIngredientList(cleanIngredients);
 
