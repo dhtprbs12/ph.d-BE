@@ -249,7 +249,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v8', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v9', 'utf8'),
         ])
       )
       .digest('hex');
@@ -321,6 +321,11 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       `🧩 [MULTI-OCR] Stage 2: Gemini merge of ${usableFrames.length}/${imageBuffers.length} frame texts`
     );
     const merged = await this._mergeRawTextWithGemini(usableFrames, imageBuffers.length);
+    const preList = merged.ingredientsList || [];
+    const preVit = preList.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
+    console.log(
+      `[MULTI-OCR] Stage2 merge only: n=${preList.length} mergeVitaminsLine=${preVit}`
+    );
 
     const haystack = usableFrames.map(f => f.rawText).join('\n\n');
     const ingredientAnalyzer = require('./ingredientAnalyzer');
@@ -381,6 +386,11 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       `🧩 [MULTI-OCR] Stage 2 (Gemini fallback): merging ${usableFrames.length}/${imageBuffers.length} frame results`
     );
     const merged = await this._mergeFramesWithGemini(usableFrames, imageBuffers.length);
+    const preList = merged.ingredientsList || [];
+    const preVit = preList.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
+    console.log(
+      `[MULTI-OCR] Stage2 (Gemini fallback) merge only: n=${preList.length} mergeVitaminsLine=${preVit}`
+    );
 
     const haystack = usableFrames.map(f => (Array.isArray(f.ingredients) ? f.ingredients : []).join('\n')).join('\n\n');
     const ingredientAnalyzer = require('./ingredientAnalyzer');
@@ -519,22 +529,50 @@ Rules:
     const list = Array.isArray(ingredientsList)
       ? ingredientsList.map(s => String(s || '').trim()).filter(Boolean)
       : [];
+    const mergeN = list.length;
+    const hayHasVitOpen = /\b(?:vitamins?|itamins)\s*\(/i.test(String(haystack || ''));
+    const mergeHasVitLine = list.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
+
+    const logSummary = (extra = {}) => {
+      const out = extra.out || list;
+      const outHasVitLine = out.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
+      console.log(
+        `[MULTI-OCR] Premix inject summary: haystackLen=${String(haystack || '').length} mergeN=${mergeN} ` +
+          `${Object.entries(extra)
+            .filter(([k]) => k !== 'out')
+            .map(([k, v]) => `${k}=${v}`)
+            .join(' ')} ` +
+          `haystackVitaminsOpen=${hayHasVitOpen} mergeVitaminsLine=${mergeHasVitLine} outVitaminsLine=${outHasVitLine}`
+      );
+    };
+
     if (!haystack || typeof haystack !== 'string' || haystack.length < 40) {
+      logSummary({ spans: 0, reason: 'haystack_short_or_empty' });
       return list;
     }
 
     const spans = this._extractPremixParentheticalSpans(haystack);
-    if (spans.length === 0) return list;
+    if (spans.length === 0) {
+      logSummary({ spans: 0, reason: 'no_spans' });
+      return list;
+    }
 
     let out = list.slice();
+    let skippedDup = 0;
+    let inserted = 0;
     for (const { block, start } of spans) {
-      if (this._ingredientListAlreadyContainsPremixBlock(out, block)) continue;
+      if (this._ingredientListAlreadyContainsPremixBlock(out, block)) {
+        skippedDup += 1;
+        continue;
+      }
       const insertAt = this._premixInsertIndex(haystack, out, start);
       out.splice(insertAt, 0, block);
+      inserted += 1;
       console.log(
         `[MULTI-OCR] Paren-cluster inject @${insertAt}: "${block.slice(0, 72)}${block.length > 72 ? '…' : ''}"`
       );
     }
+    logSummary({ spans: spans.length, skippedDup, inserted, out });
     return out;
   }
 
@@ -1168,7 +1206,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v8', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v9', 'utf8'),
         ])
       )
       .digest('hex');

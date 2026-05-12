@@ -1369,6 +1369,13 @@ router.post('/back-multi/:pendingScanId', upload.array('images', 8), async (req,
     console.log(`📸 [BACK-MULTI] Processing ${optimizedBuffers.length} frames for ${pendingScanId}`);
     const extracted = await geminiService.extractFromMultipleImages(optimizedBuffers, 'image/jpeg');
 
+    const srvList = extracted.ingredientsList || [];
+    const srvVit = srvList.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
+    const rawVit = /\b(?:vitamins?|itamins)\s*\(/i.test(extracted.rawIngredientsText || '');
+    console.log(
+      `📋 [BACK-MULTI] server out: n=${srvList.length} listVitaminsLine=${srvVit} rawTextVitaminsOpen=${rawVit} pending=${pendingScanId}`
+    );
+
     // Stash the extraction on the same pending entry so /commit-back can
     // pick it up. We do NOT delete the front-label entry yet — that happens
     // when commit-back finalizes (or when the 30-min cleanup fires).
@@ -1454,6 +1461,19 @@ router.post('/commit-back/:pendingScanId', express.json({ limit: '256kb' }), asy
       .filter(s => s.length > 0 && s.length <= 200)
       .slice(0, 120);
     cleanIngredients = ingredientAnalyzer.postProcessExtractedIngredientList(cleanIngredients);
+
+    const serverMulti = frontData.multiExtraction?.ingredientsList;
+    const serverN = Array.isArray(serverMulti) ? serverMulti.length : null;
+    const clientN = ingredients.length;
+    const clientVit = ingredients.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
+    const serverVit =
+      Array.isArray(serverMulti) &&
+      serverMulti.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
+    const cleanVit = cleanIngredients.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
+    console.log(
+      `📋 [COMMIT-BACK] counts: clientRaw=${clientN} serverMulti=${serverN ?? 'n/a'} ` +
+        `afterSanitize=${cleanIngredients.length} vitaminsLine client=${clientVit} serverMulti=${serverVit} postSanitize=${cleanVit} pending=${pendingScanId}`
+    );
 
     if (cleanIngredients.length === 0) {
       return res.status(400).json({ error: 'ingredients list contained no usable entries' });
