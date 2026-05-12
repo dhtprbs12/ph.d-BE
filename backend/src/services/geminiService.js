@@ -532,6 +532,16 @@ Procedure (in priority order):
      fall back to "the order I happened to encounter ingredients
      across the dumps". Only the panel's printed order is correct.
 
+  7. COVERAGE AUDIT (critical). After you build the ordered list,
+     skim every raw dump again for ingredient-style lines in the
+     panel (comma-separated noun phrases). If a phrase clearly appears
+     as an ingredient in any dump but is missing from your output —
+     and it is not an exact duplicate of an item you already merged —
+     INSERT it in the correct position using neighboring items as
+     glue. When torn between dropping vs keeping a borderline line,
+     KEEP it; a spurious extra item is less harmful than silently
+     losing a real ingredient users compare against the label.
+
 Return ONLY this JSON (no prose, no code fences):
 {
   "ingredients":      ["...", "...", ...],
@@ -630,6 +640,12 @@ printed on the panel. Procedure (in priority order):
   6. NEVER alphabetise. NEVER sort by length or plausibility. NEVER
      fall back to "the order I happened to encounter ingredients
      across the lists". Only the panel's printed order is correct.
+
+  7. COVERAGE AUDIT (critical). After merging, re-read every partial
+     list. If an ingredient line appears in exactly one photo and is
+     absent from your final output — and it is not a duplicate of an
+     adjacent merged line — add it back in the right place. When
+     unsure whether to keep a line, KEEP it.
 
 Return ONLY this JSON (no prose, no code fences):
 {
