@@ -158,7 +158,21 @@ INGREDIENT LIST EXTRACTION RULES (very important):
   heading with crude protein/fat/fiber/moisture percentages.
 - If you find yourself writing a full standalone marketing sentence as
   an item, it is not an ingredient — drop it.
-- For "rawIngredientsText", include ONLY the verbatim ingredient list itself, stopping at the first non-ingredient sentence (e.g., stop before "This is a naturally preserved product." or "Manufactured in...").`;
+- For "rawIngredientsText", include ONLY the verbatim ingredient list itself, stopping at the first non-ingredient sentence (e.g., stop before "This is a naturally preserved product." or "Manufactured in...").
+- HUMAN FOODS & CONDIMENTS (FDA-style labels — same rules as pet food):
+  Many jars, dressings, sauces, and beverages show "Nutrition Facts",
+  "Serving size", "Amount per serving", "Calories per serving", "% Daily Value",
+  "SHAKE WELL", "REFRIGERATE AFTER OPENING", "DIST. & SOLD EXCLUSIVELY BY",
+  "Distributed by", "SKU", certifier boilerplate ("Certified Organic by …"),
+  or a second duplicated "INGREDIENTS:" block from an outer sleeve. NONE of
+  that may appear inside ingredientsList or rawIngredientsText. If OCR places
+  Nutrition Facts before the ingredient paragraph, start rawIngredientsText at
+  the real "Ingredients:" / "INGREDIENTS:" line and end it where the list ends
+  (before CONTAINS / allergen banners, Nutrition Facts, or usage lines).
+  Never emit one giant ingredientsList element that concatenates the oil line,
+  Nutrition Facts numbers, marketing text, and a second INGREDIENTS header —
+  each top-level ingredient must be a plausible single product component with
+  balanced parentheses only for its own sub-ingredients.`;
 
     try {
       const result = await this.model.generateContent([
@@ -249,7 +263,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v9', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v10', 'utf8'),
         ])
       )
       .digest('hex');
@@ -931,6 +945,10 @@ percentage. Ingredient premix lines ("Vitamins (...)", "Minerals (...)",
 etc.) enumerate additives by name inside parentheses — they are NOT
 GA moisture rows even if the word "Moisture" or "Crude" leaked in from
 a neighboring column. Never attach GA headers to premix parentheses.
+Human FDA panels (dressings, sauces, beverages) may splice in
+"Nutrition Facts", "Serving size", "% Daily Value", shake/refrigerate
+lines, distributor blocks, SKU, or a duplicated "INGREDIENTS:" — never
+emit those as ingredients or merge them into one ingredient string.
 
 RAW OCR DUMPS:
 
@@ -998,6 +1016,15 @@ Procedure (in priority order):
        - "Guaranteed Analysis" / "Crude Protein" / "Crude Fat" /
          "Crude Fiber" / "Moisture" **as regulatory GA rows** (with
          min/max and % on those lines).
+       - FDA human-food panels: "Nutrition Facts", "Serving size",
+         "Amount per serving", "Calories per serving", "% Daily Value",
+         "Total Fat", "Saturated Fat", "Trans Fat", "Cholesterol",
+         "Total Carbohydrate", "Dietary Fiber", "Total Sugars",
+         "Added Sugars", "Protein", "Vitamin D", "Calcium", "Iron",
+         "Potassium", "Includes X Added Sugars" when part of the facts table.
+       - "SHAKE WELL", "REFRIGERATE AFTER OPENING", "DIST. & SOLD",
+         "Distributed by", "SKU", long certifier / organic audit boilerplate,
+         duplicated marketing "INGREDIENTS:" repeats not part of the real list.
        - "Feeding Guidelines" / "Storage" / "Best By" / "Made in".
        - AAFCO statements ("complete and balanced for all life
          stages", "formulated to meet the nutritional levels...").
@@ -1107,6 +1134,12 @@ them. Ingredient premix clusters ("Vitamins (...)", "Minerals (...)")
 remain ingredients; never replace their header with GA words like
 "Moisture" just because GA lines appeared nearby in the same frame.
 
+FDA HUMAN-FOOD NOISE (dressings, sauces, beverages): partial lists may
+also contain "Nutrition Facts", "Serving size", "% Daily Value",
+"SHAKE WELL", "REFRIGERATE", "DIST. & SOLD", SKU lines, or a second
+"INGREDIENTS:" repeat — never merge those into a single ingredient
+string; drop them entirely from output.
+
 Procedure (in priority order):
 
   1. ANCHOR: pick the starting frame.
@@ -1206,7 +1239,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v9', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v10', 'utf8'),
         ])
       )
       .digest('hex');

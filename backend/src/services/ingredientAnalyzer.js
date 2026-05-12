@@ -958,12 +958,25 @@ class IngredientAnalyzer {
       ''
     );
 
+    // Human-food / condiment OCR often prepends "Nutrition Facts …" before
+    // the real list. Keep only from the first in-body "Ingredients:" onward.
+    const ingInBody = cleanedText.match(/\bingredients\s*:/i);
+    if (ingInBody && ingInBody.index != null && ingInBody.index > 0) {
+      cleanedText = cleanedText.slice(ingInBody.index + ingInBody[0].length).trim();
+      cleanedText = cleanedText.replace(
+        /^\s*(?:our\s+)?(?:ingredients|ingredient\s+list|composition|recipe|made\s+with|contains)\s*[:\-]?\s*/i,
+        ''
+      );
+    }
+
     // Cut off everything after the first disclaimer / non-ingredient sentence.
     // Pet food labels commonly tail the ingredient list with statements like:
     //   "This is a naturally preserved product."
     //   "Manufactured in a facility that also processes grains."
     //   "Made in the USA."
     //   "Guaranteed Analysis ..."  /  "Feeding Instructions ..."
+    // Human FDA labels add: Nutrition Facts, Serving size, % Daily Value,
+    // shake/refrigerate lines, distributor blocks, SKU, certifier boilerplate.
     // Anything after these markers is NOT an ingredient.
     //
     // NOTE: We deliberately exclude soft phrases like "may contain" and
@@ -971,9 +984,17 @@ class IngredientAnalyzer {
     // (e.g. "Mixed Tocopherols, naturally preserved with...") and a wrong cut
     // would drop later ingredients. The per-item sentence filter below still
     // strips them when they end up as their own pseudo-ingredient.
-    const disclaimerStart = cleanedText.search(
-      /(?:^|[\.\s])(?:this\s+(?:is|product)|manufactured\s+in|made\s+in|produced\s+in|processed\s+in|packaged\s+in|guaranteed\s+analysis|feeding\s+(?:guide|instruction|direction)|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|use\s+(?:by|before)|net\s+(?:wt|weight))/i
-    );
+    const tailCutPattern =
+      /(?:^|[\.\s])(?:this\s+(?:is|product)|manufactured\s+in|made\s+in|produced\s+in|processed\s+in|packaged\s+in|guaranteed\s+analysis|feeding\s+(?:guide|instruction|direction)|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|use\s+(?:by|before)|net\s+(?:wt|weight))/i;
+    const humanTailCutPattern =
+      /\b(?:nutrition\s+facts|serving\s+size|calories\s+per\s+serving|amount\s*\/\s*serving|%\s*daily\s+value|daily\s+value|shake\s+well|refrigerate\s+after|dist\.?\s*&\s*sold|distributed\s+exclusively\s+by|distributed\s+by|sku\s*#|certified\s+organic\s+by|about\s+\d+\s+servings\s+per\s+container)\b/i;
+
+    let disclaimerStart = cleanedText.search(tailCutPattern);
+    const humanCut = cleanedText.search(humanTailCutPattern);
+    if (humanCut >= 0) {
+      disclaimerStart =
+        disclaimerStart === -1 ? humanCut : Math.min(disclaimerStart, humanCut);
+    }
     if (disclaimerStart > 0) {
       cleanedText = cleanedText.slice(0, disclaimerStart);
     }
@@ -1021,13 +1042,14 @@ class IngredientAnalyzer {
     // ("manufactured", "processed", "packaged"). Anything matching gets dropped.
     const filterWords = new Set(['ingredients:', 'contains:', 'and', 'or', 'with', 'including']);
     const sentencePattern =
-      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|naturally\s+preserved|preserve(?:d|s)?\s+freshness|facility|guaranteed\s+analysis|feeding|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before))\b/i;
+      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|naturally\s+preserved|preserve(?:d|s)?\s+freshness|facility|guaranteed\s+analysis|feeding|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|nutrition\s+facts|serving\s+size|daily\s+value|calories\s+per|amount\s*\/\s*serving|shake\s+well|refrigerate|distributed\s+by|dist\.?\s*&\s*sold|sku\s*#)\b/i;
 
     const filtered = ingredients.filter(i => {
       const lower = i.toLowerCase();
       if (filterWords.has(lower)) return false;
       if (/^\d+%?$/.test(i)) return false;
       if (sentencePattern.test(i)) return false;
+      if (/\bnutrition\s+facts\b/i.test(i)) return false;
       // Real ingredients rarely exceed 8 words (even with parentheticals stripped)
       const wordCount = i.replace(/\([^)]*\)/g, '').trim().split(/\s+/).filter(Boolean).length;
       if (wordCount > 8) return false;
