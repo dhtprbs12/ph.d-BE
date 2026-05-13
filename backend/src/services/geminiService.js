@@ -269,7 +269,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-inner-reconcile-v2', 'utf8'),
+          Buffer.from('multiocr-inner-reconcile-v3', 'utf8'),
         ])
       )
       .digest('hex');
@@ -767,7 +767,7 @@ Rules:
         for (const x of a) if (b.has(x)) inter++;
         const uni = new Set([...a, ...b]).size;
         score = uni ? inter / uni : 0;
-        if (score < 0.48) continue;
+        if (score < 0.56) continue;
       } else {
         if (toksL.size < 4) continue;
         let interI = 0;
@@ -777,11 +777,11 @@ Rules:
         for (const x of toksL) if (toksF.has(x)) interF++;
         const coverF = toksL.size ? interF / toksL.size : 0;
         score = Math.min(coverI, coverF) * 0.55 + Math.max(coverI, coverF) * 0.45;
-        if (score < 0.58) continue;
+        if (score < 0.74) continue;
       }
 
-      const bonus = full.replace(/\s+/g, ' ').length > L.replace(/\s+/g, ' ').length ? 0.04 : 0;
-      const adj = score + bonus;
+      const lenPen = full.replace(/\s+/g, ' ').length * 0.00012;
+      const adj = score - lenPen;
       if (adj > bestAdj) {
         bestAdj = adj;
         best = full;
@@ -789,11 +789,34 @@ Rules:
     }
 
     if (!best) return L;
+    if (!this._reconcileHaystackSwapPassesSanity(L, best)) return L;
     const nL = L.replace(/\s+/g, ' ').toLowerCase();
     const nB = best.replace(/\s+/g, ' ').toLowerCase();
     if (nB === nL) return L;
     if (L.includes('(') && best.length < L.length * 0.82) return L;
     return best.replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * Reject haystack replacements that are almost certainly multi-ingredient
+   * OCR blobs or runaway repeats (would poison AI cache keys).
+   */
+  _reconcileHaystackSwapPassesSanity(line, candidate) {
+    const L = String(line || '').trim();
+    const B = String(candidate || '').trim();
+    if (!L || !B) return false;
+    const l = L.length;
+    const b = B.length;
+    if (b > 520) return false;
+    if (b > Math.max(220, l * 2.0 + 80)) return false;
+    if (l > 140 && b > l + 100) return false;
+    const wc = B.split(/\s+/).filter(Boolean).length;
+    if (wc > 44) return false;
+    const compact = B.replace(/\s+/g, ' ');
+    if (/(.{14,42})\1\1/i.test(compact)) return false;
+    const opens = (B.match(/\(/g) || []).length;
+    if (opens > 3) return false;
+    return true;
   }
 
   /**
@@ -836,6 +859,7 @@ Rules:
               .replace(/\s+/g, ' ')
               .trim();
             if (candidate.length < 8 || candidate.length > 2200) continue;
+            if (!this._reconcileHaystackSwapPassesSanity(trimmed, candidate)) continue;
             const nC = candidate.replace(/\s+/g, ' ').toLowerCase();
             const nT = trimmed.replace(/\s+/g, ' ').toLowerCase();
             if (nC === nT) continue;
@@ -1241,7 +1265,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-inner-reconcile-v2', 'utf8'),
+          Buffer.from('multiocr-inner-reconcile-v3', 'utf8'),
         ])
       )
       .digest('hex');

@@ -1106,9 +1106,11 @@ class IngredientAnalyzer {
    */
   _collapseSandwichedDuplicatePair(s) {
     let t = String(s || '');
-    for (let k = 0; k < 4; k++) {
+    const wc = t.split(/\s+/).filter(Boolean).length;
+    if (t.length > 130 || wc > 22) return t;
+    for (let k = 0; k < 3; k++) {
       const next = t.replace(
-        /(\b[A-Za-z]{2,}\s+[A-Za-z]{2,})\s+[^\s,()]{1,14}\s+\1\b/gi,
+        /(\b[A-Za-z]{2,}\s+[A-Za-z]{2,})\s+[^\s,()]{1,8}\s+\1\b/gi,
         '$1',
       );
       if (next === t) break;
