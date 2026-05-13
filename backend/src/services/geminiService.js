@@ -264,7 +264,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v12', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v13', 'utf8'),
         ])
       )
       .digest('hex');
@@ -752,7 +752,7 @@ Rules:
   /** Reject marketing / GA / facility / allergen clause openers. */
   _isDeniedParenHeader(header) {
     const h = this._normIngHay(header);
-    if (h.length < 2 || h.length > 56) return true;
+    if (h.length < 2 || h.length > 80) return true;
     return (
       /^(manufactured|guaranteed|feeding|storage|distributor|packaged|processed|allergen|warning|disclaimer|not\s+for|for\s+use|questions|contact|website|best\s+by|use\s+by)/i.test(
         h
@@ -766,20 +766,47 @@ Rules:
 
   /**
    * Walk back from '(' to capture a plausible header noun phrase
-   * (letters/digits/punctuation used in ingredient names).
+   * (letters/digits/punctuation used in ingredient names). Includes
+   * multiple words separated by spaces (e.g. "PARMESAN CHEESE (…)")
+   * but stops at comma/semicolon/newline so the previous ingredient
+   * is not absorbed — older logic stopped at the first space and
+   * mis-attributed headers as "CHEESE" only.
    * @returns {{ headerStart: number, header: string } | null}
    */
   _walkBackParenHeader(text, openParenIdx) {
+    const MAX_HEADER = 80;
     let j = openParenIdx - 1;
     while (j >= 0 && /\s/.test(text[j])) j--;
     if (j < 0) return null;
+
+    const idChar = /[A-Za-z0-9.\-&'\/]/;
     let k = j;
-    while (k >= 0 && /[A-Za-z0-9,.\-&'\/]/.test(text[k])) k--;
-    const headerStart = k + 1;
-    const header = text.slice(headerStart, openParenIdx).replace(/\s+/g, ' ').trim();
-    if (header.length < 2 || header.length > 56) return null;
+
+    const collectWord = () => {
+      while (k >= 0 && idChar.test(text[k])) k--;
+    };
+    collectWord();
+    let start = k + 1;
+
+    while (start > 0) {
+      let p = start - 1;
+      while (p >= 0 && /\s/.test(text[p])) p--;
+      if (p < 0) break;
+      const c = text[p];
+      if (c === ',' || c === ';' || c === '\n' || c === '\r') break;
+      if (!idChar.test(c)) break;
+      k = p;
+      collectWord();
+      const nextStart = k + 1;
+      const cand = text.slice(nextStart, openParenIdx).replace(/\s+/g, ' ').trim();
+      if (cand.length > MAX_HEADER) break;
+      start = nextStart;
+    }
+
+    const header = text.slice(start, openParenIdx).replace(/\s+/g, ' ').trim();
+    if (header.length < 2 || header.length > MAX_HEADER) return null;
     if (!/[A-Za-z]/.test(header)) return null;
-    return { headerStart, header };
+    return { headerStart: start, header };
   }
 
   /** Inner text of parentheses looks like a premix / cluster, not "(min 5%)". */
@@ -811,12 +838,25 @@ Rules:
   }
 
   /**
+   * Vision sometimes splices two cheese declarations into one `(…)`; reject
+   * generic premix candidates whose inner text repeats the same tail.
+   */
+  _genericInnerLooksLikeScrambledOcrDuplication(inner) {
+    const hi = this._normIngHay(inner);
+    const cc = (hi.match(/\bcheese\s+cultures\b/g) || []).length;
+    if (cc >= 2) return true;
+    if (/\bmilk,\s*cheese\s+cultures\b.*\bmilk,\s*cheese\s+cultures\b/i.test(hi)) return true;
+    if (/\bcheese\s+milk,\s*cheese\b/i.test(hi)) return true;
+    return false;
+  }
+
+  /**
    * True when header matches any premix opener we scan for in branch A
    * (mirrors _namedParenPremixRegexes intent for inner heuristics).
    */
   _headerLooksLikeNamedPremixKeyword(header) {
     const h = this._normIngHay(header);
-    if (h.length < 2 || h.length > 56) return false;
+    if (h.length < 2 || h.length > 80) return false;
     return (
       /\b(?:vitamins?|itamins)\b/i.test(h) ||
       /\bminerals?\b/i.test(h) ||
@@ -937,6 +977,7 @@ Rules:
         if (closeIdx === -1) continue;
         const inner = text.slice(i + 1, closeIdx);
         if (!this._parenInnerLooksLikePremix(wb.header, inner)) continue;
+        if (this._genericInnerLooksLikeScrambledOcrDuplication(inner)) continue;
         // Skip very common short sourcing clauses
         if (/^source\s+of\b/i.test(this._normIngHay(inner)) && inner.length < 120) continue;
         pushSpan(wb.headerStart, closeIdx, text.slice(wb.headerStart, closeIdx + 1), {
@@ -1380,7 +1421,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v12', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v13', 'utf8'),
         ])
       )
       .digest('hex');
