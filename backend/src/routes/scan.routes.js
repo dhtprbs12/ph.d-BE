@@ -1330,10 +1330,11 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
  * This split keeps Gemini scoring tokens from being wasted when the user
  * cancels at the confirmation step.
  *
- * Body: multipart/form-data, field name "images" (1+ files)
+ * Body: multipart/form-data, field name "images" (1+ files, cap below
+ * must stay ≥ client burst count — e.g. 10+ frames for curved labels).
  * No pet fields needed yet — those come with /commit-back.
  */
-router.post('/back-multi/:pendingScanId', upload.array('images', 8), async (req, res, next) => {
+router.post('/back-multi/:pendingScanId', upload.array('images', 16), async (req, res, next) => {
   try {
     const { pendingScanId } = req.params;
 
