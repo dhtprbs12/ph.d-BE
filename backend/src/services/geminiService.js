@@ -269,7 +269,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-strip-v2', 'utf8'),
+          Buffer.from('multiocr-premix-named-only-v1', 'utf8'),
         ])
       )
       .digest('hex');
@@ -339,10 +339,10 @@ INGREDIENT LIST EXTRACTION RULES (very important):
           );
 
           const haystackPan = panTrim;
-          // Single linear OCR dump: premix inject mostly duplicates garbage
-          // (e.g. "MICROBIAL" + "PARMESAN CHEESE" spliced). Rely on merge + reconcile.
-          console.log('[MULTI-OCR] Panorama path: premix inject skipped');
-          let recoveredPan = mergedPan.ingredientsList || [];
+          let recoveredPan = this._injectParentheticalPremixFromHaystack(
+            haystackPan,
+            mergedPan.ingredientsList || []
+          );
           recoveredPan = this._reconcileListParenFromRaw(haystackPan, recoveredPan);
           recoveredPan = ingredientAnalyzer.postProcessExtractedIngredientList(recoveredPan);
           const mergedOutPan = {
@@ -615,12 +615,11 @@ Rules:
   }
 
   /**
-   * Deterministic recovery: LLM merge often drops long legal ingredients
-   * printed as "Header (a, b, c, …)" — vitamin/mineral premixes,
-   * probiotics, amino packs, chelates, etc. We scan Cloud Vision raw
-   * text for (1) high-precision named headers and (2) a generic
-   * balanced-parenthesis enumerator with inner heuristics + denylists
-   * to avoid GA rows, "(source of …)", and marketing sentences.
+   * Deterministic recovery: LLM merge sometimes drops long legal lines
+   * printed as "Vitamins (…)", "Minerals (…)", etc. We scan raw OCR for
+   * **named** high-precision openers only (see _namedParenPremixRegexes)
+   * and balanced parentheses — no generic walk over every `(` in the
+   * haystack (that class caused false premixes on human-food / cheese OCR).
    *
    * @param {string} haystack  Raw OCR text (multi-frame join is fine).
    * @param {string[]} ingredientsList  Gemini merge output.
@@ -704,20 +703,6 @@ Rules:
       .trim();
   }
 
-  _isLikelyGaRegionBefore(haystack, headerStartIdx, opts = {}) {
-    const win = opts.narrowWindow === true ? 90 : 260;
-    const lo = Math.max(0, headerStartIdx - win);
-    const slice = haystack.slice(lo, headerStartIdx);
-    return (
-      /\bGuaranteed\s+Analysis\b/i.test(slice) ||
-      /\bAnalytical\s+(?:constituents|components)\b/i.test(slice) ||
-      /\bTypical\s+Analysis\b/i.test(slice) ||
-      /\bCalorie\s+Content\b/i.test(slice) ||
-      /\bNutritional\s+Additives\b/i.test(slice) ||
-      /\bCrude\s+Protein\b[\s\S]{0,120}%/i.test(slice)
-    );
-  }
-
   /** @returns {number} index of closing ')' that balances openParenIdx, or -1 */
   _closingParenIndex(haystack, openParenIdx) {
     let depth = 0;
@@ -796,9 +781,8 @@ Rules:
 
   /**
    * Headers that almost always introduce a comma-enumerated premix on
-   * pet-food labels. Matches here are validated with _isDeniedParenHeader
-   * and _parenInnerLooksLikePremix; they are NOT subject to GA-region
-   * lookback (that heuristic is only for the generic "(" walk in branch B).
+   * pet-food labels. Matches are validated with _isDeniedParenHeader and
+   * _parenInnerLooksLikePremix.
    */
   _namedParenPremixRegexes() {
     return [
@@ -843,51 +827,6 @@ Rules:
     );
   }
 
-  /**
-   * Walk back from '(' to capture a plausible header noun phrase
-   * (letters/digits/punctuation used in ingredient names). Includes
-   * multiple words separated by spaces (e.g. "PARMESAN CHEESE (…)")
-   * but stops at comma/semicolon/newline so the previous ingredient
-   * is not absorbed — older logic stopped at the first space and
-   * mis-attributed headers as "CHEESE" only.
-   * @returns {{ headerStart: number, header: string } | null}
-   */
-  _walkBackParenHeader(text, openParenIdx) {
-    const MAX_HEADER = 80;
-    let j = openParenIdx - 1;
-    while (j >= 0 && /\s/.test(text[j])) j--;
-    if (j < 0) return null;
-
-    const idChar = /[A-Za-z0-9.\-&'\/]/;
-    let k = j;
-
-    const collectWord = () => {
-      while (k >= 0 && idChar.test(text[k])) k--;
-    };
-    collectWord();
-    let start = k + 1;
-
-    while (start > 0) {
-      let p = start - 1;
-      while (p >= 0 && /\s/.test(text[p])) p--;
-      if (p < 0) break;
-      const c = text[p];
-      if (c === ',' || c === ';' || c === '\n' || c === '\r') break;
-      if (!idChar.test(c)) break;
-      k = p;
-      collectWord();
-      const nextStart = k + 1;
-      const cand = text.slice(nextStart, openParenIdx).replace(/\s+/g, ' ').trim();
-      if (cand.length > MAX_HEADER) break;
-      start = nextStart;
-    }
-
-    const header = text.slice(start, openParenIdx).replace(/\s+/g, ' ').trim();
-    if (header.length < 2 || header.length > MAX_HEADER) return null;
-    if (!/[A-Za-z]/.test(header)) return null;
-    return { headerStart: start, header };
-  }
-
   /** Inner text of parentheses looks like a premix / cluster, not "(min 5%)". */
   _parenInnerLooksLikePremix(header, inner) {
     const hi = this._normIngHay(inner);
@@ -913,35 +852,6 @@ Rules:
       return true;
     }
 
-    return false;
-  }
-
-  /**
-   * Vision sometimes splices two cheese declarations into one `(…)`; reject
-   * generic premix candidates whose inner text repeats the same tail.
-   */
-  _genericInnerLooksLikeScrambledOcrDuplication(inner) {
-    const hi = this._normIngHay(inner);
-    const cc = (hi.match(/\bcheese\s+cultures\b/g) || []).length;
-    if (cc >= 2) return true;
-    if (/\bmilk,\s*cheese\s+cultures\b.*\bmilk,\s*cheese\s+cultures\b/i.test(hi)) return true;
-    if (/\bcheese\s+milk,\s*cheese\b/i.test(hi)) return true;
-    if (/\bcheese\s+cultures\b/i.test(hi) && /\byolks?\b/i.test(hi)) return true;
-    if (/\besg\s+yolks?\b/i.test(hi)) return true;
-    return false;
-  }
-
-  /** OCR line-break garbage glued into a generic premix header. */
-  _genericPremixHeaderLooksCorrupt(header) {
-    const h = this._normIngHay(header);
-    if (/\bcult\s+and\b/i.test(h)) return true;
-    if (/\bcheese\s+cult\b/i.test(h)) return true;
-    if (/^eat\s+cheese$/i.test(h.trim())) return true;
-    if (/^and\s+cheese$/i.test(h.trim())) return true;
-    if (/\band\s+cheese\s+cult/i.test(h)) return true;
-    if (/exparmesan|exromano|exparsesan/i.test(h)) return true;
-    if (/\bmicrobial\b.*\b(parmesan|romano|cheese)\b/i.test(h)) return true;
-    if (/\b(enzyme|enzymes)\b.*\b(parmesan|romano)\b/i.test(h)) return true;
     return false;
   }
 
@@ -981,36 +891,15 @@ Rules:
   }
 
   /**
-   * Generic "(" walk matched too wide a balanced span (nested cheese lines,
-   * allergen banners spliced into OCR). Reject before inject.
-   */
-  _genericParenBlockLooksContaminated(block) {
-    const b = this._normIngHay(block);
-    return (
-      /\bcontains\s+milk\b/i.test(b) ||
-      /\bcontains\s*:\s*/i.test(b) ||
-      /\bmay\s+contain\b/i.test(b) ||
-      /\bdist\.?\s*&\s*sold\b/i.test(b) ||
-      /\bexclusively\s+by\b/i.test(b) ||
-      /\bdistributed\s+by\b/i.test(b) ||
-      /\bsold\s+exclusively\b/i.test(b) ||
-      /\bnutrition\s+facts\b/i.test(b) ||
-      /\bdaily\s+value\b/i.test(b) ||
-      /\bshake\s+well\b/i.test(b) ||
-      /\brefrigerate\s+after\s+opening\b/i.test(b) ||
-      /\bpackaged\s+in\b/i.test(b)
-    );
-  }
-
-  /**
+   * Find long parenthetical premix blocks in Vision haystack using **named
+   * openers only** (Vitamins, Minerals, …). No scan of arbitrary `(`.
    * @param {string} haystack
-   * @returns {{ block: string, start: number }[]}
+   * @returns {{ block: string, start: number, end: number, source: string, premixHeader: string, openParenIdx: number }[]}
    */
   _extractPremixParentheticalSpans(haystack) {
     const collectFromText = text => {
       const spans = [];
       const seen = new Set();
-      let genericSpanPushed = 0;
 
       const pushSpan = (start, closeIdx, rawBlock, diag = {}) => {
         let block = String(rawBlock || '')
@@ -1019,27 +908,21 @@ Rules:
         if (block.length < 48) return;
         if (this._wholeBlockLooksDisclaimed(block)) return;
         if (/\bcrude\s+(protein|fat|fiber)\b/i.test(block)) return;
-        if (diag.source === 'generic') {
-          const GENERIC_PREMIX_MAX = 950;
-          if (block.length > GENERIC_PREMIX_MAX) return;
-          if (this._genericParenBlockLooksContaminated(block)) return;
-          if (genericSpanPushed >= 1) return;
-        }
         const key = block.toLowerCase().slice(0, 140);
         if (seen.has(key)) return;
         seen.add(key);
-        if (diag.source === 'generic') genericSpanPushed += 1;
         spans.push({
           block,
           start,
           end: closeIdx + 1,
-          source: diag.source || 'unknown',
+          source: diag.source || 'named',
           premixHeader: String(diag.header || '').replace(/\s+/g, ' ').trim(),
           openParenIdx: typeof diag.openParenIdx === 'number' ? diag.openParenIdx : -1,
         });
       };
 
-      // --- A) Named high-precision headers ---
+      // Named high-precision headers only (no generic "(" walk — that
+      // class produced unbounded false positives on human-food OCR).
       for (const re of this._namedParenPremixRegexes()) {
         re.lastIndex = 0;
         let m;
@@ -1062,30 +945,6 @@ Rules:
             openParenIdx: openIdx,
           });
         }
-      }
-
-      // --- B) Generic: any '(' with a plausible header + enumerator inner ---
-      for (let i = 0; i < text.length; i++) {
-        if (text[i] !== '(') continue;
-        if (this._isLikelyGaRegionBefore(text, i)) continue;
-        const wb = this._walkBackParenHeader(text, i);
-        if (!wb) continue;
-        if (this._isDeniedParenHeader(wb.header)) continue;
-        const hw = wb.header.trim().split(/\s+/).filter(Boolean);
-        if (hw.length > 3) continue;
-        if (this._genericPremixHeaderLooksCorrupt(wb.header)) continue;
-        const closeIdx = this._closingParenIndex(text, i);
-        if (closeIdx === -1) continue;
-        const inner = text.slice(i + 1, closeIdx);
-        if (!this._parenInnerLooksLikePremix(wb.header, inner)) continue;
-        if (this._genericInnerLooksLikeScrambledOcrDuplication(inner)) continue;
-        // Skip very common short sourcing clauses
-        if (/^source\s+of\b/i.test(this._normIngHay(inner)) && inner.length < 120) continue;
-        pushSpan(wb.headerStart, closeIdx, text.slice(wb.headerStart, closeIdx + 1), {
-          source: 'generic',
-          header: wb.header,
-          openParenIdx: i,
-        });
       }
 
       spans.sort((a, b) => a.start - b.start);
@@ -1522,7 +1381,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-strip-v2', 'utf8'),
+          Buffer.from('multiocr-premix-named-only-v1', 'utf8'),
         ])
       )
       .digest('hex');
