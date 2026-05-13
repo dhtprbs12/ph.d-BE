@@ -269,7 +269,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-premix-named-only-v1', 'utf8'),
+          Buffer.from('multiocr-no-premix-inject-v1', 'utf8'),
         ])
       )
       .digest('hex');
@@ -339,10 +339,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
           );
 
           const haystackPan = panTrim;
-          let recoveredPan = this._injectParentheticalPremixFromHaystack(
-            haystackPan,
-            mergedPan.ingredientsList || []
-          );
+          let recoveredPan = mergedPan.ingredientsList || [];
           recoveredPan = this._reconcileListParenFromRaw(haystackPan, recoveredPan);
           recoveredPan = ingredientAnalyzer.postProcessExtractedIngredientList(recoveredPan);
           const mergedOutPan = {
@@ -423,10 +420,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
     );
 
     const haystack = usableFrames.map(f => f.rawText).join('\n\n');
-    let recoveredList = this._injectParentheticalPremixFromHaystack(
-      haystack,
-      merged.ingredientsList || []
-    );
+    let recoveredList = merged.ingredientsList || [];
     recoveredList = this._reconcileListParenFromRaw(haystack, recoveredList);
     recoveredList = ingredientAnalyzer.postProcessExtractedIngredientList(recoveredList);
     const mergedOut = {
@@ -491,10 +485,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 
     const haystack = usableFrames.map(f => (Array.isArray(f.ingredients) ? f.ingredients : []).join('\n')).join('\n\n');
     const ingredientAnalyzer = require('./ingredientAnalyzer');
-    let recoveredList = this._injectParentheticalPremixFromHaystack(
-      haystack,
-      merged.ingredientsList || []
-    );
+    let recoveredList = merged.ingredientsList || [];
     recoveredList = this._reconcileListParenFromRaw(haystack, recoveredList);
     recoveredList = ingredientAnalyzer.postProcessExtractedIngredientList(recoveredList);
     const mergedOut = {
@@ -614,95 +605,6 @@ Rules:
     };
   }
 
-  /**
-   * Deterministic recovery: LLM merge sometimes drops long legal lines
-   * printed as "Vitamins (…)", "Minerals (…)", etc. We scan raw OCR for
-   * **named** high-precision openers only (see _namedParenPremixRegexes)
-   * and balanced parentheses — no generic walk over every `(` in the
-   * haystack (that class caused false premixes on human-food / cheese OCR).
-   *
-   * @param {string} haystack  Raw OCR text (multi-frame join is fine).
-   * @param {string[]} ingredientsList  Gemini merge output.
-   * @returns {string[]}
-   */
-  _injectParentheticalPremixFromHaystack(haystack, ingredientsList) {
-    const list = Array.isArray(ingredientsList)
-      ? ingredientsList.map(s => String(s || '').trim()).filter(Boolean)
-      : [];
-    const mergeN = list.length;
-    const hayHasVitOpen = /\b(?:vitamins?|itamins)\s*\(/i.test(String(haystack || ''));
-    const mergeHasVitLine = list.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
-
-    const logSummary = (extra = {}) => {
-      const out = extra.out || list;
-      const outHasVitLine = out.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
-      console.log(
-        `[MULTI-OCR] Premix inject summary: haystackLen=${String(haystack || '').length} mergeN=${mergeN} ` +
-          `${Object.entries(extra)
-            .filter(([k]) => k !== 'out')
-            .map(([k, v]) => `${k}=${v}`)
-            .join(' ')} ` +
-          `haystackVitaminsOpen=${hayHasVitOpen} mergeVitaminsLine=${mergeHasVitLine} outVitaminsLine=${outHasVitLine}`
-      );
-    };
-
-    if (!haystack || typeof haystack !== 'string' || haystack.length < 40) {
-      logSummary({ spans: 0, reason: 'haystack_short_or_empty' });
-      return list;
-    }
-
-    const spans = this._extractPremixParentheticalSpans(haystack);
-    if (spans.length === 0) {
-      logSummary({ spans: 0, reason: 'no_spans' });
-      return list;
-    }
-
-    for (let si = 0; si < spans.length; si++) {
-      const s = spans[si];
-      const hdr = (s.premixHeader || '').slice(0, 56);
-      const pv = `${s.block.slice(0, 88)}${s.block.length > 88 ? '…' : ''}`;
-      console.log(
-        `[MULTI-OCR] Premix span cand[${si}]: source=${s.source || '?'} ` +
-          `haystack=[${s.start},${s.end ?? '?'}) openParen=${s.openParenIdx ?? '?'} ` +
-          `header="${hdr}" len=${s.block.length} preview="${pv}"`
-      );
-    }
-
-    let out = list.slice();
-    let skippedDup = 0;
-    let inserted = 0;
-    for (const span of spans) {
-      const { block, start, source, premixHeader, end, openParenIdx } = span;
-      if (this._ingredientListAlreadyContainsPremixBlock(out, block)) {
-        skippedDup += 1;
-        console.log(
-          `[MULTI-OCR] Premix span skip_dup: source=${source || '?'} ` +
-            `haystack=[${start},${end ?? '?'}) header="${(premixHeader || '').slice(0, 56)}"`
-        );
-        continue;
-      }
-      const insertAt = this._premixInsertIndex(haystack, out, start);
-      out.splice(insertAt, 0, block);
-      inserted += 1;
-      const pv = `${block.slice(0, 72)}${block.length > 72 ? '…' : ''}`;
-      console.log(
-        `[MULTI-OCR] Paren-cluster inject @${insertAt}: source=${source || '?'} ` +
-          `haystack=[${start},${end ?? '?'}) openParen=${openParenIdx ?? '?'} ` +
-          `header="${(premixHeader || '').slice(0, 56)}" "${pv}"`
-      );
-    }
-    logSummary({ spans: spans.length, skippedDup, inserted, out });
-    return out;
-  }
-
-  /** Lowercase + collapse whitespace for fuzzy substring tests. */
-  _normIngHay(s) {
-    return String(s || '')
-      .toLowerCase()
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
   /** @returns {number} index of closing ')' that balances openParenIdx, or -1 */
   _closingParenIndex(haystack, openParenIdx) {
     let depth = 0;
@@ -777,229 +679,6 @@ Rules:
     const hay = String(rawOrHaystack || '');
     if (hay.length < 50) return list;
     return list.map(line => this._reconcileParenLineFromRaw(hay, line));
-  }
-
-  /**
-   * Headers that almost always introduce a comma-enumerated premix on
-   * pet-food labels. Matches are validated with _isDeniedParenHeader and
-   * _parenInnerLooksLikePremix.
-   */
-  _namedParenPremixRegexes() {
-    return [
-      // "Vitamins (" / "Vitamin (" — also colon or line-break before '(' (common on labels).
-      /\bVitamins?\s*(?:\n\s*)?\s*\(/gi,
-      /\bVitamins?\s*:\s*\(/gi,
-      // OCR drops leading V on "Vitamins"
-      /\bitamins\s*(?:\n\s*)?\s*\(/gi,
-      /\bitamins\s*:\s*\(/gi,
-      /\bMinerals?\s*(?:\n\s*)?\s*\(/gi,
-      /\bMinerals?\s*:\s*\(/gi,
-      /\bTrace\s+Minerals?\s*(?:\n\s*)?\s*\(/gi,
-      /\bTrace\s+Minerals?\s*:\s*\(/gi,
-      /\bAmino\s+Acids?\s*(?:\n\s*)?\s*\(/gi,
-      /\bAmino\s+Acids?\s*:\s*\(/gi,
-      /\bProbiotics?\s*(?:\n\s*)?\s*\(/gi,
-      /\b(?:Direct-?fed\s+)?Microbials?\s*(?:\n\s*)?\s*\(/gi,
-      /\bEnzymes?\s*(?:\n\s*)?\s*\(/gi,
-      /\bChelated\s+Minerals?\s*(?:\n\s*)?\s*\(/gi,
-      /\b(?:Trace\s+)?Elements?\s*(?:\n\s*)?\s*\(/gi,
-      /\bMicronutrients?\s*(?:\n\s*)?\s*\(/gi,
-      /\bNutrient\s+(?:Premix|Blend|Package)\s*(?:\n\s*)?\s*\(/gi,
-      /\bElectrolytes?\s*(?:\n\s*)?\s*\(/gi,
-      /\bPreservatives?\s*(?:\n\s*)?\s*\(/gi,
-      /\bNatural\s+Flavors?\s*(?:\n\s*)?\s*\(/gi,
-      /\b(?:Added\s+)?(?:Vitamins|Minerals)\s+and\s+Minerals\s*(?:\n\s*)?\s*\(/gi,
-    ];
-  }
-
-  /** Reject marketing / GA / facility / allergen clause openers. */
-  _isDeniedParenHeader(header) {
-    const h = this._normIngHay(header);
-    if (h.length < 2 || h.length > 80) return true;
-    return (
-      /^(manufactured|guaranteed|feeding|storage|distributor|packaged|processed|allergen|warning|disclaimer|not\s+for|for\s+use|questions|contact|website|best\s+by|use\s+by)/i.test(
-        h
-      ) ||
-      /^(contains|may\s+contain|ingredients)\s*$/i.test(h) ||
-      /\b(guaranteed|analysis|calorie\s+content)\b/i.test(h) ||
-      /^crude\b/i.test(h) ||
-      /^if\s+/i.test(h)
-    );
-  }
-
-  /** Inner text of parentheses looks like a premix / cluster, not "(min 5%)". */
-  _parenInnerLooksLikePremix(header, inner) {
-    const hi = this._normIngHay(inner);
-    const commas = (hi.match(/[,;·]/g) || []).length;
-    const len = hi.length;
-
-    if (len < 18) return false;
-    if (/\bmin\b.*%|\bmax\b.*%|\bnot\s+less\s+than\b.*%/i.test(hi) && commas <= 2 && len < 90) {
-      return false;
-    }
-    if (/\bcrude\s+(protein|fat|fiber)\b/i.test(hi)) return false;
-
-    // Strong inner vocabulary typical of vitamin/mineral/probiotic tails
-    const PREMIX_INNER =
-      /(supplement|proteinate|proteinates?|chloride|hydrochloride|mononitrate|thiamine|riboflavin|pyridoxine|pantothenate|folic|folate|biotin|niacin|choline|tocopherol|chelate|chelated|fermentation\s+product|lactobacillus|enterococcus|bacillus|acidophilus|bifidobacterium|streptococcus|subtilis|faecium|licheniformis|ascorb|citrate|oxide|sulfate|selenite|iodate|carbonate|phosphate|polynicotinate|methionine|taurine|lysine|carnitine|glucosamine|chondroitin|extract|derivative|enzyme|lipase|protease|cellulase|amylase)/i;
-    if (PREMIX_INNER.test(hi) && (commas >= 2 || len >= 55)) return true;
-    if (commas >= 5) return true;
-    if (len >= 85 && commas >= 3) return true;
-
-    // Named premix header: same keyword coverage as _namedParenPremixRegexes()
-    // (looser inner threshold when header clearly labels a legal cluster).
-    if (this._headerLooksLikeNamedPremixKeyword(header) && (commas >= 2 || len >= 48)) {
-      return true;
-    }
-
-    return false;
-  }
-
-  /**
-   * True when header matches any premix opener we scan for in branch A
-   * (mirrors _namedParenPremixRegexes intent for inner heuristics).
-   */
-  _headerLooksLikeNamedPremixKeyword(header) {
-    const h = this._normIngHay(header);
-    if (h.length < 2 || h.length > 80) return false;
-    return (
-      /\b(?:vitamins?|itamins)\b/i.test(h) ||
-      /\bminerals?\b/i.test(h) ||
-      /\btrace\s+minerals?\b/i.test(h) ||
-      /\b(?:trace\s+)?elements?\b/i.test(h) ||
-      /\bamino\s+acids?\b/i.test(h) ||
-      /\bprobiotics?\b/i.test(h) ||
-      /\b(?:direct[- ]?fed\s+)?microbials?\b/i.test(h) ||
-      /\benzymes?\b/i.test(h) ||
-      /\bchelated\s+minerals?\b/i.test(h) ||
-      /\bmicronutrients?\b/i.test(h) ||
-      /\bnutrient\s+(?:premix|blend|package)\b/i.test(h) ||
-      /\belectrolytes?\b/i.test(h) ||
-      /\bpreservatives?\b/i.test(h) ||
-      /\bnatural\s+flavors?\b/i.test(h) ||
-      /\b(?:added\s+)?(?:vitamins|minerals)\s+and\s+minerals\b/i.test(h)
-    );
-  }
-
-  _wholeBlockLooksDisclaimed(block) {
-    const b = this._normIngHay(block);
-    return (
-      /\bmanufactured\s+in\b/i.test(b) ||
-      /\bmay\s+contain\s+traces\b/i.test(b) ||
-      /\bthis\s+is\s+a\s+naturally\b/i.test(b)
-    );
-  }
-
-  /**
-   * Find long parenthetical premix blocks in Vision haystack using **named
-   * openers only** (Vitamins, Minerals, …). No scan of arbitrary `(`.
-   * @param {string} haystack
-   * @returns {{ block: string, start: number, end: number, source: string, premixHeader: string, openParenIdx: number }[]}
-   */
-  _extractPremixParentheticalSpans(haystack) {
-    const collectFromText = text => {
-      const spans = [];
-      const seen = new Set();
-
-      const pushSpan = (start, closeIdx, rawBlock, diag = {}) => {
-        let block = String(rawBlock || '')
-          .replace(/\s+/g, ' ')
-          .trim();
-        if (block.length < 48) return;
-        if (this._wholeBlockLooksDisclaimed(block)) return;
-        if (/\bcrude\s+(protein|fat|fiber)\b/i.test(block)) return;
-        const key = block.toLowerCase().slice(0, 140);
-        if (seen.has(key)) return;
-        seen.add(key);
-        spans.push({
-          block,
-          start,
-          end: closeIdx + 1,
-          source: diag.source || 'named',
-          premixHeader: String(diag.header || '').replace(/\s+/g, ' ').trim(),
-          openParenIdx: typeof diag.openParenIdx === 'number' ? diag.openParenIdx : -1,
-        });
-      };
-
-      // Named high-precision headers only (no generic "(" walk — that
-      // class produced unbounded false positives on human-food OCR).
-      for (const re of this._namedParenPremixRegexes()) {
-        re.lastIndex = 0;
-        let m;
-        while ((m = re.exec(text)) !== null) {
-          const start = m.index;
-          const openIdx = m.index + m[0].length - 1;
-          if (text[openIdx] !== '(') continue;
-          const header = text.slice(start, openIdx).replace(/\s+/g, ' ').trim();
-          // Named regexes are ingredient-panel headers only; GA lookback
-          // produced false negatives for probiotics, minerals, flavors, etc.
-          // when Crude Protein / Calorie Content appeared above on the label.
-          const closeIdx = this._closingParenIndex(text, openIdx);
-          if (closeIdx === -1) continue;
-          const inner = text.slice(openIdx + 1, closeIdx);
-          if (this._isDeniedParenHeader(header)) continue;
-          if (!this._parenInnerLooksLikePremix(header, inner)) continue;
-          pushSpan(start, closeIdx, text.slice(start, closeIdx + 1), {
-            source: 'named',
-            header,
-            openParenIdx: openIdx,
-          });
-        }
-      }
-
-      spans.sort((a, b) => a.start - b.start);
-      // Drop near-duplicates (OCR doubled the same line)
-      const merged = [];
-      for (const s of spans) {
-        const prev = merged[merged.length - 1];
-        if (!prev) {
-          merged.push(s);
-          continue;
-        }
-        if (Math.abs(s.start - prev.start) <= 2 && s.block === prev.block) continue;
-        if (prev.block.length >= 60 && s.block.includes(prev.block.slice(0, 40))) continue;
-        merged.push(s);
-      }
-      return merged;
-    };
-
-    const a = collectFromText(haystack);
-    if (a.length) return a;
-    const flattened = haystack.replace(/[\r\n]+/g, ' ');
-    return collectFromText(flattened);
-  }
-
-  _ingredientListAlreadyContainsPremixBlock(list, block) {
-    const nb = this._normIngHay(block);
-    if (nb.length < 24) return true;
-    const head = nb.slice(0, Math.min(56, nb.length));
-    return list.some(ing => {
-      const ni = this._normIngHay(ing);
-      if (ni.includes(head)) return true;
-      if (head.length >= 28 && ni.length >= 50 && ni.slice(0, 28) === nb.slice(0, 28)) return true;
-      return false;
-    });
-  }
-
-  /**
-   * Pick splice index so the premix lands near its printed neighbours.
-   * Falls back to near-tail when OCR alignment is weak.
-   */
-  _premixInsertIndex(haystack, list, blockStart) {
-    let bestI = -1;
-    let bestPos = -1;
-    for (let i = 0; i < list.length; i++) {
-      const ing = list[i];
-      if (!ing || ing.length < 5) continue;
-      const p = haystack.lastIndexOf(ing, Math.max(0, blockStart - 1));
-      if (p === -1) continue;
-      if (p + ing.length <= blockStart && p >= bestPos) {
-        bestPos = p;
-        bestI = i;
-      }
-    }
-    if (bestI >= 0) return bestI + 1;
-    return Math.max(0, list.length - 3);
   }
 
   /** Stable capture order for Stage 1 → Stage 2 handoff. */
@@ -1381,7 +1060,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-premix-named-only-v1', 'utf8'),
+          Buffer.from('multiocr-no-premix-inject-v1', 'utf8'),
         ])
       )
       .digest('hex');

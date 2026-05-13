@@ -1178,16 +1178,14 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
       ingredientsList = ingredientAnalyzer.parseIngredientText(extracted.rawIngredientsText);
     }
 
-    // Same parenthetical premix recovery as multi-frame: Gemini sometimes
-    // drops "Vitamins (…)" even when rawIngredientsText still contains it.
-    const premixHaystack =
+    // Align parenthetical lines with raw label text when available (no haystack splice/inject).
+    if (
       typeof extracted.rawIngredientsText === 'string' &&
-      extracted.rawIngredientsText.trim().length > 30
-        ? extracted.rawIngredientsText
-        : ingredientsList.join('\n');
-    if (premixHaystack.length > 30 && ingredientsList.length > 0) {
-      ingredientsList = geminiService._injectParentheticalPremixFromHaystack(
-        premixHaystack,
+      extracted.rawIngredientsText.trim().length > 50 &&
+      ingredientsList.length > 0
+    ) {
+      ingredientsList = geminiService._reconcileListParenFromRaw(
+        extracted.rawIngredientsText.trim(),
         ingredientsList
       );
     }
