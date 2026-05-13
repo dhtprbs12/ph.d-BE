@@ -579,19 +579,38 @@ Rules:
       return list;
     }
 
+    for (let si = 0; si < spans.length; si++) {
+      const s = spans[si];
+      const hdr = (s.premixHeader || '').slice(0, 56);
+      const pv = `${s.block.slice(0, 88)}${s.block.length > 88 ? '…' : ''}`;
+      console.log(
+        `[MULTI-OCR] Premix span cand[${si}]: source=${s.source || '?'} ` +
+          `haystack=[${s.start},${s.end ?? '?'}) openParen=${s.openParenIdx ?? '?'} ` +
+          `header="${hdr}" len=${s.block.length} preview="${pv}"`
+      );
+    }
+
     let out = list.slice();
     let skippedDup = 0;
     let inserted = 0;
-    for (const { block, start } of spans) {
+    for (const span of spans) {
+      const { block, start, source, premixHeader, end, openParenIdx } = span;
       if (this._ingredientListAlreadyContainsPremixBlock(out, block)) {
         skippedDup += 1;
+        console.log(
+          `[MULTI-OCR] Premix span skip_dup: source=${source || '?'} ` +
+            `haystack=[${start},${end ?? '?'}) header="${(premixHeader || '').slice(0, 56)}"`
+        );
         continue;
       }
       const insertAt = this._premixInsertIndex(haystack, out, start);
       out.splice(insertAt, 0, block);
       inserted += 1;
+      const pv = `${block.slice(0, 72)}${block.length > 72 ? '…' : ''}`;
       console.log(
-        `[MULTI-OCR] Paren-cluster inject @${insertAt}: "${block.slice(0, 72)}${block.length > 72 ? '…' : ''}"`
+        `[MULTI-OCR] Paren-cluster inject @${insertAt}: source=${source || '?'} ` +
+          `haystack=[${start},${end ?? '?'}) openParen=${openParenIdx ?? '?'} ` +
+          `header="${(premixHeader || '').slice(0, 56)}" "${pv}"`
       );
     }
     logSummary({ spans: spans.length, skippedDup, inserted, out });
@@ -835,7 +854,7 @@ Rules:
       const spans = [];
       const seen = new Set();
 
-      const pushSpan = (start, closeIdx, rawBlock) => {
+      const pushSpan = (start, closeIdx, rawBlock, diag = {}) => {
         let block = String(rawBlock || '')
           .replace(/\s+/g, ' ')
           .trim();
@@ -845,7 +864,14 @@ Rules:
         const key = block.toLowerCase().slice(0, 140);
         if (seen.has(key)) return;
         seen.add(key);
-        spans.push({ block, start });
+        spans.push({
+          block,
+          start,
+          end: closeIdx + 1,
+          source: diag.source || 'unknown',
+          premixHeader: String(diag.header || '').replace(/\s+/g, ' ').trim(),
+          openParenIdx: typeof diag.openParenIdx === 'number' ? diag.openParenIdx : -1,
+        });
       };
 
       // --- A) Named high-precision headers ---
@@ -865,7 +891,11 @@ Rules:
           const inner = text.slice(openIdx + 1, closeIdx);
           if (this._isDeniedParenHeader(header)) continue;
           if (!this._parenInnerLooksLikePremix(header, inner)) continue;
-          pushSpan(start, closeIdx, text.slice(start, closeIdx + 1));
+          pushSpan(start, closeIdx, text.slice(start, closeIdx + 1), {
+            source: 'named',
+            header,
+            openParenIdx: openIdx,
+          });
         }
       }
 
@@ -882,7 +912,11 @@ Rules:
         if (!this._parenInnerLooksLikePremix(wb.header, inner)) continue;
         // Skip very common short sourcing clauses
         if (/^source\s+of\b/i.test(this._normIngHay(inner)) && inner.length < 120) continue;
-        pushSpan(wb.headerStart, closeIdx, text.slice(wb.headerStart, closeIdx + 1));
+        pushSpan(wb.headerStart, closeIdx, text.slice(wb.headerStart, closeIdx + 1), {
+          source: 'generic',
+          header: wb.header,
+          openParenIdx: i,
+        });
       }
 
       spans.sort((a, b) => a.start - b.start);
