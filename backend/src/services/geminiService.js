@@ -269,7 +269,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-no-premix-inject-v1', 'utf8'),
+          Buffer.from('multiocr-panorama-narrative-v1', 'utf8'),
         ])
       )
       .digest('hex');
@@ -326,8 +326,15 @@ INGREDIENT LIST EXTRACTION RULES (very important):
           `👁️  [MULTI-OCR] Panorama Vision: ${panTrim.length} chars in ${Date.now() - tPan}ms (min ${minChars} for pass)`
         );
         if (panTrim.length >= minChars) {
+          const narrative = ingredientAnalyzer.sliceIngredientNarrativeFromRaw(panTrim);
+          const textForMerge = narrative.length >= 80 ? narrative : panTrim;
+          if (textForMerge.length < panTrim.length) {
+            console.log(
+              `[MULTI-OCR] Panorama merge input: focused ${textForMerge.length} chars (Vision ${panTrim.length})`
+            );
+          }
           const mergedPan = await this._mergeRawTextWithGemini(
-            [{ frameIndex: 1, rawText: panTrim }],
+            [{ frameIndex: 1, rawText: textForMerge }],
             imageBuffers.length
           );
           const preListPan = mergedPan.ingredientsList || [];
@@ -1060,7 +1067,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-no-premix-inject-v1', 'utf8'),
+          Buffer.from('multiocr-panorama-narrative-v1', 'utf8'),
         ])
       )
       .digest('hex');

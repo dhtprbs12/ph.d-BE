@@ -941,25 +941,19 @@ class IngredientAnalyzer {
   }
 
   /**
-   * Parse raw ingredient text into list.
-   * Handles parenthetical sub-ingredients correctly:
-   *   "Soft Gel Capsule (Bovine Gelatin, Glycerin, Water)" → one ingredient, not three.
+   * Ingredient narrative only: from first real "Ingredients:" (or equivalent)
+   * through first disclaimer / Nutrition Facts / GA tail — no comma split.
+   * @param {string} rawText
+   * @returns {string}
    */
-  parseIngredientText(rawText) {
-    if (!rawText) return [];
+  sliceIngredientNarrativeFromRaw(rawText) {
+    if (!rawText) return '';
 
-    // Strip common ingredient-list header phrases from the start.
-    // Covers: "Ingredients:", "INGREDIENTS", "Our Ingredients", "Ingredient List",
-    //         "Composition:" (EU labels), "Recipe:", "Made With:", "Contains:"
-    // Requires plural "ingredients" or explicit "ingredient list" to avoid
-    // accidentally chopping a real ingredient name that begins with "Ingredient".
     let cleanedText = rawText.replace(
       /^\s*(?:our\s+)?(?:ingredients|ingredient\s+list|composition|recipe|made\s+with|contains)\s*[:\-]?\s*/i,
       ''
     );
 
-    // Human-food / condiment OCR often prepends "Nutrition Facts …" before
-    // the real list. Keep only from the first in-body "Ingredients:" onward.
     const ingInBody = cleanedText.match(/\bingredients\s*:/i);
     if (ingInBody && ingInBody.index != null && ingInBody.index > 0) {
       cleanedText = cleanedText.slice(ingInBody.index + ingInBody[0].length).trim();
@@ -969,21 +963,6 @@ class IngredientAnalyzer {
       );
     }
 
-    // Cut off everything after the first disclaimer / non-ingredient sentence.
-    // Pet food labels commonly tail the ingredient list with statements like:
-    //   "This is a naturally preserved product."
-    //   "Manufactured in a facility that also processes grains."
-    //   "Made in the USA."
-    //   "Guaranteed Analysis ..."  /  "Feeding Instructions ..."
-    // Human FDA labels add: Nutrition Facts, Serving size, % Daily Value,
-    // shake/refrigerate lines, distributor blocks, SKU, certifier boilerplate.
-    // Anything after these markers is NOT an ingredient.
-    //
-    // NOTE: We deliberately exclude soft phrases like "may contain" and
-    // "naturally preserved" from this cut — they sometimes appear inline
-    // (e.g. "Mixed Tocopherols, naturally preserved with...") and a wrong cut
-    // would drop later ingredients. The per-item sentence filter below still
-    // strips them when they end up as their own pseudo-ingredient.
     const tailCutPattern =
       /(?:^|[\.\s])(?:this\s+(?:is|product)|manufactured\s+in|made\s+in|produced\s+in|processed\s+in|packaged\s+in|guaranteed\s+analysis|feeding\s+(?:guide|instruction|direction)|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|use\s+(?:by|before)|net\s+(?:wt|weight))/i;
     const humanTailCutPattern =
@@ -999,8 +978,24 @@ class IngredientAnalyzer {
       cleanedText = cleanedText.slice(0, disclaimerStart);
     }
 
+    return cleanedText.trim();
+  }
+
+  /**
+   * Parse raw ingredient text into list.
+   * Handles parenthetical sub-ingredients correctly:
+   *   "Soft Gel Capsule (Bovine Gelatin, Glycerin, Water)" → one ingredient, not three.
+   */
+  parseIngredientText(rawText) {
+    if (!rawText) return [];
+
+    let cleanedText = this.sliceIngredientNarrativeFromRaw(rawText);
+    if (!cleanedText) return [];
+
     // Normalize whitespace
     cleanedText = cleanedText.replace(/\n/g, ', ').replace(/\.\s/g, ', ');
+
+    const MAX_SEGMENT = 560;
 
     // Split on commas that are NOT inside parentheses/brackets
     // Walk char-by-char to respect nesting
@@ -1020,7 +1015,7 @@ class IngredientAnalyzer {
         const trimmed = current.trim()
           .replace(/\.$/, '')                          // Remove trailing period
           .replace(/^ingredients\s*:\s*/i, '');        // Remove prefix if still there
-        if (trimmed.length > 0 && trimmed.length < 100) {
+        if (trimmed.length > 0 && trimmed.length <= MAX_SEGMENT) {
           ingredients.push(trimmed);
         }
         current = '';
@@ -1032,7 +1027,7 @@ class IngredientAnalyzer {
     const last = current.trim()
       .replace(/\.$/, '')
       .replace(/^ingredients\s*:\s*/i, '');
-    if (last.length > 0 && last.length < 100) {
+    if (last.length > 0 && last.length <= MAX_SEGMENT) {
       ingredients.push(last);
     }
 
@@ -1050,9 +1045,11 @@ class IngredientAnalyzer {
       if (/^\d+%?$/.test(i)) return false;
       if (sentencePattern.test(i)) return false;
       if (/\bnutrition\s+facts\b/i.test(i)) return false;
-      // Real ingredients rarely exceed 8 words (even with parentheticals stripped)
+      // Long human-food names / legal parentheticals: allow more words when
+      // the line contains a top-level "(" (vitamin/cheese style clusters).
       const wordCount = i.replace(/\([^)]*\)/g, '').trim().split(/\s+/).filter(Boolean).length;
-      if (wordCount > 8) return false;
+      const maxWords = /\(/.test(i) ? 28 : 14;
+      if (wordCount > maxWords) return false;
       return true;
     });
     return this.postProcessExtractedIngredientList(filtered);
