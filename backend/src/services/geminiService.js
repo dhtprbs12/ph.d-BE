@@ -128,6 +128,7 @@ CRITICAL RULES:
 - If imageType is "ingredients_label" or "mixed", extract the COMPLETE ingredients list
 - Ingredients are listed in order of weight (most to least)
 - If you cannot read something clearly, note it but still extract what you can
+- VERBATIM INTEGRITY (parentheticals and qualifiers). Copy each ingredient line from the label when possible. Never invent comma-separated tokens inside "(" … ")" that are not visible (e.g. do not add ", WATER" inside "BUTTER (CREAM)"). Preserve leading adjectives and legal qualifiers exactly ("MODIFIED EGG YOLK", not "EGG YOLK"). Do not normalize spellings or compress official names. For rawIngredientsText, stay faithful to the printed list paragraph (harmless whitespace collapse only).
 
 INGREDIENT LIST EXTRACTION RULES (very important):
 - Include ONLY actual food/nutrient ingredients (e.g., "Deboned Chicken", "Vitamin E Supplement", "Rosemary Extract").
@@ -263,7 +264,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v10', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v11', 'utf8'),
         ])
       )
       .digest('hex');
@@ -343,9 +344,12 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 
     const haystack = usableFrames.map(f => f.rawText).join('\n\n');
     const ingredientAnalyzer = require('./ingredientAnalyzer');
-    const recoveredList = ingredientAnalyzer.postProcessExtractedIngredientList(
-      this._injectParentheticalPremixFromHaystack(haystack, merged.ingredientsList || [])
+    let recoveredList = this._injectParentheticalPremixFromHaystack(
+      haystack,
+      merged.ingredientsList || []
     );
+    recoveredList = this._reconcileListParenFromRaw(haystack, recoveredList);
+    recoveredList = ingredientAnalyzer.postProcessExtractedIngredientList(recoveredList);
     const mergedOut = {
       ...merged,
       ingredientsList: recoveredList,
@@ -408,9 +412,12 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 
     const haystack = usableFrames.map(f => (Array.isArray(f.ingredients) ? f.ingredients : []).join('\n')).join('\n\n');
     const ingredientAnalyzer = require('./ingredientAnalyzer');
-    const recoveredList = ingredientAnalyzer.postProcessExtractedIngredientList(
-      this._injectParentheticalPremixFromHaystack(haystack, merged.ingredientsList || [])
+    let recoveredList = this._injectParentheticalPremixFromHaystack(
+      haystack,
+      merged.ingredientsList || []
     );
+    recoveredList = this._reconcileListParenFromRaw(haystack, recoveredList);
+    recoveredList = ingredientAnalyzer.postProcessExtractedIngredientList(recoveredList);
     const mergedOut = {
       ...merged,
       ingredientsList: recoveredList,
@@ -449,6 +456,7 @@ Return ONLY this JSON (no prose, no code fences):
 }
 
 Rules:
+- VERBATIM INTEGRITY: keep headers and qualifiers as printed (e.g. MODIFIED, cultured, organic). Do not invent extra tokens inside parentheses; one balanced "(…)" per header must match the label.
 - "ingredients" is the ordered list of ingredient noun phrases that
   appear in THIS photo, top-to-bottom / left-to-right exactly as
   printed. One short noun phrase per item.
@@ -624,6 +632,68 @@ Rules:
       }
     }
     return -1;
+  }
+
+  /**
+   * Snap a parenthetical line to the literal balanced "(…)" span found in
+   * raw OCR / rawIngredientsText so dropped prefixes (MODIFIED …) or
+   * invented inner tokens (, WATER) can be corrected when the source text
+   * still contains the true span.
+   */
+  _reconcileParenLineFromRaw(rawOrHaystack, line) {
+    const trimmed = String(line || '').trim();
+    const open = trimmed.indexOf('(');
+    if (open <= 0) return trimmed;
+    if (trimmed.lastIndexOf(')') <= open) return trimmed;
+    const rawS = String(rawOrHaystack || '');
+    if (rawS.length < 40) return trimmed;
+    const words = trimmed
+      .slice(0, open)
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!words.length) return trimmed;
+    for (let take = words.length; take >= 1; take -= 1) {
+      const h = words.slice(-take).join(' ');
+      if (h.length < 3) continue;
+      const esc = h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(esc + '\\s*\\(', 'gi');
+      let m;
+      while ((m = re.exec(rawS)) !== null) {
+        let start = m.index;
+        const openIdx = m.index + m[0].length - 1;
+        if (rawS[openIdx] !== '(') continue;
+        while (start > 0) {
+          const c = rawS[start - 1];
+          if (c === '\n' || c === '\r') break;
+          if (c === ',' || c === ';') break;
+          if (/[A-Za-z0-9'\-.]/.test(c) || c === ' ') start -= 1;
+          else break;
+        }
+        const closeIdx = this._closingParenIndex(rawS, openIdx);
+        if (closeIdx === -1) continue;
+        const candidate = rawS
+          .slice(start, closeIdx + 1)
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (candidate.length < 8 || candidate.length > 2200) continue;
+        const nC = candidate.replace(/\s+/g, ' ').toLowerCase();
+        const nT = trimmed.replace(/\s+/g, ' ').toLowerCase();
+        if (nC === nT) continue;
+        const ratio = candidate.length / Math.max(trimmed.length, 1);
+        if (ratio > 1.45 && take < words.length) continue;
+        if (ratio > 1.55) continue;
+        return candidate;
+      }
+    }
+    return trimmed;
+  }
+
+  _reconcileListParenFromRaw(rawOrHaystack, list) {
+    if (!Array.isArray(list) || list.length === 0) return list;
+    const hay = String(rawOrHaystack || '');
+    if (hay.length < 50) return list;
+    return list.map(line => this._reconcileParenLineFromRaw(hay, line));
   }
 
   /**
@@ -1054,6 +1124,11 @@ Procedure (in priority order):
      KEEP it; a spurious extra item is less harmful than silently
      losing a real ingredient users compare against the label.
 
+VERBATIM INTEGRITY: Preserve parenthetical content and leading qualifiers
+(MODIFIED, cultured, organic, etc.) as in the raw dumps. Do not invent
+inner enumerators or collapse official headers; when wording differs between
+noise and the ingredient narrative, prefer the exact ingredient-line wording.
+
 Return ONLY this JSON (no prose, no code fences):
 {
   "ingredients":      ["...", "...", ...],
@@ -1183,6 +1258,11 @@ Procedure (in priority order):
      adjacent merged line — add it back in the right place. When
      unsure whether to keep a line, KEEP it.
 
+VERBATIM INTEGRITY: Preserve parenthetical content and leading qualifiers
+(MODIFIED, cultured, organic, etc.) as in the partial lists. Do not invent
+inner enumerators or collapse official headers; prefer exact wording from the
+source lists when stitching.
+
 Return ONLY this JSON (no prose, no code fences):
 {
   "ingredients":      ["...", "...", ...],
@@ -1239,7 +1319,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v10', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v11', 'utf8'),
         ])
       )
       .digest('hex');
@@ -1855,6 +1935,10 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
             cleaned = cleaned.replace(/[.,;:]+$/, '').trim();
             return cleaned;
           }).filter(ing => ing.length > 0);
+        }
+        const rawTrim = String(parsed.rawIngredientsText || '').trim();
+        if (rawTrim.length > 50 && ingredientsList.length > 0) {
+          ingredientsList = this._reconcileListParenFromRaw(rawTrim, ingredientsList);
         }
         {
           const ingredientAnalyzer = require('./ingredientAnalyzer');
