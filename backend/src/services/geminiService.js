@@ -261,6 +261,8 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       throw new Error('extractFromMultipleImages: imageBuffers must be a non-empty array');
     }
 
+    const pipelineSalt = Buffer.from('multiocr-panorama-gemini-primary-v1', 'utf8');
+
     // Cache key spans ALL frames so an exact re-scan hits cache.
     // Pipeline-salt suffix busts stale ocr_cache rows when post-merge
     // heuristics change (same pixels → new extraction).
@@ -269,7 +271,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-inner-reconcile-v3', 'utf8'),
+          pipelineSalt,
         ])
       )
       .digest('hex');
@@ -316,15 +318,64 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 
     if (panoramaBuffer) {
       try {
-        const tPan = Date.now();
-        const { rawText: panRawFull } = await cloudVisionService.detectDocumentText(panoramaBuffer, {
-          languageHints: ['en'],
-        });
-        const panTrim = String(panRawFull || '').trim();
+        let panTrim = '';
+        const tHay = Date.now();
+        try {
+          const { rawText: panRawFull } = await cloudVisionService.detectDocumentText(panoramaBuffer, {
+            languageHints: ['en'],
+          });
+          panTrim = String(panRawFull || '').trim();
+          console.log(
+            `👁️  [MULTI-OCR] Panorama Vision haystack: ${panTrim.length} chars in ${Date.now() - tHay}ms`
+          );
+        } catch (hayErr) {
+          console.warn(`[MULTI-OCR] Panorama Vision haystack failed: ${hayErr.message}`);
+        }
+
         const minChars = Math.max(120, imageBuffers.length * 40);
-        console.log(
-          `👁️  [MULTI-OCR] Panorama Vision: ${panTrim.length} chars in ${Date.now() - tPan}ms (min ${minChars} for pass)`
-        );
+        const tGem = Date.now();
+        try {
+          const gemPan = await this._extractIngredientsFromPanoramaImage(
+            panoramaBuffer,
+            mimeType,
+            imageBuffers.length
+          );
+          const gList = gemPan.ingredientsList || [];
+          if (gList.length >= 3) {
+            let recovered = gList;
+            if (panTrim.length >= 50) {
+              recovered = this._reconcileListParenFromRaw(panTrim, recovered);
+            }
+            recovered = ingredientAnalyzer.postProcessExtractedIngredientList(recovered);
+            const mergedOutPan = {
+              ...gemPan,
+              ingredientsList: recovered,
+              rawIngredientsText: recovered.join(', '),
+            };
+            await this.cacheResult(combinedHash, {
+              rawIngredientsText: mergedOutPan.rawIngredientsText,
+              ingredientsList: mergedOutPan.ingredientsList,
+            });
+            const preVitPan = recovered.some(s =>
+              /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s))
+            );
+            console.log(
+              `✅ [MULTI-OCR] panorama Gemini image primary: n=${mergedOutPan.ingredientsList.length} ` +
+                `mergeVitaminsLine=${preVitPan} in ${Date.now() - tGem}ms, ` +
+                `confidence=${mergedOutPan.confidence.toFixed(2)}, complete=${mergedOutPan.isComplete}, ` +
+                `missing=${mergedOutPan.missingSection || 'none'}`
+            );
+            return { ...mergedOutPan, imageCount: imageBuffers.length };
+          }
+          console.warn(
+            `[MULTI-OCR] Panorama Gemini image too few items (${gList.length}); Vision text-merge fallback`
+          );
+        } catch (gemErr) {
+          console.warn(
+            `[MULTI-OCR] Panorama Gemini image failed: ${gemErr.message} — Vision text-merge fallback`
+          );
+        }
+
         if (panTrim.length >= minChars) {
           const narrative = ingredientAnalyzer.sliceIngredientNarrativeFromRaw(panTrim);
           const textForMerge = narrative.length >= 80 ? narrative : panTrim;
@@ -342,7 +393,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
             /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s))
           );
           console.log(
-            `[MULTI-OCR] Stage2 (panorama single-dump): n=${preListPan.length} mergeVitaminsLine=${preVitPan}`
+            `[MULTI-OCR] Stage2 (panorama Vision text fallback): n=${preListPan.length} mergeVitaminsLine=${preVitPan}`
           );
 
           const haystackPan = panTrim;
@@ -361,7 +412,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
           });
 
           console.log(
-            `✅ [MULTI-OCR] panorama path ${mergedOutPan.ingredientsList.length} ingredients, ` +
+            `✅ [MULTI-OCR] panorama Vision+text path ${mergedOutPan.ingredientsList.length} ingredients, ` +
               `confidence=${mergedOutPan.confidence.toFixed(2)}, complete=${mergedOutPan.isComplete}, ` +
               `missing=${mergedOutPan.missingSection || 'none'}`
           );
@@ -369,10 +420,10 @@ INGREDIENT LIST EXTRACTION RULES (very important):
           return { ...mergedOutPan, imageCount: imageBuffers.length };
         }
         console.warn(
-          `[MULTI-OCR] Panorama OCR too short (${panTrim.length} < ${minChars}) — per-frame Vision fallback`
+          `[MULTI-OCR] Panorama haystack too short (${panTrim.length} < ${minChars}) — per-frame Vision fallback`
         );
       } catch (visErr) {
-        console.warn(`[MULTI-OCR] Panorama Vision failed: ${visErr.message} — per-frame fallback`);
+        console.warn(`[MULTI-OCR] Panorama branch failed: ${visErr.message} — per-frame fallback`);
       }
     }
 
@@ -1265,7 +1316,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-inner-reconcile-v3', 'utf8'),
+          Buffer.from('multiocr-panorama-gemini-primary-v1', 'utf8'),
         ])
       )
       .digest('hex');
@@ -1570,6 +1621,55 @@ Rules:
 - If nothing usable is visible:
   { "items": [], "panel_only": true, "complete": false,
     "missing": null, "score": 0.0, "note": "<why>" }`;
+  }
+
+  /**
+   * Single Gemini vision call on the stitched panorama (center-strip).
+   * Primary path for multi-frame OCR when Cloud Vision is available; Vision
+   * text is still used separately as a reconcile haystack. On failure the
+   * caller falls back to Vision OCR + text merge.
+   */
+  async _extractIngredientsFromPanoramaImage(panoramaBuffer, mimeType, totalFrameCount) {
+    const prompt = `This is ONE stitched image made from ${totalFrameCount} photos of the same product label
+as the user rotated the package (vertical center strip panorama). Read the ingredient statement from this image.
+
+Extract ingredients in printed order (heaviest / first on label → last). Apply to pet food AND human food
+(sauces, dressings, beverages): use only the "Ingredients:" (or equivalent) narrative; never Nutrition Facts,
+Guaranteed / Typical analysis tables, feeding or distributor lines, SKU, or marketing paragraphs.
+
+Rules:
+- One legal ingredient per array element. A header word/phrase followed by one balanced "(" … ")" sub-list
+  (cheese, vitamin/mineral premix, enzymes, etc.) is ONE element — do not split on inner commas.
+- Preserve readable qualifiers (MODIFIED, ROASTED, etc.) and parentheses as visible; do not invent inner tokens.
+- If the panel is partly unreadable, still return what you can and lower confidence / set missing_section.
+
+Return ONLY this JSON (no markdown, no code fences):
+{
+  "ingredients": ["...", "..."],
+  "is_complete": true,
+  "confidence": 0.9,
+  "missing_section": null,
+  "notes": "brief"
+}
+
+Use missing_section: "start" | "middle" | "end" | null. is_complete true only when both a clear list start
+and a natural list end are visible. confidence 0.0–1.0.`;
+
+    const imageBase64 = Buffer.from(panoramaBuffer).toString('base64');
+    const result = await this.model.generateContent({
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
+            { text: prompt },
+          ],
+        },
+      ],
+      generationConfig: { temperature: 0.0, candidateCount: 1 },
+    });
+    const text = this._extractFirstText(result?.response);
+    return this._parseMultiImageResponse(text);
   }
 
   /**
