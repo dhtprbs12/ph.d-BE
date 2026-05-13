@@ -281,6 +281,47 @@ class ImageService {
     }
   }
 
+  /**
+   * Strip-panorama JPEG: always write under backend/tmp/panoramas and
+   * upload to R2 at debug/panoramas/… when R2 is configured (no env flags).
+   * @param {Buffer} buffer
+   * @param {{ cacheHashShort?: string, width?: number, height?: number }} meta
+   * @returns {Promise<{ localPath: string|null, publicUrl: string|null }>}
+   */
+  async savePanoramaDebug(buffer, meta = {}) {
+    if (!buffer?.length) return { localPath: null, publicUrl: null };
+
+    const ts = Date.now();
+    const hashShort =
+      String(meta.cacheHashShort || 'na')
+        .replace(/[^a-f0-9]/gi, '')
+        .slice(0, 16) || 'na';
+    const wh = meta.width && meta.height ? `-${meta.width}x${meta.height}` : '';
+    const filename = `pan-${ts}-${hashShort}${wh}.jpg`;
+    const r2Key = `debug/panoramas/${filename}`;
+
+    let localAbs = null;
+    try {
+      const dir = path.join(__dirname, '../../tmp/panoramas');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      localAbs = path.join(dir, filename);
+      fs.writeFileSync(localAbs, buffer);
+      console.log(
+        `🗂️  [Panorama] local ${localAbs} (${(buffer.length / 1024).toFixed(1)}KB)`
+      );
+    } catch (e) {
+      console.warn(`[Panorama] local write skipped: ${e.message}`);
+    }
+
+    let publicUrl = null;
+    if (this.r2Client && this.r2BucketName) {
+      publicUrl = await this.uploadToR2(buffer, r2Key, 'image/jpeg');
+    } else {
+      console.warn('[Panorama] R2 not configured — skipped upload');
+    }
+    return { localPath: localAbs, publicUrl };
+  }
+
   // ─── FULL FLOW ──────────────────────────────────────────────
 
   /**

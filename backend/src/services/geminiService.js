@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { query } = require('../database/connection');
 const { v4: uuidv4 } = require('uuid');
 const cloudVisionService = require('./cloudVisionService');
+const imageService = require('./imageService');
 
 /**
  * GEMINI AI SERVICE
@@ -312,6 +313,16 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       console.log(
         `🖼️  [MULTI-OCR] Strip panorama ${panMeta.width}x${panMeta.height}px (${panoramaBuffer.length} bytes)`
       );
+      try {
+        const dbg = await imageService.savePanoramaDebug(panoramaBuffer, {
+          cacheHashShort: combinedHash,
+          width: panMeta.width,
+          height: panMeta.height,
+        });
+        if (dbg.publicUrl) console.log(`🗂️  [Panorama] R2: ${dbg.publicUrl}`);
+      } catch (dbgErr) {
+        console.warn(`[Panorama] save failed: ${dbgErr.message}`);
+      }
     } catch (panErr) {
       console.warn(`[MULTI-OCR] Strip panorama build skipped: ${panErr.message}`);
     }
