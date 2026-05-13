@@ -992,8 +992,9 @@ class IngredientAnalyzer {
     let cleanedText = this.sliceIngredientNarrativeFromRaw(rawText);
     if (!cleanedText) return [];
 
-    // Normalize whitespace
-    cleanedText = cleanedText.replace(/\n/g, ', ').replace(/\.\s/g, ', ');
+    // Newlines inside "(…)" are usually wrapped sub-ingredients → treat as comma.
+    // Newlines outside parens are usually one ingredient wrapped across lines → space.
+    cleanedText = this._normalizeIngredientNewlines(cleanedText).replace(/\.\s/g, ', ');
 
     const MAX_SEGMENT = 560;
 
@@ -1098,8 +1099,40 @@ class IngredientAnalyzer {
     return this._dedupeNoisyPremixDuplicates(step1);
   }
 
+  /**
+   * Newline handling for a single ingredient paragraph before comma-splitting.
+   * Outside parentheses: join wrapped lines with a space (avoid "Parmesan, Cheese").
+   * Inside parentheses: join with ", " (FDA-style sub-enumerators often wrap per line).
+   */
+  _normalizeIngredientNewlines(text) {
+    const src = String(text || '');
+    if (!src) return '';
+    let out = '';
+    let depth = 0;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (c === '(' || c === '[') {
+        depth++;
+        out += c;
+      } else if (c === ')' || c === ']') {
+        depth = Math.max(0, depth - 1);
+        out += c;
+      } else if (c === '\r' || c === '\n') {
+        if (c === '\r' && src[i + 1] === '\n') i++;
+        out += depth > 0 ? ', ' : ' ';
+      } else {
+        out += c;
+      }
+    }
+    return out
+      .replace(/\s+,/g, ',')
+      .replace(/,\s*,+/g, ', ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+
   _fixOCRPremixLine(line) {
-    let s = line.trim();
+    let s = String(line || '').trim();
     if (!s) return s;
 
     // Dropped leading "M" on Minerals (Vision / seam splice)

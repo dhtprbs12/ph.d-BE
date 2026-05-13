@@ -269,7 +269,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-narrative-v1', 'utf8'),
+          Buffer.from('multiocr-no-product-regex-v1', 'utf8'),
         ])
       )
       .digest('hex');
@@ -876,6 +876,9 @@ VERBATIM INTEGRITY: Preserve parenthetical content and leading qualifiers
 (MODIFIED, cultured, organic, etc.) as in the raw dumps. Do not invent
 inner enumerators or collapse official headers; when wording differs between
 noise and the ingredient narrative, prefer the exact ingredient-line wording.
+Inside "(...)" clusters, keep commas and token boundaries that appear in the
+raw OCR dumps (including line breaks that imply commas); do not paraphrase
+inner lists into fused single words unless the dumps show the same fusion.
 
 Return ONLY this JSON (no prose, no code fences):
 {
@@ -1067,7 +1070,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-narrative-v1', 'utf8'),
+          Buffer.from('multiocr-no-product-regex-v1', 'utf8'),
         ])
       )
       .digest('hex');
