@@ -261,7 +261,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       throw new Error('extractFromMultipleImages: imageBuffers must be a non-empty array');
     }
 
-    const pipelineSalt = Buffer.from('multiocr-panorama-gemini-primary-v3', 'utf8');
+    const pipelineSalt = Buffer.from('multiocr-panorama-gemini-primary-v4', 'utf8');
 
     // Cache key spans ALL frames so an exact re-scan hits cache.
     // Pipeline-salt suffix busts stale ocr_cache rows when post-merge
@@ -571,10 +571,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
    * filtering / package-shape detection — none of which we want here.
    */
   async _extractFrameForMerge(imageBuffer, mimeType, frameIndex) {
-    const prompt = `You are OCRing photo #${frameIndex} of a pet-food package.
-This photo shows ONE viewpoint of a wrap-around ingredient panel —
-other photos cover the rest of the panel. Your job for this frame is
-just to read what THIS image shows, in the order it's printed.
+    const prompt = `Photo #${frameIndex} of a product label. Read only the text that belongs to the ingredient declaration under "Ingredients:" (or the same idea in another language) visible in this image. Split that into separate ingredients as printed and analyze.
 
 Return ONLY this JSON (no prose, no code fences):
 {
@@ -583,47 +580,7 @@ Return ONLY this JSON (no prose, no code fences):
   "start_anchor":    "ingredients_header" | "first_protein" | null
 }
 
-Rules:
-- VERBATIM INTEGRITY: keep headers and qualifiers as printed (e.g. MODIFIED, cultured, organic). Do not invent extra tokens inside parentheses; one balanced "(…)" per header must match the label.
-- "ingredients" is the ordered list of ingredient noun phrases that
-  appear in THIS photo, top-to-bottom / left-to-right exactly as
-  printed. One short noun phrase per item.
-- BE GENEROUS, NOT CONSERVATIVE. Include every ingredient you can
-  read in this frame, including:
-    • Items near the very top, bottom, left, or right edges where
-      text may be slightly clipped, blurred, or curved away from
-      the camera (cylindrical can wrap).
-    • Tiny-print items (vitamin / mineral / preservative tail of
-      the list — "Niacin", "Zinc Proteinate", "Mixed Tocopherols",
-      "Rosemary Extract", etc.). These are easy to skip but they
-      are real ingredients and the merge step depends on you
-      surfacing them.
-    • Items where you can read the word but it's not 100% sharp.
-      Better to list a slightly uncertain reading than to drop it.
-- A word that is cut off at the edge of the photo (e.g. "Chicken Me…"
-  or "…l, Brown Rice") IS still listed — keep your best read of the
-  fragment so the merge step can stitch it.
-- If you see a noun-phrase HEADER immediately followed by "(" and a long
-  comma-separated list inside parentheses spanning multiple lines in this
-  photo (vitamin/mineral premixes, trace minerals, amino acids, probiotics,
-  etc. — examples are NOT exhaustive), treat the ENTIRE header + one balanced
-  "(" … ")" span as ONE ingredient string — either one array element, or
-  consecutive elements that are obvious fragments of the SAME span so the
-  merge step can join them. Do NOT split on inner commas into separate
-  ingredients unless the label clearly prints those items OUTSIDE the
-  parentheses as top-level comma-separated entries.
-- Skip sentences and disclaimers ("manufactured", "preserved with",
-  "guaranteed analysis", "feeding", "store ", "best by", "may contain",
-  AAFCO statements, marketing copy).
-- "has_start_anchor": true iff EITHER the literal text "Ingredients:"
-  is visible in this photo OR the first ingredient of the recipe is
-  visible (typically a protein source — "Chicken", "Beef", "Salmon",
-  "Deboned <meat>", "<meat> Meal", "Lamb"...).
-- "start_anchor": "ingredients_header" if the header is visible,
-  "first_protein" if only the first protein is visible, null if
-  neither.
-- If no ingredient panel is visible at all, return:
-  { "ingredients": [], "has_start_anchor": false, "start_anchor": null }`;
+If the literal "Ingredients:" header is visible, set has_start_anchor true and start_anchor "ingredients_header". Else if the start of that list is visible, has_start_anchor true and start_anchor "first_protein". Else has_start_anchor false, start_anchor null. If nothing from that section is visible, ingredients [].`;
 
     const parts = [
       { inlineData: { mimeType, data: imageBuffer.toString('base64') } },
@@ -980,151 +937,9 @@ Rules:
       )
       .join('\n\n');
 
-    const prompt = `You are reconstructing the ingredient panel of a pet-food
-package from raw OCR text dumps of ${frames.length} photos that the
-user took while rotating the package in their hand. Each dump
-contains EVERYTHING the camera saw in that frame — the ingredient
-panel itself, plus nutrition facts, AAFCO statements, feeding
-guidelines, marketing copy, barcode digits, sometimes random package
-text. Your job is to extract just the ingredient list, in the
-correct order, from across all the dumps.
-
-Photos are listed in capture / rotation order — the user rotated in
-ONE direction, so consecutive photos are rotationally adjacent on
-the can / pouch.
-
-Each photo may start with a single server line "[merge_hints: …]"
-listing cheap regex hits detected in THAT dump's text (e.g.
-guaranteed_analysis, ingredients_header). Use hints only as weak
-structure — the quoted OCR body always wins if they disagree.
-
-REGION SEPARATION (do this mentally before step 1):
-Many frames interleave two vertical columns or adjacent blocks: (A)
-regulatory analysis (Guaranteed / Typical / Analytical constituents,
-Crude Protein/Fat/Fiber, Moisture with min/max and %, Calorie Content)
-and (B) the ingredient statement under "Ingredients:". OCR reading
-order can splice them into one linear stream. GA rows are NOT
-ingredients: they pair a nutrient label with regulatory min/max and a
-percentage. Ingredient premix lines ("Vitamins (...)", "Minerals (...)",
-etc.) enumerate additives by name inside parentheses — they are NOT
-GA moisture rows even if the word "Moisture" or "Crude" leaked in from
-a neighboring column. Never attach GA headers to premix parentheses.
-Human FDA panels (dressings, sauces, beverages) may splice in
-"Nutrition Facts", "Serving size", "% Daily Value", shake/refrigerate
-lines, distributor blocks, SKU, or a duplicated "INGREDIENTS:" — never
-emit those as ingredients or merge them into one ingredient string.
-
-RAW OCR DUMPS:
+    const prompt = `Below is raw OCR from ${frames.length} photos of one product label. Each block may contain text outside the ingredient list. Use only the text that belongs to the ingredient declaration under "Ingredients:" (or the same idea in another language). Read that text and split it into separate ingredients as declared.
 
 ${framesBlock}
-
-Procedure (in priority order):
-
-  0. MAP REGIONS (silent, mandatory). For each photo, mark which spans
-     are GA / calorie / feeding vs true ingredient-list narrative. When
-     two printed regions collide in the OCR text, follow the
-     Ingredients: comma-list continuity — do not pull GA table rows into
-     the ingredient output. This step must NOT cause you to omit any
-     legal parenthetical premix cluster from the dumps (vitamins,
-     minerals, probiotics, enzymes, natural flavors, preservatives, etc.
-     — see 3b), even if merge_hints lists guaranteed_analysis for the
-     same photo.
-
-  1. ANCHOR THE START. Scan all dumps for a clear start signal:
-       a. The literal text "Ingredients:" (or "INGREDIENTS:",
-          "Ingredients :"). The first ingredient is the noun phrase
-          immediately after it.
-       b. Else the first ingredient of the recipe — typically a
-          protein source ("Chicken", "Beef", "Salmon", "Deboned
-          <meat>", "<meat> Meal", "Lamb", "Turkey"...).
-       c. Else use Photo 1 as the start and lower confidence; set
-          missing_section: "start".
-
-  2. WALK FORWARD from the anchor through the rotational order,
-     hopping into adjacent photos using overlapping ingredients as
-     seams. The same ingredient often appears at the END of one
-     photo and the START of the next, possibly with one of the two
-     views being a partial fragment (e.g. "Chicken Me…" vs
-     "…al, Brown Rice"). Treat those as ONE ingredient; combine
-     using the overlap. Do not list both halves.
-
-  3. KEEP SINGLETONS. If an ingredient appears in only ONE of the
-     raw dumps and nowhere else, INCLUDE IT. A single appearance is
-     not noise — it just means that section of the panel was only
-     captured by one photo. Tail-of-panel items (vitamins,
-     minerals, preservatives like "Niacin", "Zinc Proteinate",
-     "Mixed Tocopherols", "Rosemary Extract") are especially common
-     in the singleton bucket because the print is small.
-
-  3b. PARENTHETICAL ENUMERATION = ONE INGREDIENT (critical).
-     Labels often print ONE legal ingredient as: a short HEADER (noun
-     phrase) immediately followed by "(" then many comma-separated
-     sub-items ending with ")", wrapping across 2+ physical lines.
-     Examples include but are NOT limited to: "Vitamins (...)",
-     "Minerals (...)", "Trace Minerals (...)", "Amino Acids (...)",
-     probiotic/enzyme clusters, etc. Raw OCR splits these across lines
-     or across adjacent photos (small type, left edge of a can).
-     You MUST: (a) concatenate fragments until the closing ")" that
-     balances the "(" that opened right after the header; (b) output
-     exactly ONE string in "ingredients" for that block; (c) do NOT
-     explode inner commas into separate top-level ingredients unless
-     the label clearly prints them outside the parentheses; (d) NEVER
-     drop this block because inner tokens resemble a Guaranteed
-     Analysis table — it is still part of the ingredient list when it
-     follows the ingredient narrative, even if GA text appears earlier
-     in the same OCR dump. Reject ONLY when the "(" … ")" block is
-     clearly the GA table itself (percentages, min/max for crude
-     nutrients on those lines).
-
-  4. EXCLUDE non-ingredient text. Discard anything that is clearly:
-       - "Guaranteed Analysis" / "Crude Protein" / "Crude Fat" /
-         "Crude Fiber" / "Moisture" **as regulatory GA rows** (with
-         min/max and % on those lines).
-       - FDA human-food panels: "Nutrition Facts", "Serving size",
-         "Amount per serving", "Calories per serving", "% Daily Value",
-         "Total Fat", "Saturated Fat", "Trans Fat", "Cholesterol",
-         "Total Carbohydrate", "Dietary Fiber", "Total Sugars",
-         "Added Sugars", "Protein", "Vitamin D", "Calcium", "Iron",
-         "Potassium", "Includes X Added Sugars" when part of the facts table.
-       - "SHAKE WELL", "REFRIGERATE AFTER OPENING", "DIST. & SOLD",
-         "Distributed by", "SKU", long certifier / organic audit boilerplate,
-         duplicated marketing "INGREDIENTS:" repeats not part of the real list.
-       - "Feeding Guidelines" / "Storage" / "Best By" / "Made in".
-       - AAFCO statements ("complete and balanced for all life
-         stages", "formulated to meet the nutritional levels...").
-       - Marketing copy ("naturally preserved", "real chicken
-         #1 ingredient", "no fillers").
-       - Disclaimers ("manufactured in a facility that...",
-         "may contain traces of...").
-       - Barcode digits, batch codes, weights ("12 oz", "340g").
-       - Brand names, product names, and recipe names (those are
-         already known from the front label).
-
-  5. DEDUPLICATE case-insensitively across photos. Treat clearly
-     different items as distinct ("Chicken Meal" vs "Chicken
-     By-Product Meal" → keep both).
-
-  6. NEVER alphabetise. NEVER sort by length / plausibility. NEVER
-     fall back to "the order I happened to encounter ingredients
-     across the dumps". Only the panel's printed order is correct.
-
-  7. COVERAGE AUDIT (critical). After you build the ordered list,
-     skim every raw dump again for ingredient-style lines in the
-     panel (comma-separated noun phrases). If a phrase clearly appears
-     as an ingredient in any dump but is missing from your output —
-     and it is not an exact duplicate of an item you already merged —
-     INSERT it in the correct position using neighboring items as
-     glue. When torn between dropping vs keeping a borderline line,
-     KEEP it; a spurious extra item is less harmful than silently
-     losing a real ingredient users compare against the label.
-
-VERBATIM INTEGRITY: Preserve parenthetical content and leading qualifiers
-(MODIFIED, cultured, organic, etc.) as in the raw dumps. Do not invent
-inner enumerators or collapse official headers; when wording differs between
-noise and the ingredient narrative, prefer the exact ingredient-line wording.
-Inside "(...)" clusters, keep commas and token boundaries that appear in the
-raw OCR dumps (including line breaks that imply commas); do not paraphrase
-inner lists into fused single words unless the dumps show the same fusion.
 
 Return ONLY this JSON (no prose, no code fences):
 {
@@ -1132,25 +947,8 @@ Return ONLY this JSON (no prose, no code fences):
   "is_complete":      true | false,
   "confidence":       0.0,
   "missing_section":  "start" | "middle" | "end" | null,
-  "notes":            "brief reason for confidence/missing"
-}
-
-Confidence calibration:
-  0.90–1.00  start anchor visible AND a natural end marker reached
-             (preservatives line / AAFCO statement / disclaimer)
-  0.70–0.90  one of start anchor or end marker missing
-  0.50–0.70  both missing but the chain stitched cleanly
-  0.30–0.50  significant gaps, multiple un-stitched fragments
-  0.00–0.30  too little usable text — recommend recapture
-
-is_complete = true ONLY when BOTH a start anchor and a natural end
-marker are present in the final list.
-
-missing_section:
-  "start"  → no start anchor in any photo
-  "end"    → list cuts off mid-word, no closing marker
-  "middle" → unrecoverable gap between adjacent photos
-  null     → list looks complete`;
+  "notes":            "brief"
+}`;
 
     const result = await this.model.generateContent({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -1179,86 +977,9 @@ missing_section:
       })
       .join('\n\n');
 
-    const prompt = `You are merging ${frames.length} partial ingredient lists OCR'd
-from ${totalFrameCount} photos of the same pet-food package as the user
-rotated it in their hand. Each list preserves the LOCAL reading order
-within its photo. Lists overlap at rotational seams — the same
-ingredient may appear at the end of one photo and at the start of the
-next, possibly with one of the two views being a partial fragment.
-
-The photos are listed in capture / rotation order. Photo "[START
-ANCHOR: ...]" tags mark frames where you (the OCR pass) saw the
-panel's start — either the literal "Ingredients:" header or the
-first protein-source ingredient. Use those tags as your starting
-point.
-
-PARTIAL LISTS:
+    const prompt = `Below are partial ingredient lists from ${frames.length} photos (${totalFrameCount} photos total) of one product label. Use only what belongs to the text under "Ingredients:" (or the same idea in another language). Read that and merge into one ordered ingredient list.
 
 ${framesBlock}
-
-Reconstruct the COMPLETE, deduplicated, ordered ingredient list as
-printed on the panel.
-
-REGULATORY vs INGREDIENT: A partial list may still contain Guaranteed
-Analysis-style lines ("Crude Protein", "Moisture (max) …%") if the
-per-frame OCR bled columns together. Those are NOT ingredients — drop
-them. Ingredient premix clusters ("Vitamins (...)", "Minerals (...)")
-remain ingredients; never replace their header with GA words like
-"Moisture" just because GA lines appeared nearby in the same frame.
-
-FDA HUMAN-FOOD NOISE (dressings, sauces, beverages): partial lists may
-also contain "Nutrition Facts", "Serving size", "% Daily Value",
-"SHAKE WELL", "REFRIGERATE", "DIST. & SOLD", SKU lines, or a second
-"INGREDIENTS:" repeat — never merge those into a single ingredient
-string; drop them entirely from output.
-
-Procedure (in priority order):
-
-  1. ANCHOR: pick the starting frame.
-       a. Prefer a frame tagged [START ANCHOR: ingredients_header].
-       b. Else prefer a frame tagged [START ANCHOR: first_protein].
-       c. Else use the frame whose first item is the most likely
-          first-ingredient (a protein source — "Chicken", "Beef",
-          "Salmon", "Deboned <meat>", "<meat> Meal", "Lamb"...).
-       d. Else use Photo 1 and lower confidence.
-  2. WALK FORWARD from the anchor, hopping into adjacent frames using
-     overlapping ingredients as the seam. The user rotated in ONE
-     direction, so consecutive photos are rotationally adjacent.
-  3. STITCH fragments: a word broken across photos ("Chicken Me" +
-     "al, Brown Rice…") is ONE ingredient — combine using the
-     overlap. Do not list both halves.
-  4. DEDUPLICATE case-insensitively. Treat clearly different items
-     as distinct ("Chicken Meal" vs "Chicken By-Product Meal").
-  5. KEEP SINGLETONS. If an ingredient appears in only ONE of the
-     partial lists and nowhere else, INCLUDE IT in the final list.
-     A single appearance is NOT noise — it just means that section
-     of the panel was only captured by one photo (small print at
-     the tail of the list, items at the edge of a frame, etc.).
-     Position it using the surrounding ingredients in the frame
-     where it appeared.
-
-  5b. PARENTHETICAL ENUMERATION (same intent as raw-merge 3b). Any printed
-     HEADER "(" long comma-list ")" cluster is ONE ingredient even if
-     wrapped or split across partial lists / photos — reassemble; do
-     not drop or explode inner commas. GA rows use min/max and % for
-     crude nutrients; premix lines list additive names — if both appear
-     intertwined in a partial list, keep premix as ingredients and drop
-     GA table lines.
-
-  6. NEVER alphabetise. NEVER sort by length or plausibility. NEVER
-     fall back to "the order I happened to encounter ingredients
-     across the lists". Only the panel's printed order is correct.
-
-  7. COVERAGE AUDIT (critical). After merging, re-read every partial
-     list. If an ingredient line appears in exactly one photo and is
-     absent from your final output — and it is not a duplicate of an
-     adjacent merged line — add it back in the right place. When
-     unsure whether to keep a line, KEEP it.
-
-VERBATIM INTEGRITY: Preserve parenthetical content and leading qualifiers
-(MODIFIED, cultured, organic, etc.) as in the partial lists. Do not invent
-inner enumerators or collapse official headers; prefer exact wording from the
-source lists when stitching.
 
 Return ONLY this JSON (no prose, no code fences):
 {
@@ -1266,25 +987,8 @@ Return ONLY this JSON (no prose, no code fences):
   "is_complete":      true | false,
   "confidence":       0.0,
   "missing_section":  "start" | "middle" | "end" | null,
-  "notes":            "brief reason for confidence/missing"
-}
-
-Confidence calibration:
-  0.90–1.00  start anchor visible AND a natural end marker reached
-             (preservatives line / AAFCO statement / disclaimer)
-  0.70–0.90  one of start anchor or end marker missing
-  0.50–0.70  both missing but the chain stitched cleanly
-  0.30–0.50  significant gaps, multiple un-stitched fragments
-  0.00–0.30  too little data — recommend recapture
-
-is_complete = true ONLY when BOTH a start anchor and a natural end
-marker are present in the final list.
-
-missing_section:
-  "start"  → no start anchor in any photo
-  "end"    → list cuts off mid-word, no closing marker
-  "middle" → unrecoverable gap between adjacent photos
-  null     → list looks complete`;
+  "notes":            "brief"
+}`;
 
     const result = await this.model.generateContent({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -1316,7 +1020,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-gemini-primary-v3', 'utf8'),
+          Buffer.from('multiocr-panorama-gemini-primary-v4', 'utf8'),
         ])
       )
       .digest('hex');
@@ -1447,23 +1151,7 @@ missing_section:
    * likely to trip that filter than a paragraph of label text.
    */
   _buildMultiImagePrompt(frameCount) {
-    return `You are reading the ingredient panel of a pet-food package from
-${frameCount} photos taken as the user rotated it in their hand. Use
-all photos together to reconstruct the panel.
-
-Photos are given in CAPTURE order (photo 1 first, photo ${frameCount} last)
-as the user rotated the package in one direction. They are NOT
-guaranteed to start at the panel's first ingredient — the user could
-have started rotating from any point on the can.
-
-What to expect:
-- The same ingredient may appear in several photos (label wrap).
-- Some photos may be redundant; some parts of the panel may be missing.
-- Words may break across photos (e.g. "Chicken Me" / "al, Brown Rice").
-
-Produce ONE deduplicated, ordered list of ingredient names as they
-appear on the panel. This is data extraction, not transcription —
-output a structured list, not a copy of the printed paragraph.
+    return `You have ${frameCount} photos of one product label. Read only the text that belongs to the ingredient declaration under "Ingredients:" (or the same idea in another language). Split that into separate ingredients as printed and return your analysis as JSON only (no other prose).
 
 Return ONLY this JSON object (no prose, no code fences):
 {
@@ -1471,106 +1159,8 @@ Return ONLY this JSON object (no prose, no code fences):
   "is_complete":      true | false,
   "confidence":       0.0,
   "missing_section":  "start" | "middle" | "end" | null,
-  "notes":            "brief reason for confidence/missing"
-}
-
-═══════════════════════════════════════════════════
-ORDER (most important step — do this first)
-═══════════════════════════════════════════════════
-Pet-food panels list ingredients in descending order by weight, and
-that order drives our nutrition scoring, so getting it wrong is
-worse than missing an ingredient.
-
-The JSON "ingredients" array order MUST equal the printed declaration comma-chain order — not photo index order,
-not left-to-right across unrelated layout columns, not model scan order, and not an "improved" logical order.
-
-Reconstruct order with this procedure, in this exact priority:
-
-  1. ANCHOR THE START. Scan all photos for a clear "start signal":
-       a. The literal text "Ingredients:" (or "Ingredients :") —
-          the first ingredient is the noun phrase right after it.
-       b. If no header is visible, use the first ingredient of
-          the recipe (typically a meat: "Chicken", "Beef", "Salmon",
-          "Deboned <meat>", "<meat> Meal", "Lamb"…). Pet-food panels
-          almost always start with the protein source.
-       c. If neither (a) nor (b) is visible in any photo, set
-          "missing_section": "start" and lower confidence; sequence
-          the rest the best you can.
-
-  2. WALK FORWARD FROM THE ANCHOR. Once you know which photo / position
-     the first ingredient is in, follow the panel's natural reading
-     order from there, jumping between photos as the text wraps.
-     Use overlapping ingredients (the same name appearing in two
-     adjacent photos) as your guide — that overlap is your seam.
-
-  3. NEVER fall back to "list ingredients in the order I happened
-     to read them across photos". Photo order ≠ label order.
-
-  4. NEVER alphabetise, never sort by length, never reorder by
-     plausibility. Only the panel's printed order is correct.
-
-  5. PAREN POSITION = LIST POSITION. A whole printed cluster
-     "HEADER ( a, b, c )" is ONE array element at the comma position of HEADER.
-     Never emit inner "a", "b", "c" as separate top-level elements after you
-     already output the HEADER "(...)" element — that duplicates and shuffles order.
-
-═══════════════════════════════════════════════════
-DEDUPLICATION
-═══════════════════════════════════════════════════
-- Same ingredient appearing in multiple photos → list it once.
-- Match case-insensitively ("Chicken Meal" = "chicken meal").
-- A word broken across photos ("Chicken Me" + "al") is still ONE
-  ingredient — stitch it together using the overlap.
-- Treat clearly different items as distinct ("Chicken Meal" vs
-  "Chicken By-Product Meal" → keep both).
-
-═══════════════════════════════════════════════════
-WORD CHOICE
-═══════════════════════════════════════════════════
-- Use the wording printed on the panel (e.g. keep "By-Product Meal",
-  do not rename it to "Meal").
-- If different photos disagree on a word due to glare or blur, take
-  the version from the clearest photo.
-- If you are unsure of a word, keep your best read, lower the
-  confidence score, and mention the uncertainty in "notes".
-
-═══════════════════════════════════════════════════
-WHAT TO INCLUDE / EXCLUDE
-═══════════════════════════════════════════════════
-- Each entry is a short noun phrase naming one ingredient.
-- Skip sentences and disclaimers, e.g. "manufactured", "processed in",
-  "facility that", "preserved with", "guaranteed analysis", "feeding
-  guidelines", "store ", "best by", "may contain", "this product",
-  "this is", AAFCO statements, marketing copy.
-- If no real ingredient list is visible, return ingredients: [].
-
-═══════════════════════════════════════════════════
-COMPLETENESS
-═══════════════════════════════════════════════════
-"is_complete": true ONLY if BOTH visible:
-  - START: an "Ingredients:" header OR clearly the first ingredient
-  - END:   a natural closing — preservative line (e.g. "Mixed
-    Tocopherols", "Rosemary Extract"), AAFCO statement, or a
-    disclaimer / copyright paragraph
-
-"missing_section":
-  - "start"  → header / first ingredient never visible
-  - "end"    → list cuts off mid-word, no closing marker
-  - "middle" → visible gap between captured photos
-  - null     → list looks complete
-
-═══════════════════════════════════════════════════
-CONFIDENCE
-═══════════════════════════════════════════════════
-0.90–1.00  clearly complete, all words readable, end marker present
-0.70–0.90  looks complete, a few words slightly blurry
-0.50–0.70  mostly captured, 1–2 ingredients uncertain
-0.30–0.50  significant gaps or many uncertain ingredients
-0.00–0.30  too little data — recommend recapture
-
-If nothing usable is visible, return:
-  {"ingredients":[], "is_complete":false, "confidence":0.0,
-   "missing_section":null, "notes":"<why>"}`;
+  "notes":            "brief"
+}`;
   }
 
   /**
@@ -1582,31 +1172,7 @@ If nothing usable is visible, return:
    * paragraph to escape the recitation match.
    */
   _buildMultiImagePromptAlt(frameCount) {
-    return `Task: extract the ingredient panel from ${frameCount} photos of a
-pet-food package taken from different angles, and emit it as
-structured data only. Do not reproduce any other paragraphs from the
-package — only the ordered ingredient names belong in the output.
-
-Photos are in capture order (photo 1 oldest, photo ${frameCount} newest)
-as the user rotated the package. Capture order is NOT label reading
-order. To rebuild the panel:
-
-  step 1 — find the START: the photo containing "Ingredients:"
-           (or the first protein-source ingredient like "Chicken",
-           "Beef", "Salmon", "Deboned Chicken", "Chicken Meal",
-           "Lamb", etc.). That is item index 0.
-  step 2 — walk FORWARD from that anchor through the panel's
-           natural reading order, hopping between photos using
-           overlapping (duplicated) ingredients as seams.
-  step 3 — drop every duplicate; stitch words split across photos
-           ("Chicken Me" + "al" → "Chicken Meal").
-  step 4 — never alphabetise, never sort by length / plausibility.
-           Only the panel's printed order is correct.
-
-If the start anchor never appears in any photo, set
-"missing": "start" and lower "score".
-
-Skip sentences / disclaimers / nutrition statements / marketing copy.
+    return `You have ${frameCount} photos of one product label. Read only the text under "Ingredients:" (or equivalent). Split into separate ingredients as printed and return structured JSON only.
 
 Return ONLY this JSON (no markdown, no commentary):
 {
@@ -1615,18 +1181,10 @@ Return ONLY this JSON (no markdown, no commentary):
   "complete": true | false,
   "missing": "start" | "middle" | "end" | null,
   "score": 0.0,
-  "note": "short explanation"
+  "note": "brief"
 }
 
-Rules:
-- "items" is descending order by weight, exactly as on the panel.
-- One short noun phrase per item (e.g. "Chicken Meal", "Brown Rice").
-- Use the wording printed on the panel; if a word is unclear, keep
-  your best read and lower "score".
-- "complete": true only when both an "Ingredients:" opener (or first
-  ingredient) and a natural end marker (preservatives line / AAFCO
-  statement / disclaimer paragraph) are visible.
-- If nothing usable is visible:
+If nothing from that section is visible:
   { "items": [], "panel_only": true, "complete": false,
     "missing": null, "score": 0.0, "note": "<why>" }`;
   }
@@ -1638,39 +1196,9 @@ Rules:
    * caller falls back to Vision OCR + text merge.
    */
   async _extractIngredientsFromPanoramaImage(panoramaBuffer, mimeType, totalFrameCount) {
-    const prompt = `This is ONE stitched image made from ${totalFrameCount} photos of the same product label
-as the user rotated the package (vertical center strip panorama). Read the ingredient statement from this image.
+    const prompt = `This is one stitched image from ${totalFrameCount} photos of the same product label as the user rotated it.
 
-Extract ingredients in printed order (heaviest / first on label → last). Apply to pet food AND human food
-(sauces, dressings, beverages): use only the "Ingredients:" (or equivalent) narrative; never Nutrition Facts,
-Guaranteed / Typical analysis tables, feeding or distributor lines, SKU, or marketing paragraphs.
-
-ORDER IS NON-NEGOTIABLE (hard constraint):
-- The JSON array "ingredients" MUST be the comma-separated declaration chain in exact label order: index 0 =
-  first ingredient after "Ingredients:" (or first noun phrase if the header is missing); each next index =
-  the next top-level comma-separated item on the printed statement. Treat each balanced "NAME ( … )" block
-  as ONE item at the position where that NAME appears — never pull text out of inner parentheses and insert
-  it as a separate element ahead of later commas (that scrambles order and causes fusion bugs).
-- Read like a human on the panel: line by line, left-to-right, then downward. The way frames are stitched
-  horizontally is only geometry — NOT a sorting key. Do NOT emit in strip column order, model attention order,
-  or "easy read" order unless it matches the printed comma chain.
-- NEVER alphabetize; NEVER sort by length, allergen risk, or plausibility; NEVER group similar foods together;
-  NEVER move items "so the list makes more sense". Wrong order is worse than a slightly blurry word — if torn,
-  keep wording best-effort, lower "confidence", and explain in "notes", but do NOT reorder to fix uncertainty.
-
-Rules:
-- One legal ingredient per array element. A header word/phrase followed by one balanced "(" … ")" sub-list
-  (cheese, vitamin/mineral premix, enzymes, etc.) is ONE element — do not split on inner commas.
-- Preserve readable qualifiers (MODIFIED, ROASTED, etc.) and parentheses as visible; do not invent inner tokens.
-- NEVER duplicate the same ingredient: if two lines would normalize to the same substance, include it ONCE only
-  (case-insensitive), in the position of its first printed occurrence.
-- Each string must be ONE printed ingredient only. Do NOT fuse the tail of the next ingredient into the previous line
-  (e.g. a "Garlic Puree" or "Roasted Garlic Puree" item must not also contain "egg yolks", "salt", or "microbial enzyme"
-  unless those words appear inside the SAME printed parentheses for that item).
-- If the label lists separate cheeses (e.g. Parmesan and Romano) as separate comma-separated entries, output
-  SEPARATE array elements, each with its own parentheses exactly as on the label — do not merge them into one
-  undifferentiated "parmesan romano cheese milk..." blob without the correct "(" … ")" structure.
-- If the panel is partly unreadable, still return what you can and lower confidence / set missing_section.
+Read only the text that belongs to the ingredient declaration under "Ingredients:" (or the same idea in another language). Split that into separate ingredients as printed and analyze.
 
 Return ONLY this JSON (no markdown, no code fences):
 {
@@ -1681,8 +1209,7 @@ Return ONLY this JSON (no markdown, no code fences):
   "notes": "brief"
 }
 
-Use missing_section: "start" | "middle" | "end" | null. is_complete true only when both a clear list start
-and a natural list end are visible. confidence 0.0–1.0.`;
+Use missing_section: "start" | "middle" | "end" | null. is_complete and confidence 0.0–1.0 as you judge from the image.`;
 
     const imageBase64 = Buffer.from(panoramaBuffer).toString('base64');
     const result = await this.model.generateContent({
