@@ -261,7 +261,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       throw new Error('extractFromMultipleImages: imageBuffers must be a non-empty array');
     }
 
-    const pipelineSalt = Buffer.from('multiocr-panorama-gemini-primary-v2', 'utf8');
+    const pipelineSalt = Buffer.from('multiocr-panorama-gemini-primary-v3', 'utf8');
 
     // Cache key spans ALL frames so an exact re-scan hits cache.
     // Pipeline-salt suffix busts stale ocr_cache rows when post-merge
@@ -1316,7 +1316,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-gemini-primary-v2', 'utf8'),
+          Buffer.from('multiocr-panorama-gemini-primary-v3', 'utf8'),
         ])
       )
       .digest('hex');
@@ -1481,6 +1481,9 @@ Pet-food panels list ingredients in descending order by weight, and
 that order drives our nutrition scoring, so getting it wrong is
 worse than missing an ingredient.
 
+The JSON "ingredients" array order MUST equal the printed declaration comma-chain order — not photo index order,
+not left-to-right across unrelated layout columns, not model scan order, and not an "improved" logical order.
+
 Reconstruct order with this procedure, in this exact priority:
 
   1. ANCHOR THE START. Scan all photos for a clear "start signal":
@@ -1505,6 +1508,11 @@ Reconstruct order with this procedure, in this exact priority:
 
   4. NEVER alphabetise, never sort by length, never reorder by
      plausibility. Only the panel's printed order is correct.
+
+  5. PAREN POSITION = LIST POSITION. A whole printed cluster
+     "HEADER ( a, b, c )" is ONE array element at the comma position of HEADER.
+     Never emit inner "a", "b", "c" as separate top-level elements after you
+     already output the HEADER "(...)" element — that duplicates and shuffles order.
 
 ═══════════════════════════════════════════════════
 DEDUPLICATION
@@ -1636,6 +1644,19 @@ as the user rotated the package (vertical center strip panorama). Read the ingre
 Extract ingredients in printed order (heaviest / first on label → last). Apply to pet food AND human food
 (sauces, dressings, beverages): use only the "Ingredients:" (or equivalent) narrative; never Nutrition Facts,
 Guaranteed / Typical analysis tables, feeding or distributor lines, SKU, or marketing paragraphs.
+
+ORDER IS NON-NEGOTIABLE (hard constraint):
+- The JSON array "ingredients" MUST be the comma-separated declaration chain in exact label order: index 0 =
+  first ingredient after "Ingredients:" (or first noun phrase if the header is missing); each next index =
+  the next top-level comma-separated item on the printed statement. Treat each balanced "NAME ( … )" block
+  as ONE item at the position where that NAME appears — never pull text out of inner parentheses and insert
+  it as a separate element ahead of later commas (that scrambles order and causes fusion bugs).
+- Read like a human on the panel: line by line, left-to-right, then downward. The way frames are stitched
+  horizontally is only geometry — NOT a sorting key. Do NOT emit in strip column order, model attention order,
+  or "easy read" order unless it matches the printed comma chain.
+- NEVER alphabetize; NEVER sort by length, allergen risk, or plausibility; NEVER group similar foods together;
+  NEVER move items "so the list makes more sense". Wrong order is worse than a slightly blurry word — if torn,
+  keep wording best-effort, lower "confidence", and explain in "notes", but do NOT reorder to fix uncertainty.
 
 Rules:
 - One legal ingredient per array element. A header word/phrase followed by one balanced "(" … ")" sub-list
