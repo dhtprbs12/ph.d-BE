@@ -264,7 +264,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v11', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v12', 'utf8'),
         ])
       )
       .digest('hex');
@@ -846,6 +846,28 @@ Rules:
   }
 
   /**
+   * Generic "(" walk matched too wide a balanced span (nested cheese lines,
+   * allergen banners spliced into OCR). Reject before inject.
+   */
+  _genericParenBlockLooksContaminated(block) {
+    const b = this._normIngHay(block);
+    return (
+      /\bcontains\s+milk\b/i.test(b) ||
+      /\bcontains\s*:\s*/i.test(b) ||
+      /\bmay\s+contain\b/i.test(b) ||
+      /\bdist\.?\s*&\s*sold\b/i.test(b) ||
+      /\bexclusively\s+by\b/i.test(b) ||
+      /\bdistributed\s+by\b/i.test(b) ||
+      /\bsold\s+exclusively\b/i.test(b) ||
+      /\bnutrition\s+facts\b/i.test(b) ||
+      /\bdaily\s+value\b/i.test(b) ||
+      /\bshake\s+well\b/i.test(b) ||
+      /\brefrigerate\s+after\s+opening\b/i.test(b) ||
+      /\bpackaged\s+in\b/i.test(b)
+    );
+  }
+
+  /**
    * @param {string} haystack
    * @returns {{ block: string, start: number }[]}
    */
@@ -861,6 +883,11 @@ Rules:
         if (block.length < 48) return;
         if (this._wholeBlockLooksDisclaimed(block)) return;
         if (/\bcrude\s+(protein|fat|fiber)\b/i.test(block)) return;
+        if (diag.source === 'generic') {
+          const GENERIC_PREMIX_MAX = 950;
+          if (block.length > GENERIC_PREMIX_MAX) return;
+          if (this._genericParenBlockLooksContaminated(block)) return;
+        }
         const key = block.toLowerCase().slice(0, 140);
         if (seen.has(key)) return;
         seen.add(key);
@@ -1353,7 +1380,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v11', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v12', 'utf8'),
         ])
       )
       .digest('hex');
