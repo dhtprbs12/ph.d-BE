@@ -264,7 +264,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v13', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v14', 'utf8'),
         ])
       )
       .digest('hex');
@@ -847,6 +847,19 @@ Rules:
     if (cc >= 2) return true;
     if (/\bmilk,\s*cheese\s+cultures\b.*\bmilk,\s*cheese\s+cultures\b/i.test(hi)) return true;
     if (/\bcheese\s+milk,\s*cheese\b/i.test(hi)) return true;
+    if (/\bcheese\s+cultures\b/i.test(hi) && /\byolks?\b/i.test(hi)) return true;
+    if (/\besg\s+yolks?\b/i.test(hi)) return true;
+    return false;
+  }
+
+  /** OCR line-break garbage glued into a generic premix header. */
+  _genericPremixHeaderLooksCorrupt(header) {
+    const h = this._normIngHay(header);
+    if (/\bcult\s+and\b/i.test(h)) return true;
+    if (/\bcheese\s+cult\b/i.test(h)) return true;
+    if (/^eat\s+cheese$/i.test(h.trim())) return true;
+    if (/^and\s+cheese$/i.test(h.trim())) return true;
+    if (/\band\s+cheese\s+cult/i.test(h)) return true;
     return false;
   }
 
@@ -915,6 +928,7 @@ Rules:
     const collectFromText = text => {
       const spans = [];
       const seen = new Set();
+      let genericSpanPushed = 0;
 
       const pushSpan = (start, closeIdx, rawBlock, diag = {}) => {
         let block = String(rawBlock || '')
@@ -927,10 +941,12 @@ Rules:
           const GENERIC_PREMIX_MAX = 950;
           if (block.length > GENERIC_PREMIX_MAX) return;
           if (this._genericParenBlockLooksContaminated(block)) return;
+          if (genericSpanPushed >= 1) return;
         }
         const key = block.toLowerCase().slice(0, 140);
         if (seen.has(key)) return;
         seen.add(key);
+        if (diag.source === 'generic') genericSpanPushed += 1;
         spans.push({
           block,
           start,
@@ -973,6 +989,9 @@ Rules:
         const wb = this._walkBackParenHeader(text, i);
         if (!wb) continue;
         if (this._isDeniedParenHeader(wb.header)) continue;
+        const hw = wb.header.trim().split(/\s+/).filter(Boolean);
+        if (hw.length > 3) continue;
+        if (this._genericPremixHeaderLooksCorrupt(wb.header)) continue;
         const closeIdx = this._closingParenIndex(text, i);
         if (closeIdx === -1) continue;
         const inner = text.slice(i + 1, closeIdx);
@@ -1421,7 +1440,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-merge-ga-sep-v13', 'utf8'),
+          Buffer.from('multiocr-merge-ga-sep-v14', 'utf8'),
         ])
       )
       .digest('hex');
