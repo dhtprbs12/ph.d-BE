@@ -1100,6 +1100,24 @@ class IngredientAnalyzer {
   }
 
   /**
+   * Merge output sometimes repeats the same two-word phrase with a short OCR
+   * garbage token between (e.g. "salt microbial eus salt microbial enzyme").
+   * Class-level: any two alphabetic words, not ingredient names.
+   */
+  _collapseSandwichedDuplicatePair(s) {
+    let t = String(s || '');
+    for (let k = 0; k < 4; k++) {
+      const next = t.replace(
+        /(\b[A-Za-z]{2,}\s+[A-Za-z]{2,})\s+[^\s,()]{1,14}\s+\1\b/gi,
+        '$1',
+      );
+      if (next === t) break;
+      t = next;
+    }
+    return t;
+  }
+
+  /**
    * Newline handling for a single ingredient paragraph before comma-splitting.
    * Outside parentheses: join wrapped lines with a space (avoid "Parmesan, Cheese").
    * Inside parentheses: join with ", " (FDA-style sub-enumerators often wrap per line).
@@ -1132,7 +1150,7 @@ class IngredientAnalyzer {
   }
 
   _fixOCRPremixLine(line) {
-    let s = String(line || '').trim();
+    let s = this._collapseSandwichedDuplicatePair(String(line || '').trim());
     if (!s) return s;
 
     // Dropped leading "M" on Minerals (Vision / seam splice)
