@@ -269,7 +269,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-strip-v1', 'utf8'),
+          Buffer.from('multiocr-panorama-strip-v2', 'utf8'),
         ])
       )
       .digest('hex');
@@ -339,7 +339,10 @@ INGREDIENT LIST EXTRACTION RULES (very important):
           );
 
           const haystackPan = panTrim;
-          let recoveredPan = this._injectParentheticalPremixFromHaystack(haystackPan, mergedPan.ingredientsList || []);
+          // Single linear OCR dump: premix inject mostly duplicates garbage
+          // (e.g. "MICROBIAL" + "PARMESAN CHEESE" spliced). Rely on merge + reconcile.
+          console.log('[MULTI-OCR] Panorama path: premix inject skipped');
+          let recoveredPan = mergedPan.ingredientsList || [];
           recoveredPan = this._reconcileListParenFromRaw(haystackPan, recoveredPan);
           recoveredPan = ingredientAnalyzer.postProcessExtractedIngredientList(recoveredPan);
           const mergedOutPan = {
@@ -936,6 +939,9 @@ Rules:
     if (/^eat\s+cheese$/i.test(h.trim())) return true;
     if (/^and\s+cheese$/i.test(h.trim())) return true;
     if (/\band\s+cheese\s+cult/i.test(h)) return true;
+    if (/exparmesan|exromano|exparsesan/i.test(h)) return true;
+    if (/\bmicrobial\b.*\b(parmesan|romano|cheese)\b/i.test(h)) return true;
+    if (/\b(enzyme|enzymes)\b.*\b(parmesan|romano)\b/i.test(h)) return true;
     return false;
   }
 
@@ -1516,7 +1522,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-strip-v1', 'utf8'),
+          Buffer.from('multiocr-panorama-strip-v2', 'utf8'),
         ])
       )
       .digest('hex');
