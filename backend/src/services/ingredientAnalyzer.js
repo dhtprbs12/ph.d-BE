@@ -1096,7 +1096,26 @@ class IngredientAnalyzer {
   postProcessExtractedIngredientList(list) {
     if (!Array.isArray(list) || list.length === 0) return list;
     const step1 = list.map(s => this._fixOCRPremixLine(String(s || '').trim())).filter(Boolean);
-    return this._dedupeNoisyPremixDuplicates(step1);
+    const step2 = this._dedupeNoisyPremixDuplicates(step1);
+    return this._dedupeListCaseInsensitivePreserveOrder(step2);
+  }
+
+  /**
+   * Drop exact duplicate lines (case-insensitive, normalized spaces). Keeps first occurrence / order.
+   */
+  _dedupeListCaseInsensitivePreserveOrder(list) {
+    if (!Array.isArray(list) || list.length === 0) return list;
+    const seen = new Set();
+    const out = [];
+    for (const item of list) {
+      const s = String(item || '').trim();
+      if (!s) continue;
+      const k = s.toLowerCase().replace(/\s+/g, ' ').trim();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(s);
+    }
+    return out;
   }
 
   /**

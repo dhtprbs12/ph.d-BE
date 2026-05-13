@@ -261,7 +261,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       throw new Error('extractFromMultipleImages: imageBuffers must be a non-empty array');
     }
 
-    const pipelineSalt = Buffer.from('multiocr-panorama-gemini-primary-v1', 'utf8');
+    const pipelineSalt = Buffer.from('multiocr-panorama-gemini-primary-v2', 'utf8');
 
     // Cache key spans ALL frames so an exact re-scan hits cache.
     // Pipeline-salt suffix busts stale ocr_cache rows when post-merge
@@ -1316,7 +1316,7 @@ missing_section:
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-gemini-primary-v1', 'utf8'),
+          Buffer.from('multiocr-panorama-gemini-primary-v2', 'utf8'),
         ])
       )
       .digest('hex');
@@ -1641,6 +1641,14 @@ Rules:
 - One legal ingredient per array element. A header word/phrase followed by one balanced "(" … ")" sub-list
   (cheese, vitamin/mineral premix, enzymes, etc.) is ONE element — do not split on inner commas.
 - Preserve readable qualifiers (MODIFIED, ROASTED, etc.) and parentheses as visible; do not invent inner tokens.
+- NEVER duplicate the same ingredient: if two lines would normalize to the same substance, include it ONCE only
+  (case-insensitive), in the position of its first printed occurrence.
+- Each string must be ONE printed ingredient only. Do NOT fuse the tail of the next ingredient into the previous line
+  (e.g. a "Garlic Puree" or "Roasted Garlic Puree" item must not also contain "egg yolks", "salt", or "microbial enzyme"
+  unless those words appear inside the SAME printed parentheses for that item).
+- If the label lists separate cheeses (e.g. Parmesan and Romano) as separate comma-separated entries, output
+  SEPARATE array elements, each with its own parentheses exactly as on the label — do not merge them into one
+  undifferentiated "parmesan romano cheese milk..." blob without the correct "(" … ")" structure.
 - If the panel is partly unreadable, still return what you can and lower confidence / set missing_section.
 
 Return ONLY this JSON (no markdown, no code fences):
