@@ -1,6 +1,7 @@
 /**
  * Decode a short product spin video to JPEG frame buffers for OCR.
- * Requires `ffmpeg` on PATH (install in Docker / host image).
+ * Prefers `ffmpeg-static` (bundled binary) so Railway/Nixpacks PATH issues
+ * do not break production. Override with env FFMPEG_PATH if needed.
  */
 
 'use strict';
@@ -9,6 +10,21 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+
+/** @returns {string} */
+function resolveFfmpegPath() {
+  const fromEnv = process.env.FFMPEG_PATH;
+  if (fromEnv && typeof fromEnv === 'string' && fromEnv.trim()) {
+    return fromEnv.trim();
+  }
+  try {
+    const bundled = require('ffmpeg-static');
+    if (bundled && typeof bundled === 'string') return bundled;
+  } catch {
+    /* optional at install time — should not happen with package.json dep */
+  }
+  return 'ffmpeg';
+}
 
 const DEFAULTS = {
   /** Hard cap on number of stills passed to Vision (cost / latency). */
@@ -54,7 +70,8 @@ function extractJpegFramesFromVideo(videoBuffer, options = {}) {
     outPattern,
   ];
 
-  const proc = spawnSync('ffmpeg', args, { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 });
+  const ffmpegBin = resolveFfmpegPath();
+  const proc = spawnSync(ffmpegBin, args, { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 });
   try {
     fs.unlinkSync(inputPath);
   } catch {
@@ -64,7 +81,7 @@ function extractJpegFramesFromVideo(videoBuffer, options = {}) {
   if (proc.error) {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
     throw new Error(
-      `ffmpeg spawn failed (${proc.error.message}). Is ffmpeg installed and on PATH?`
+      `ffmpeg spawn failed (${proc.error.message}). Tried: ${ffmpegBin}. Set FFMPEG_PATH or ensure ffmpeg-static is installed.`
     );
   }
 
