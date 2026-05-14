@@ -1,7 +1,7 @@
 /**
  * Decode a short product spin video to JPEG frame buffers for OCR.
  * Prefers `ffmpeg-static` (bundled binary) so Railway/Nixpacks PATH issues
- * do not break production. Override with env FFMPEG_PATH if needed.
+ * do not break production. Override with FFMPEG_PATH or FFMPEG_BIN if needed.
  */
 
 'use strict';
