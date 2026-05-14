@@ -1331,10 +1331,10 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
  * cancels at the confirmation step.
  *
  * Body: multipart/form-data, field name "images" (1+ files, cap below
- * must stay ≥ client burst count — e.g. 10+ frames for curved labels).
+ * must stay ≥ client burst count — e.g. 20 frames for curved labels).
  * No pet fields needed yet — those come with /commit-back.
  */
-router.post('/back-multi/:pendingScanId', upload.array('images', 16), async (req, res, next) => {
+router.post('/back-multi/:pendingScanId', upload.array('images', 32), async (req, res, next) => {
   try {
     const { pendingScanId } = req.params;
 
@@ -1350,16 +1350,13 @@ router.post('/back-multi/:pendingScanId', upload.array('images', 16), async (req
       return res.status(400).json({ error: 'At least one image is required' });
     }
 
-    // Each frame is downsized independently. The new pipeline OCRs
-    // each frame in its own Gemini call, so per-frame cost matters
-    // less than per-frame text legibility — small ingredient text
-    // near the edge of the panel is the usual miss. 2000px on the
-    // long side + JPEG q90 keeps that text readable while still
-    // staying under the per-call multimodal limit.
+    // Each frame is downsized independently. 2200px long edge + q90
+    // pairs with 20-frame strip panorama (wider composite, slightly
+    // more headroom before downscale in labelPanoramaService).
     const optimizedBuffers = await Promise.all(
       req.files.map(file =>
         sharp(file.buffer)
-          .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
+          .resize(2200, 2200, { fit: 'inside', withoutEnlargement: true })
           .jpeg({ quality: 90 })
           .toBuffer()
       )

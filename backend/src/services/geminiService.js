@@ -262,7 +262,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       throw new Error('extractFromMultipleImages: imageBuffers must be a non-empty array');
     }
 
-    const pipelineSalt = Buffer.from('multiocr-panorama-gemini-primary-v4', 'utf8');
+    const pipelineSalt = Buffer.from('multiocr-panorama-gemini-primary-v5', 'utf8');
 
     // Cache key spans ALL frames so an exact re-scan hits cache.
     // Pipeline-salt suffix busts stale ocr_cache rows when post-merge
@@ -1031,7 +1031,7 @@ Return ONLY this JSON (no prose, no code fences):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-gemini-primary-v4', 'utf8'),
+          Buffer.from('multiocr-panorama-gemini-primary-v5', 'utf8'),
         ])
       )
       .digest('hex');

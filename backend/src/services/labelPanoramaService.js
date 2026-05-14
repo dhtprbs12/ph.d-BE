@@ -1,8 +1,11 @@
 /**
- * Build a single wide image from an ordered burst (e.g. 6 rotations) by
+ * Build a single wide image from an ordered burst (many rotations) by
  * resizing each frame to a common height, taking a vertical center strip,
  * and concatenating left → right. Not true cylindrical unwrap — cheap
  * server-side input for one DOCUMENT_TEXT_DETECTION pass.
+ *
+ * Defaults tuned for ~20 narrow strips: slightly narrower strip fraction
+ * and higher max width so the final JPEG is not over-shrunk vs 10-frame bursts.
  */
 
 'use strict';
@@ -10,10 +13,10 @@
 const sharp = require('sharp');
 
 const DEFAULTS = {
-  maxStripHeight: 1400,
-  centerStripFraction: 0.36,
-  maxOutputWidthPx: 12000,
-  jpegQuality: 86,
+  maxStripHeight: 1550,
+  centerStripFraction: 0.32,
+  maxOutputWidthPx: 16000,
+  jpegQuality: 88,
 };
 
 /**
