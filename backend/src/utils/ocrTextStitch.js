@@ -18,6 +18,53 @@
 /** Hard cap before Gemini merge (chars). */
 const MAX_STITCHED_CHARS_FOR_MERGE = 120_000;
 
+/** Max chars kept from declaration start (safety vs runaway OCR). */
+const MAX_ING_WINDOW = 6000;
+
+/**
+ * First match in the post-declaration slice wins (earliest regulatory/footer break).
+ * CONTAINS is matched only as allergen lines (CONTAINS MILK / CONTAINS: EGG …),
+ * not "contains less than 2%" inside the ingredient narrative.
+ */
+const DECL_END_RES = [
+  /\bCONTAINS\s*:\s*(?:MILK|EGG|EGGS|SOY|WHEAT|FISH|SHELLFISH|PEANUTS|TREENUTS|TREE\s+NUTS|SESAME|MUSTARD|ALMONDS)\b/i,
+  /\bCONTAINS\s+(?:MILK|EGG|EGGS|SOY|WHEAT|FISH|SHELLFISH|PEANUTS|TREENUTS|TREE\s+NUTS|SESAME|MUSTARD|ALMONDS)\b/i,
+  /\bMAY\s+CONTAIN\b/i,
+  /\bPRODUCT\s+OF\b/i,
+  /\bMANUFACTURED\s+(?:FOR|BY)\b/i,
+  /\bDIST\.\s*&\s*SOLD\b/i,
+  /\bDIST\s*&\s*SOLD\b/i,
+  /\bDISTRIBUTED\s+BY\b/i,
+];
+
+const ING_DECL_START = /\b(Ingredients|INGREDIENTS|Composition|Zutaten|Ingrediente|INGREDIENTI)\s*:\s*/i;
+
+/**
+ * Keep only the ingredient-declaration window from one Vision OCR dump
+ * (drops Nutrition Facts, cooking copy, etc. when anchors match).
+ *
+ * @param {string} rawText
+ * @returns {string} trimmed; may be original text if no safe slice
+ */
+function sliceRawToIngredientsWindow(rawText) {
+  const t = String(rawText || '').trim();
+  if (!t) return '';
+  const sm = ING_DECL_START.exec(t);
+  if (!sm) return t;
+
+  const after = t.slice(sm.index + sm[0].length).trim();
+  let end = after.length;
+  for (const re of DECL_END_RES) {
+    const m = re.exec(after);
+    if (m && m.index < end) end = m.index;
+  }
+  let body = after.slice(0, end).trim();
+  body = body.replace(/[,\s.]+$/, '');
+  if (body.length < 10) return t;
+  if (body.length > MAX_ING_WINDOW) body = body.slice(0, MAX_ING_WINDOW).trim();
+  return `Ingredients: ${body}`;
+}
+
 function squashWs(s) {
   return String(s || '')
     .replace(/\r\n/g, '\n')
@@ -187,7 +234,8 @@ function stitchSequentialFrameTexts(frames) {
 
   let acc = '';
   for (const f of sorted) {
-    acc = stitchTwoStrings(acc, f.rawText || '', stitchOpts);
+    const slim = sliceRawToIngredientsWindow(f.rawText || '');
+    acc = stitchTwoStrings(acc, slim, stitchOpts);
   }
   const withHeaders = dedupeIngredientHeaders(acc);
   return collapseAdjacentDuplicatePhrases(withHeaders);
@@ -206,5 +254,6 @@ function truncateForMerge(stitched) {
 module.exports = {
   stitchSequentialFrameTexts,
   truncateForMerge,
+  sliceRawToIngredientsWindow,
   MAX_STITCHED_CHARS_FOR_MERGE,
 };
