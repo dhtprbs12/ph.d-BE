@@ -13,10 +13,10 @@ const os = require('os');
 
 /** @returns {string} */
 function resolveFfmpegPath() {
-  const fromEnv = process.env.FFMPEG_PATH;
-  if (fromEnv && typeof fromEnv === 'string' && fromEnv.trim()) {
-    return fromEnv.trim();
-  }
+  const fromEnv =
+    (process.env.FFMPEG_PATH && process.env.FFMPEG_PATH.trim()) ||
+    (process.env.FFMPEG_BIN && process.env.FFMPEG_BIN.trim());
+  if (fromEnv) return fromEnv;
   try {
     const bundled = require('ffmpeg-static');
     if (bundled && typeof bundled === 'string') return bundled;
@@ -81,7 +81,7 @@ function extractJpegFramesFromVideo(videoBuffer, options = {}) {
   if (proc.error) {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
     throw new Error(
-      `ffmpeg spawn failed (${proc.error.message}). Tried: ${ffmpegBin}. Set FFMPEG_PATH or ensure ffmpeg-static is installed.`
+      `ffmpeg spawn failed (${proc.error.message}). Tried: ${ffmpegBin}. Set FFMPEG_PATH / FFMPEG_BIN or ensure ffmpeg-static is installed.`
     );
   }
 
