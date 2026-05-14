@@ -246,8 +246,10 @@ INGREDIENT LIST EXTRACTION RULES (very important):
    *
    * @param {Buffer[]} imageBuffers - 1+ image buffers (typically 6)
    * @param {string} mimeType
-   * @param {{ skipPanorama?: boolean }} [opts]  skipPanorama: skip strip-panorama + panorama Gemini; use
-   *   per-frame Vision + text merge only (e.g. frames from spin video via ffmpeg).
+   * @param {{ skipPanorama?: boolean }} [opts]  skipPanorama: if true, skip strip-panorama + panorama Gemini
+   *   and use per-frame Vision + text merge only (for A/B tests or when panorama
+   *   consistently misaligns for a capture mode). Default false — including
+   *   frames extracted from spin video.
    * @returns {{
    *   ingredientsList: string[],
    *   rawIngredientsText: string,
@@ -447,7 +449,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
         }
       }
     } else {
-      console.log('[MULTI-OCR] skipPanorama — per-frame Vision + text merge only (e.g. spin video)');
+      console.log('[MULTI-OCR] skipPanorama — per-frame Vision + text merge only (opt-in)');
     }
 
     // ── STAGE 1 (fallback): Cloud Vision per-frame OCR (parallel) ────

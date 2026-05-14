@@ -1432,9 +1432,10 @@ router.post('/back-multi/:pendingScanId', upload.array('images', 32), async (req
  * POST /api/scan/back-video/:pendingScanId
  *
  * Step 2 (video spin): client uploads a short mp4/mov of the user rotating
- * the can. Server runs ffmpeg → JPEG frames → per-frame Vision + Gemini
- * text merge (no strip panorama). Same pending + commit-back contract as
- * /back-multi.
+ * the can. Server runs ffmpeg → JPEG frames, then uses the same pipeline as
+ * /back-multi when possible: center-strip panorama + Vision/Gemini first,
+ * with automatic fallback to per-frame Vision + text merge if panorama
+ * build or OCR is weak. Same pending + commit-back contract as /back-multi.
  *
  * Body: multipart/form-data, field name "video". Requires ffmpeg on PATH.
  */
@@ -1480,9 +1481,10 @@ router.post('/back-video/:pendingScanId', uploadVideo.single('video'), async (re
     console.log(
       `📹 [BACK-VIDEO] ${req.file.size}B video → ${optimizedBuffers.length} frames for ${pendingScanId}`
     );
-    const extracted = await geminiService.extractFromMultipleImages(optimizedBuffers, 'image/jpeg', {
-      skipPanorama: true,
-    });
+    const extracted = await geminiService.extractFromMultipleImages(
+      optimizedBuffers,
+      'image/jpeg'
+    );
 
     const srvList = extracted.ingredientsList || [];
     const srvVit = srvList.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
