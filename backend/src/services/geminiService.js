@@ -4,6 +4,7 @@ const { query } = require('../database/connection');
 const { v4: uuidv4 } = require('uuid');
 const cloudVisionService = require('./cloudVisionService');
 const imageService = require('./imageService');
+const { stitchSequentialFrameTexts, truncateForMerge } = require('../utils/ocrTextStitch');
 
 /**
  * GEMINI AI SERVICE
@@ -266,7 +267,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 
     const skipPanorama = Boolean(opts && opts.skipPanorama);
     const pipelineSalt = Buffer.from(
-      skipPanorama ? 'multiocr-ffmpeg-perframe-v1' : 'multiocr-panorama-gemini-primary-v5',
+      skipPanorama ? 'multiocr-ffmpeg-perframe-v3' : 'multiocr-panorama-gemini-primary-v5',
       'utf8'
     );
 
@@ -499,7 +500,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       `[MULTI-OCR] Stage2 merge only: n=${preList.length} mergeVitaminsLine=${preVit}`
     );
 
-    const haystack = usableFrames.map(f => f.rawText).join('\n\n');
+    const haystack = stitchSequentialFrameTexts(usableFrames);
     let recoveredList = merged.ingredientsList || [];
     recoveredList = this._reconcileListParenFromRaw(haystack, recoveredList);
     recoveredList = ingredientAnalyzer.postProcessExtractedIngredientList(recoveredList);
@@ -944,24 +945,34 @@ If the literal "Ingredients:" header is visible, set has_start_anchor true and s
    * blocks Cloud Vision extracted from each rotated frame and turn
    * them into one ordered, deduped ingredient list.
    *
-   * Cloud Vision returns EVERYTHING visible in the photo — the
-   * ingredient panel, nutrition facts, marketing copy, disclaimer
-   * paragraphs, even barcode digits. The first job of this prompt is
-   * to discard all of that noise; the second is to do the same
-   * "anchor → walk forward, stitch seams" reconstruction the older
-   * merge prompt did.
+   * Frames are first stitched deterministically (suffix/prefix overlap
+   * in capture order) into one reading-ordered document so the LLM
+   * reasons about order the same way a human reads one continuous blob,
+   * instead of juggling dozens of independent OCR blocks.
    */
   async _mergeRawTextWithGemini(frames, totalFrameCount) {
-    const framesBlock = frames
-      .map(
-        f =>
-          `Photo ${f.frameIndex} (raw OCR):\n${this._structuralOcrHintsForMerge(f.rawText)}"""\n${f.rawText}\n"""`
-      )
-      .join('\n\n');
+    const sorted = frames.slice().sort((a, b) => (a.frameIndex || 0) - (b.frameIndex || 0));
+    const stitchedRaw = stitchSequentialFrameTexts(sorted);
+    const stitched = truncateForMerge(stitchedRaw);
+    const hint = this._structuralOcrHintsForMerge(stitched);
 
-    const prompt = `Below is raw OCR from ${frames.length} photos of one product label. Each block may contain text outside the ingredient list. Use only the text that belongs to the ingredient declaration under "Ingredients:" (or the same idea in another language). Read that text and split it into separate ingredients as declared.
+    if (sorted.length > 1) {
+      console.log(
+        `[MULTI-OCR] stitched ${stitchedRaw.length} chars from ${sorted.length} frames → merge (${totalFrameCount} total photos)`
+      );
+    }
 
-${framesBlock}
+    const prompt = `You receive ONE OCR document for a single product label. It was built by joining consecutive photos taken while the package was rotated: overlap at seams was merged algorithmically, so the character order is already the natural reading order around the package (not alphabetized, not shuffled).
+
+Your tasks:
+1) Keep ONLY the ingredient declaration (typically after "Ingredients:" or the same idea in another language). Drop nutrition tables, marketing copy, barcodes, and unrelated blocks.
+2) Split that declaration into discrete ingredients exactly as a regulator-style comma/parenthesis list would be read — one JSON string per ingredient line item as printed.
+3) ORDER (critical): the JSON "ingredients" array MUST follow the declaration order in THIS DOCUMENT from first token to last. Never alphabetize, never group by category, never reorder by importance. If noise makes order ambiguous, lower "confidence" instead of guessing a reorder.
+4) Where OCR dropped characters at seams, infer the intended token only when the reading is clearly implied by surrounding context; otherwise keep the surface form and reflect uncertainty in "confidence" or "notes".
+
+${hint}"""
+${stitched}
+"""
 
 Return ONLY this JSON (no prose, no code fences):
 {
@@ -1000,6 +1011,8 @@ Return ONLY this JSON (no prose, no code fences):
       .join('\n\n');
 
     const prompt = `Below are partial ingredient lists from ${frames.length} photos (${totalFrameCount} photos total) of one product label. Use only what belongs to the text under "Ingredients:" (or the same idea in another language). Read that and merge into one ordered ingredient list.
+
+Preserve declaration order as printed around the package (photo numbers increase in capture order). Do not alphabetize. If segments conflict, lower confidence instead of inventing a new order.
 
 ${framesBlock}
 
