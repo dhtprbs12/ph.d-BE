@@ -267,7 +267,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 
     const skipPanorama = Boolean(opts && opts.skipPanorama);
     const pipelineSalt = Buffer.from(
-      skipPanorama ? 'multiocr-ffmpeg-perframe-v3' : 'multiocr-panorama-gemini-primary-v5',
+      skipPanorama ? 'multiocr-ffmpeg-perframe-v5' : 'multiocr-panorama-gemini-primary-v5',
       'utf8'
     );
 
@@ -474,6 +474,25 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       )
     );
     console.log(`👁️  [MULTI-OCR] Stage 1 done in ${Date.now() - t0}ms`);
+
+    // Log Vision OCR per frame (fixed preview cap — no env toggles).
+    const visionRawPreviewChars = 2500;
+    const sortedForLog = this._sortFramesByCaptureOrder(frames);
+    for (const f of sortedForLog) {
+      const raw = f.rawText || '';
+      if (!raw.length) {
+        console.log(`👁️  [MULTI-OCR] Vision raw frame ${f.frameIndex} len=0 (empty)`);
+        continue;
+      }
+      const oneLine = raw.replace(/\s+/g, ' ').trim();
+      const clipped =
+        oneLine.length > visionRawPreviewChars
+          ? `${oneLine.slice(0, visionRawPreviewChars)} …[+${
+              oneLine.length - visionRawPreviewChars
+            } more chars]`
+          : oneLine;
+      console.log(`👁️  [MULTI-OCR] Vision raw frame ${f.frameIndex} len=${raw.length}: ${clipped}`);
+    }
 
     const usableFrames = this._sortFramesByCaptureOrder(frames.filter(f => f.rawText.length > 0));
     if (usableFrames.length === 0) {
@@ -956,9 +975,22 @@ If the literal "Ingredients:" header is visible, set has_start_anchor true and s
     const stitched = truncateForMerge(stitchedRaw);
     const hint = this._structuralOcrHintsForMerge(stitched);
 
-    if (sorted.length > 1) {
+    // Full stitched OCR (what Gemini receives as the document body, modulo truncateForMerge).
+    const stitchTotalLogChunk = 8000;
+    const rawLen = stitchedRaw.length;
+    const parts = Math.max(1, Math.ceil(rawLen / stitchTotalLogChunk));
+    console.log(
+      `[MULTI-OCR] stitched TOTAL raw (pre-Gemini) len=${rawLen} from ${sorted.length}/${totalFrameCount} frames — ${parts} log chunk(s)`
+    );
+    for (let off = 0, part = 1; off < rawLen; off += stitchTotalLogChunk, part++) {
+      const end = Math.min(off + stitchTotalLogChunk, rawLen);
       console.log(
-        `[MULTI-OCR] stitched ${stitchedRaw.length} chars from ${sorted.length} frames → merge (${totalFrameCount} total photos)`
+        `[MULTI-OCR] stitched TOTAL part ${part}/${parts} [char offset ${off}..${end}):\n${stitchedRaw.slice(off, end)}`
+      );
+    }
+    if (stitched.length < stitchedRaw.length) {
+      console.log(
+        `[MULTI-OCR] stitched prompt body was truncated for model: ${stitched.length} of ${rawLen} chars (see truncateForMerge cap)`
       );
     }
 
@@ -968,7 +1000,7 @@ Your tasks:
 1) Keep ONLY the ingredient declaration (typically after "Ingredients:" or the same idea in another language). Drop nutrition tables, marketing copy, barcodes, and unrelated blocks.
 2) Split that declaration into discrete ingredients exactly as a regulator-style comma/parenthesis list would be read — one JSON string per ingredient line item as printed.
 3) ORDER (critical): the JSON "ingredients" array MUST follow the declaration order in THIS DOCUMENT from first token to last. Never alphabetize, never group by category, never reorder by importance. If noise makes order ambiguous, lower "confidence" instead of guessing a reorder.
-4) Where OCR dropped characters at seams, infer the intended token only when the reading is clearly implied by surrounding context; otherwise keep the surface form and reflect uncertainty in "confidence" or "notes".
+4) Prefer fidelity to this noisy OCR over inventing cleaner text: do not add ingredients, spellings, or order that are not grounded in the document string; when the source is ambiguous, lower "confidence" and explain briefly in "notes" instead of guessing.
 
 ${hint}"""
 ${stitched}

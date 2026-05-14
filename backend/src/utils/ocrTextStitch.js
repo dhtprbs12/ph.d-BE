@@ -6,6 +6,11 @@
  * overlap (tokens first, then characters) so the model receives ONE
  * reading-ordered blob instead of N independent blocks (reduces wrong
  * reordering and duplicate shards without product-specific regex).
+ *
+ * Character-level overlaps are only accepted on word boundaries to
+ * avoid mid-token merges. After stitching, immediate duplicate phrases
+ * (same token run twice in a row) are collapsed — common when two
+ * frames re-read the same seam.
  */
 
 'use strict';
@@ -56,16 +61,31 @@ function longestTokenOverlap(aTok, bTok, opts) {
 }
 
 /**
- * Longest L where squashWs(a).slice(-L) === squashWs(b).slice(0, L).
+ * Longest L where suffix(A,L) === prefix(B,L), only if the seam is
+ * word-safe: do not merge mid-token (avoids "sal" + "lk" → "sal lk" glitches).
  */
-function longestCharOverlap(a, b, opts) {
+function longestCharOverlapWordSafe(a, b, opts) {
   const minL = opts.minChars ?? 8;
   const maxL = opts.maxChars ?? 900;
   const A = squashWs(a);
   const B = squashWs(b);
   const up = Math.min(maxL, A.length, B.length);
+
   for (let L = up; L >= minL; L--) {
-    if (A.slice(-L) === B.slice(0, L)) return L;
+    if (A.slice(-L) !== B.slice(0, L)) continue;
+
+    const startInA = A.length - L;
+    const beforeA = startInA > 0 ? A[startInA - 1] : '';
+    const firstInOverlapA = A[startInA];
+    if (beforeA && /\w/.test(beforeA) && /\w/.test(firstInOverlapA)) continue;
+
+    if (L < B.length) {
+      const lastInOverlapB = B[L - 1];
+      const afterB = B[L];
+      if (/\w/.test(lastInOverlapB) && /\w/.test(afterB)) continue;
+    }
+
+    return L;
   }
   return 0;
 }
@@ -88,7 +108,7 @@ function stitchTwoStrings(prev, next, opts) {
     return tail ? `${A} ${tail}` : A;
   }
 
-  const nChar = longestCharOverlap(A, B, opts);
+  const nChar = longestCharOverlapWordSafe(A, B, opts);
   if (nChar > 0) {
     return A + B.slice(nChar);
   }
@@ -112,6 +132,51 @@ function dedupeIngredientHeaders(text) {
 }
 
 /**
+ * When the same word sequence appears twice in a row (OCR re-read the seam),
+ * keep one copy. Token-normalized; min phrase length avoids touching "salt, sugar".
+ */
+function collapseAdjacentDuplicatePhrases(text) {
+  let tokens = tokenize(text);
+  if (tokens.length < 6) return squashWs(text);
+
+  const minWords = 3;
+  const maxWords = 40;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const next = [];
+    for (let i = 0; i < tokens.length; ) {
+      let handled = false;
+      const remain = tokens.length - i;
+      const maxN = Math.min(maxWords, Math.floor(remain / 2));
+      for (let n = maxN; n >= minWords; n--) {
+        if (i + 2 * n > tokens.length) continue;
+        let same = true;
+        for (let k = 0; k < n; k++) {
+          if (normTok(tokens[i + k]) !== normTok(tokens[i + n + k])) {
+            same = false;
+            break;
+          }
+        }
+        if (same) {
+          for (let k = 0; k < n; k++) next.push(tokens[i + k]);
+          i += 2 * n;
+          handled = true;
+          changed = true;
+          break;
+        }
+      }
+      if (!handled) {
+        next.push(tokens[i]);
+        i++;
+      }
+    }
+    tokens = next;
+  }
+  return squashWs(tokens.join(' '));
+}
+
+/**
  * @param {{ frameIndex: number, rawText: string }[]} frames
  * @returns {string}
  */
@@ -124,7 +189,8 @@ function stitchSequentialFrameTexts(frames) {
   for (const f of sorted) {
     acc = stitchTwoStrings(acc, f.rawText || '', stitchOpts);
   }
-  return squashWs(dedupeIngredientHeaders(acc));
+  const withHeaders = dedupeIngredientHeaders(acc);
+  return collapseAdjacentDuplicatePhrases(withHeaders);
 }
 
 /**
