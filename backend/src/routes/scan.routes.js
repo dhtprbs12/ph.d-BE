@@ -813,6 +813,22 @@ const upload = multer({
   }
 });
 
+/** Short spin videos for cylindrical labels (requires ffmpeg on the server). */
+const uploadVideo = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 80 * 1024 * 1024 }, // 80MB
+  fileFilter: (req, file, cb) => {
+    if (
+      file.mimetype.startsWith('video/') ||
+      file.mimetype === 'application/octet-stream'
+    ) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only video files are allowed'));
+    }
+  },
+});
+
 // No authentication required - pets are stored locally on device
 
 // ============================================
@@ -1408,6 +1424,104 @@ router.post('/back-multi/:pendingScanId', upload.array('images', 32), async (req
     });
   } catch (error) {
     console.error('[BACK-MULTI] Error:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /api/scan/back-video/:pendingScanId
+ *
+ * Step 2 (video spin): client uploads a short mp4/mov of the user rotating
+ * the can. Server runs ffmpeg → JPEG frames → per-frame Vision + Gemini
+ * text merge (no strip panorama). Same pending + commit-back contract as
+ * /back-multi.
+ *
+ * Body: multipart/form-data, field name "video". Requires ffmpeg on PATH.
+ */
+router.post('/back-video/:pendingScanId', uploadVideo.single('video'), async (req, res, next) => {
+  try {
+    const { pendingScanId } = req.params;
+
+    const frontData = pendingFrontLabels.get(pendingScanId);
+    if (!frontData) {
+      return res.status(404).json({
+        error: 'pending_scan_not_found',
+        message: 'Front label scan expired or not found. Please start over by scanning the front label.',
+      });
+    }
+
+    if (!req.file || !req.file.buffer?.length) {
+      return res.status(400).json({ error: 'Video file is required' });
+    }
+
+    const { extractJpegFramesFromVideo } = require('../services/videoFrameExtractService');
+    let frameBuffers;
+    try {
+      frameBuffers = extractJpegFramesFromVideo(req.file.buffer);
+    } catch (e) {
+      console.error('[BACK-VIDEO] ffmpeg extract failed:', e);
+      return res.status(400).json({
+        error: 'video_frame_extract_failed',
+        message:
+          e.message ||
+          'Could not extract frames from video. Ensure ffmpeg is installed on the server.',
+      });
+    }
+
+    const optimizedBuffers = await Promise.all(
+      frameBuffers.map(buf =>
+        sharp(buf)
+          .resize(2200, 2200, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 90 })
+          .toBuffer()
+      )
+    );
+
+    console.log(
+      `📹 [BACK-VIDEO] ${req.file.size}B video → ${optimizedBuffers.length} frames for ${pendingScanId}`
+    );
+    const extracted = await geminiService.extractFromMultipleImages(optimizedBuffers, 'image/jpeg', {
+      skipPanorama: true,
+    });
+
+    const srvList = extracted.ingredientsList || [];
+    const srvVit = srvList.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
+    const rawVit = /\b(?:vitamins?|itamins)\s*\(/i.test(extracted.rawIngredientsText || '');
+    console.log(
+      `📋 [BACK-VIDEO] server out: n=${srvList.length} listVitaminsLine=${srvVit} rawTextVitaminsOpen=${rawVit} pending=${pendingScanId}`
+    );
+
+    pendingFrontLabels.set(pendingScanId, {
+      ...frontData,
+      multiExtraction: {
+        ingredientsList: extracted.ingredientsList,
+        rawIngredientsText: extracted.rawIngredientsText,
+        confidence: extracted.confidence,
+        isComplete: extracted.isComplete,
+        missingSection: extracted.missingSection,
+        notes: extracted.notes,
+        capturedAt: Date.now(),
+      },
+    });
+
+    return res.json({
+      pendingScanId,
+      ingredients: extracted.ingredientsList,
+      rawIngredientsText: extracted.rawIngredientsText,
+      confidence: extracted.confidence,
+      isComplete: extracted.isComplete,
+      missingSection: extracted.missingSection,
+      notes: extracted.notes,
+      imageCount: extracted.imageCount,
+      suggestedAction:
+        extracted.confidence >= 0.95
+          ? 'auto_commit'
+          : extracted.confidence >= 0.5
+            ? 'confirm'
+            : 'recapture',
+    });
+  } catch (error) {
+    console.error('[BACK-VIDEO] Error:', error);
     next(error);
   }
 });
