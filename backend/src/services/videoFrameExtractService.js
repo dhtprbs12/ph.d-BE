@@ -27,15 +27,17 @@ function resolveFfmpegPath() {
 }
 
 const DEFAULTS = {
-  /** Hard cap on number of stills passed to Vision (cost / latency). */
-  maxFrames: 24,
+  /** Seconds between consecutive stills (ffmpeg `fps` = 1 / this). */
+  frameIntervalSec: 0.2,
+  /** Cap on stills passed to Vision; ~ceil(maxDurationSec / frameIntervalSec) for full span. */
+  maxFrames: 50,
   /** Trim long recordings so ffmpeg work stays bounded. */
   maxDurationSec: 10,
 };
 
 /**
  * @param {Buffer} videoBuffer  Raw mp4/mov bytes
- * @param {{ maxFrames?: number, maxDurationSec?: number }} [options]
+ * @param {{ maxFrames?: number, maxDurationSec?: number, frameIntervalSec?: number }} [options]
  * @returns {Buffer[]} JPEG buffers, time order
  */
 function extractJpegFramesFromVideo(videoBuffer, options = {}) {
@@ -50,8 +52,11 @@ function extractJpegFramesFromVideo(videoBuffer, options = {}) {
 
   fs.writeFileSync(inputPath, videoBuffer);
 
-  // ~2.5 fps over 10s → up to 25 frames; -frames:v caps at maxFrames.
-  const fps = Math.min(5, Math.max(2, o.maxFrames / o.maxDurationSec));
+  // e.g. 0.2s interval → 5 fps; over maxDurationSec seconds → up to maxFrames stills.
+  const fps = 1 / o.frameIntervalSec;
+  if (!Number.isFinite(fps) || fps <= 0 || fps > 30) {
+    throw new Error('extractJpegFramesFromVideo: frameIntervalSec must yield fps in (0, 30]');
+  }
   const vf = `fps=${fps},scale=min(iw\\,1920):-2:flags=lanczos`;
 
   const args = [
