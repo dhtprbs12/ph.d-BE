@@ -267,7 +267,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 
     const skipPanorama = Boolean(opts && opts.skipPanorama);
     const pipelineSalt = Buffer.from(
-      skipPanorama ? 'multiocr-ffmpeg-perframe-v6' : 'multiocr-panorama-gemini-primary-v5',
+      skipPanorama ? 'multiocr-ffmpeg-perframe-v7' : 'multiocr-panorama-gemini-primary-v5',
       'utf8'
     );
 

@@ -11,6 +11,10 @@
  * avoid mid-token merges. After stitching, immediate duplicate phrases
  * (same token run twice in a row) are collapsed — common when two
  * frames re-read the same seam.
+ *
+ * Per-frame Vision text is trimmed to the ingredient-declaration window using
+ * generic cues (URLs, net weight, line-shape heuristics), not SKU-specific
+ * strings, before stitching.
  */
 
 'use strict';
@@ -21,27 +25,149 @@ const MAX_STITCHED_CHARS_FOR_MERGE = 120_000;
 /** Max chars kept from declaration start (safety vs runaway OCR). */
 const MAX_ING_WINDOW = 6000;
 
+/** Declaration line: common EN/EU label words (not product-specific). */
+const ING_DECL_START =
+  /\b(Ingredients?|INGREDIENTS?|Composition|Composi(?:tion|ci[oó]n)|Zutaten|Ingrediente|INGREDIENTI|Ingr[eé]dients)\s*:\s*/i;
+
 /**
- * First match in the post-declaration slice wins (earliest regulatory/footer break).
- * CONTAINS is matched only as allergen lines (CONTAINS MILK / CONTAINS: EGG …),
- * not "contains less than 2%" inside the ingredient narrative.
+ * High-confidence substrings: if these appear after "Ingredients:", the label
+ * has almost certainly left the comma-list block (URLs, NF repeat, net weight, …).
  */
-const DECL_END_RES = [
-  /\bCONTAINS\s*:\s*(?:MILK|EGG|EGGS|SOY|WHEAT|FISH|SHELLFISH|PEANUTS|TREENUTS|TREE\s+NUTS|SESAME|MUSTARD|ALMONDS)\b/i,
-  /\bCONTAINS\s+(?:MILK|EGG|EGGS|SOY|WHEAT|FISH|SHELLFISH|PEANUTS|TREENUTS|TREE\s+NUTS|SESAME|MUSTARD|ALMONDS)\b/i,
-  /\bMAY\s+CONTAIN\b/i,
-  /\bPRODUCT\s+OF\b/i,
-  /\bMANUFACTURED\s+(?:FOR|BY)\b/i,
-  /\bDIST\.\s*&\s*SOLD\b/i,
-  /\bDIST\s*&\s*SOLD\b/i,
-  /\bDISTRIBUTED\s+BY\b/i,
+const FOOTER_INLINE_RES = [
+  /\bhttps?:\/\/\S+/i,
+  /\bwww\.[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/i,
+  /\b\S+@\S+\.\S+\b/i,
+  /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/,
+  /[©®]|(?:\([Cc]\)\s*20\d{2})/,
+  /\b(?:nutrition\s*facts|supplement\s*facts|amount\s*per\s*serving|%[\s]*daily[\s]*value)\b/i,
+  /\b(?:net\s*wt|net\s*weight|gross\s*wt|drained\s*wt)\b/i,
+  /\b(?:best\s*by|use\s*by|sell\s*by|exp\.?|lot\s*#|lot\s*no\.?|batch\s*#)\b/i,
+  /\bproduct\s+of\b/i,
+  /\b(?:made|packed|produced|manufactured)\s+in\b/i,
+  /\b(?:manufactured|packed|produced)\s+(?:for|by)\b/i,
+  /\b(?:distributed|distribuido|distribu[ií]do|distribué|fabriqué|fabricado|elaborado|importado|prepared)\s+(?:by|for|pour|par|por|en|de)\b/i,
+  /\bdist\.\s*&\s*sold\b/i,
+  /\bdist\s*&\s*sold\b/i,
+  /\bmay\s+contain\b/i,
+  /\b(?:keep|store|refrigerate)\b.{0,40}\b(?:cool|dry|frozen|refrigerat|after\s*opening)\b/i,
+  /\b(?:questions?|comments?|consumer|customer|help)\b.{0,30}\b(?:call|contact|visit)\b/i,
 ];
 
-const ING_DECL_START = /\b(Ingredients|INGREDIENTS|Composition|Zutaten|Ingrediente|INGREDIENTI)\s*:\s*/i;
+/**
+ * Earliest index in `s` where any regex matches (search-only; not global loops).
+ * @param {string} s
+ * @param {RegExp[]} patterns
+ * @returns {number}
+ */
+function earliestRegexIndex(s, patterns) {
+  let best = s.length;
+  for (const re of patterns) {
+    const flags = re.flags.replace(/g/g, '');
+    const m = new RegExp(re.source, flags).exec(s);
+    if (m && m.index < best) best = m.index;
+  }
+  return best;
+}
 
 /**
- * Keep only the ingredient-declaration window from one Vision OCR dump
- * (drops Nutrition Facts, cooking copy, etc. when anchors match).
+ * Allergen-style CONTAINS / CONTAINS: … — skip in-list "contains less than …".
+ * @param {string} after text after declaration header
+ * @returns {number} index of first allergen CONTAINS or after.length
+ */
+function earliestAllergenContainsIndex(after) {
+  const re = /\bCONTAINS\b/gi;
+  let best = after.length;
+  let m;
+  while ((m = re.exec(after)) !== null) {
+    const i = m.index;
+    const head = after.slice(i, i + 24).toLowerCase();
+    if (head.startsWith('contains less than')) continue;
+    best = Math.min(best, i);
+  }
+  return best;
+}
+
+/**
+ * Score how much a single OCR line looks like boilerplate / regulatory footer
+ * (not an ingredient continuation). Uses shape signals, not brand strings.
+ * @param {string} line
+ * @returns {number}
+ */
+function footerLineScore(line) {
+  const s = line.trim();
+  if (s.length < 6) return 0;
+
+  if (/\bcontains\s+less\s+than\b/i.test(s)) return -10;
+
+  let score = 0;
+
+  if (/https?:\/\/|www\.\S+/i.test(s)) score += 8;
+  if (/\b\S+@\S+\.\S+\b/i.test(s)) score += 8;
+  if (/\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/.test(s)) score += 7;
+  if (/[©®]|\([Cc]\)\s*20\d{2}/.test(s)) score += 6;
+  if (/\b(?:nutrition|supplement)\s+facts\b/i.test(s)) score += 7;
+  if (/\b(?:net\s*wt|net\s*weight|gross\s*wt)\b/i.test(s)) score += 6;
+  if (/\b(?:best\s*by|use\s*by|sell\s*by|lot\s*#|batch\s*#)\b/i.test(s)) score += 5;
+  if (/\bproduct\s+of\b|\b(?:made|packed|manufactured)\s+in\b/i.test(s)) score += 5;
+  if (/\b(?:distributed|distribuido|fabricado|fabriqué|elaborado)\s+(?:by|por|par|en)\b/i.test(s))
+    score += 5;
+  if (/\b(?:manufactured|packed|produced)\s+(?:for|by)\b/i.test(s)) score += 5;
+  if (/\bdist\.\s*&\s*sold\b|\bdist\s*&\s*sold\b/i.test(s)) score += 5;
+  if (/\bmay\s+contain\b/i.test(s)) score += 5;
+  if (/^\s*CONTAINS\b/i.test(s) && !/^contains\s+less\s+than\b/i.test(s.toLowerCase())) score += 6;
+  if (/\b(?:keep|store|refrigerate)\b/i.test(s) && /\b(?:cool|dry|frozen|refrigerat)\b/i.test(s))
+    score += 4;
+  if (/\b(?:questions?|comments?|consumer)\b/i.test(s) && /\b(?:call|visit|www)\b/i.test(s))
+    score += 5;
+
+  const letters = s.replace(/[^A-Za-z]/g, '');
+  if (letters.length >= 12) {
+    const upper = (s.match(/[A-Z]/g) || []).length / letters.length;
+    const commas = (s.match(/,/g) || []).length;
+    if (commas >= 4) score -= 6;
+    else if (commas >= 2) score -= 2;
+    if (upper > 0.58 && s.length >= 14 && s.length < 260 && commas <= 2) score += 4;
+  }
+
+  if (/^\d[\d\s./%]*$/i.test(s.replace(/,/g, '')) && s.length <= 28) score += 3;
+
+  return score;
+}
+
+/**
+ * When Vision preserves newlines, cut before the first line that reads like footer.
+ * @param {string} after
+ * @returns {number}
+ */
+function earliestNewlineFooterCut(after) {
+  if (!/\n/.test(after)) return after.length;
+  const parts = after.split(/\n/);
+  const THRESH = 5;
+  let pos = parts[0].length + 1;
+  for (let i = 1; i < parts.length; i++) {
+    if (footerLineScore(parts[i]) >= THRESH) return pos;
+    pos += parts[i].length + 1;
+  }
+  return after.length;
+}
+
+/**
+ * Earliest position where post-declaration text is likely no longer the ingredient list.
+ * @param {string} after
+ * @returns {number}
+ */
+function earliestFooterBoundary(after) {
+  return Math.min(
+    earliestRegexIndex(after, FOOTER_INLINE_RES),
+    earliestAllergenContainsIndex(after),
+    earliestNewlineFooterCut(after),
+  );
+}
+
+/**
+ * Keep only the ingredient-declaration window from one Vision OCR dump.
+ * Uses generic footer detection (line shape, URLs, NF repeat, allergen CONTAINS
+ * vs in-list "contains less than"), not exhaustive label phrase lists.
  *
  * @param {string} rawText
  * @returns {string} trimmed; may be original text if no safe slice
@@ -53,14 +179,12 @@ function sliceRawToIngredientsWindow(rawText) {
   if (!sm) return t;
 
   const after = t.slice(sm.index + sm[0].length).trim();
-  let end = after.length;
-  for (const re of DECL_END_RES) {
-    const m = re.exec(after);
-    if (m && m.index < end) end = m.index;
-  }
+  const end = earliestFooterBoundary(after);
+  const footerFound = end < after.length;
   let body = after.slice(0, end).trim();
   body = body.replace(/[,\s.]+$/, '');
-  if (body.length < 10) return t;
+  if (body.length === 0) return t;
+  if (!footerFound && body.length < 10) return t;
   if (body.length > MAX_ING_WINDOW) body = body.slice(0, MAX_ING_WINDOW).trim();
   return `Ingredients: ${body}`;
 }
