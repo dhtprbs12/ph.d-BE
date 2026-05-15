@@ -4,8 +4,8 @@
  * and concatenating left → right. Not true cylindrical unwrap — cheap
  * server-side input for one DOCUMENT_TEXT_DETECTION pass.
  *
- * Defaults tuned for ~20 narrow strips: slightly narrower strip fraction
- * and higher max width so the final JPEG is not over-shrunk vs 10-frame bursts.
+ * Defaults tuned for ~30 narrow strips: slightly narrower strip fraction
+ * and higher max width so the final JPEG is not over-shrunk vs shorter bursts.
  */
 
 'use strict';

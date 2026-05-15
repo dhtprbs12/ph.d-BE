@@ -1347,7 +1347,7 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
  * cancels at the confirmation step.
  *
  * Body: multipart/form-data, field name "images" (1+ files, cap below
- * must stay ≥ client burst count — e.g. 20 frames for curved labels).
+ * must stay ≥ client burst count — e.g. 30 frames for curved labels).
  * No pet fields needed yet — those come with /commit-back.
  */
 router.post('/back-multi/:pendingScanId', upload.array('images', 32), async (req, res, next) => {
@@ -1367,7 +1367,7 @@ router.post('/back-multi/:pendingScanId', upload.array('images', 32), async (req
     }
 
     // Each frame is downsized independently. 2200px long edge + q90
-    // pairs with 20-frame strip panorama (wider composite, slightly
+    // pairs with 30-frame strip panorama (wider composite, slightly
     // more headroom before downscale in labelPanoramaService).
     const optimizedBuffers = await Promise.all(
       req.files.map(file =>
