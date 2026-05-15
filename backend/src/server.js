@@ -11,6 +11,7 @@ const scanRoutes = require('./routes/scan.routes');
 const productRoutes = require('./routes/product.routes');
 const reviewRoutes = require('./routes/review.routes');
 const adminRoutes = require('./routes/admin.routes');
+const visionRoutes = require('./routes/vision.routes');
 
 const errorHandler = require('./middleware/errorHandler');
 const { connectDB } = require('./database/connection');
@@ -26,7 +27,7 @@ app.set('trust proxy', 1);
 // Security middleware
 app.use(helmet());
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Rate limiting
@@ -63,6 +64,7 @@ app.get('/terms', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/pets', petRoutes);
 app.use('/api/scan', scanRoutes);
+app.use('/api/vision', visionRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/admin', adminRoutes);
