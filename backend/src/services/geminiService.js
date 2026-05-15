@@ -269,7 +269,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 
     const skipPanorama = Boolean(opts && opts.skipPanorama);
     const pipelineSalt = Buffer.from(
-      skipPanorama ? 'multiocr-ffmpeg-perframe-v7' : 'multiocr-panorama-gemini-primary-v5',
+      skipPanorama ? 'multiocr-ffmpeg-perframe-v7' : 'multiocr-panorama-gemini-primary-v6',
       'utf8'
     );
 
@@ -350,6 +350,20 @@ INGREDIENT LIST EXTRACTION RULES (very important):
             console.log(
               `👁️  [MULTI-OCR] Panorama Vision haystack: ${panTrim.length} chars in ${Date.now() - tHay}ms`
             );
+            if (panTrim.length > 0) {
+              const panLogChunk = 8000;
+              const panLen = panTrim.length;
+              const panParts = Math.max(1, Math.ceil(panLen / panLogChunk));
+              console.log(
+                `[MULTI-OCR] Panorama Vision haystack FULL len=${panLen} — ${panParts} log chunk(s)`
+              );
+              for (let off = 0, part = 1; off < panLen; off += panLogChunk, part++) {
+                const end = Math.min(off + panLogChunk, panLen);
+                console.log(
+                  `[MULTI-OCR] Panorama Vision haystack part ${part}/${panParts} [char ${off}..${end}):\n${panTrim.slice(off, end)}`
+                );
+              }
+            }
           } catch (hayErr) {
             console.warn(`[MULTI-OCR] Panorama Vision haystack failed: ${hayErr.message}`);
           }
@@ -363,7 +377,19 @@ INGREDIENT LIST EXTRACTION RULES (very important):
               imageBuffers.length
             );
             const gList = gemPan.ingredientsList || [];
-            if (gList.length >= 3) {
+            let gemUnderSplit = false;
+            if (gList.length >= 3 && panTrim.length >= 50) {
+              const narrative = ingredientAnalyzer.sliceIngredientNarrativeFromRaw(panTrim);
+              const blob = (narrative || '').trim() || panTrim;
+              const outerSep = this._countOuterCommaSeparators(blob);
+              if (outerSep >= 14 && gList.length <= Math.min(12, outerSep - 4)) {
+                gemUnderSplit = true;
+                console.warn(
+                  `[MULTI-OCR] Panorama Gemini likely under-split (${gList.length} items vs ${outerSep} outer commas in declaration) — Vision+text merge`
+                );
+              }
+            }
+            if (gList.length >= 3 && !gemUnderSplit) {
               let recovered = gList;
               if (panTrim.length >= 50) {
                 recovered = this._reconcileListParenFromRaw(panTrim, recovered);
@@ -389,9 +415,11 @@ INGREDIENT LIST EXTRACTION RULES (very important):
               );
               return { ...mergedOutPan, imageCount: imageBuffers.length };
             }
-            console.warn(
-              `[MULTI-OCR] Panorama Gemini image too few items (${gList.length}); Vision text-merge fallback`
-            );
+            if (!gemUnderSplit) {
+              console.warn(
+                `[MULTI-OCR] Panorama Gemini image too few items (${gList.length}); Vision text-merge fallback`
+              );
+            }
           } catch (gemErr) {
             console.warn(
               `[MULTI-OCR] Panorama Gemini image failed: ${gemErr.message} — Vision text-merge fallback`
@@ -942,6 +970,23 @@ If the literal "Ingredients:" header is visible, set has_start_anchor true and s
   }
 
   /**
+   * Commas/semicolons at paren depth 0 — rough lower bound on how many
+   * top-level ingredient breaks the printed declaration has (FDA-style).
+   */
+  _countOuterCommaSeparators(text) {
+    const t = String(text || '');
+    let depth = 0;
+    let n = 0;
+    for (let i = 0; i < t.length; i++) {
+      const ch = t[i];
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
+      else if ((ch === ',' || ch === ';') && depth === 0) n++;
+    }
+    return n;
+  }
+
+  /**
    * Regex-only tags prepended to each Vision OCR dump. Helps Gemini
    * separate regulatory tables from the ingredient narrative before merging.
    */
@@ -1000,7 +1045,7 @@ If the literal "Ingredients:" header is visible, set has_start_anchor true and s
 
 Your tasks:
 1) Keep ONLY the ingredient declaration (typically after "Ingredients:" or the same idea in another language). Drop nutrition tables, marketing copy, barcodes, and unrelated blocks.
-2) Split that declaration into discrete ingredients exactly as a regulator-style comma/parenthesis list would be read — one JSON string per ingredient line item as printed.
+2) Split that declaration into discrete ingredients exactly as a regulator-style comma/parenthesis list would be read — one JSON string per top-level ingredient as printed (commas at parenthesis depth 0 separate items). Do NOT merge multiple printed ingredients into one long run-on string to shorten the list.
 3) ORDER (critical): the JSON "ingredients" array MUST follow the declaration order in THIS DOCUMENT from first token to last. Never alphabetize, never group by category, never reorder by importance. If noise makes order ambiguous, lower "confidence" instead of guessing a reorder.
 4) Prefer fidelity to this noisy OCR over inventing cleaner text: do not add ingredients, spellings, or order that are not grounded in the document string; when the source is ambiguous, lower "confidence" and explain briefly in "notes" instead of guessing.
 
@@ -1019,7 +1064,11 @@ Return ONLY this JSON (no prose, no code fences):
 
     const result = await this.model.generateContent({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.0, candidateCount: 1 },
+      generationConfig: {
+        temperature: 0.0,
+        candidateCount: 1,
+        maxOutputTokens: 8192,
+      },
     });
 
     const text = this._extractFirstText(result?.response);
@@ -1061,7 +1110,11 @@ Return ONLY this JSON (no prose, no code fences):
 
     const result = await this.model.generateContent({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.0, candidateCount: 1 },
+      generationConfig: {
+        temperature: 0.0,
+        candidateCount: 1,
+        maxOutputTokens: 8192,
+      },
     });
 
     const text = this._extractFirstText(result?.response);
@@ -1089,7 +1142,7 @@ Return ONLY this JSON (no prose, no code fences):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-gemini-primary-v5', 'utf8'),
+          Buffer.from('multiocr-panorama-gemini-primary-v6', 'utf8'),
         ])
       )
       .digest('hex');
@@ -1267,7 +1320,16 @@ If nothing from that section is visible:
   async _extractIngredientsFromPanoramaImage(panoramaBuffer, mimeType, totalFrameCount) {
     const prompt = `This is one stitched image from ${totalFrameCount} photos of the same product label as the user rotated it.
 
-Read only the text that belongs to the ingredient declaration under "Ingredients:" (or the same idea in another language). Split that into separate ingredients as printed and analyze.
+Read ONLY the ingredient declaration (the paragraph after "Ingredients:" / "INGREDIENTS:" or the same idea in another language). Ignore Nutrition Facts, % Daily Value, serving sizes, storage/distribution lines, and recipe text.
+
+SPLITTING (critical — under-splitting is a common failure mode):
+- Emit ONE JSON array element per printed TOP-LEVEL ingredient, in the same order as on the label.
+- A "top-level" ingredient ends at a comma (or semicolon) that is NOT inside nested parentheses or brackets. Example: WATER, CREAM, PARMESAN CHEESE (MILK, SALT), BUTTER (CREAM) → four array elements; inner commas stay inside the string for that element.
+- Do NOT merge multiple top-level ingredients into one long run-on string (wrong: "egg yolk egg yolks salt sugar"; right: separate items like "EGG YOLK", "SALT", "SUGAR" when the label separates them with commas).
+- Do NOT collapse the whole list into ~10 mega-lines to save space. Jarred sauces and pet foods often have 12–30+ top-level items; match the label granularity.
+- When a header is immediately followed by "(" … ")" listing subparts, keep that whole header + balanced "(" … ")" span as ONE element (vitamin/mineral premix style).
+
+ORDER: first ingredient on the label = first array element; never alphabetize.
 
 Return ONLY this JSON (no markdown, no code fences):
 {
@@ -1278,7 +1340,7 @@ Return ONLY this JSON (no markdown, no code fences):
   "notes": "brief"
 }
 
-Use missing_section: "start" | "middle" | "end" | null. is_complete and confidence 0.0–1.0 as you judge from the image.`;
+Use missing_section: "start" | "middle" | "end" | null. is_complete and confidence 0.0–1.0 as you judge from the image. If the list clearly continues past the stitched frame edges, lower confidence and set missing_section.`;
 
     const imageBase64 = Buffer.from(panoramaBuffer).toString('base64');
     const result = await this.model.generateContent({
@@ -1291,7 +1353,11 @@ Use missing_section: "start" | "middle" | "end" | null. is_complete and confiden
           ],
         },
       ],
-      generationConfig: { temperature: 0.0, candidateCount: 1 },
+      generationConfig: {
+        temperature: 0.0,
+        candidateCount: 1,
+        maxOutputTokens: 8192,
+      },
     });
     const text = this._extractFirstText(result?.response);
     return this._parseMultiImageResponse(text);
