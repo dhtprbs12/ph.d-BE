@@ -1367,8 +1367,7 @@ router.post('/back-multi/:pendingScanId', upload.array('images', 32), async (req
     }
 
     // Each frame is downsized independently. 2200px long edge + q90
-    // pairs with 30-frame strip panorama (wider composite, slightly
-    // more headroom before downscale in labelPanoramaService).
+    // pairs with burst multi-frame uploads (client builds no panorama).
     const optimizedBuffers = await Promise.all(
       req.files.map(file =>
         sharp(file.buffer)
@@ -1433,9 +1432,8 @@ router.post('/back-multi/:pendingScanId', upload.array('images', 32), async (req
  *
  * Step 2 (video spin): client uploads a short mp4/mov of the user rotating
  * the can. Server runs ffmpeg → JPEG frames, then uses the same pipeline as
- * /back-multi when possible: center-strip panorama + Vision/Gemini first,
- * with automatic fallback to per-frame Vision + text merge if panorama
- * build or OCR is weak. Same pending + commit-back contract as /back-multi.
+ * /back-multi: per-frame Cloud Vision OCR, deterministic text stitch, then
+ * Gemini text merge; optional debug strip-panorama JPEG (no OCR on it).
  *
  * Body: multipart/form-data, field name "video". Requires ffmpeg on PATH.
  */

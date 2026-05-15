@@ -236,20 +236,21 @@ INGREDIENT LIST EXTRACTION RULES (very important):
    * With Cloud Vision owning the visual half, every legible character
    * makes it into Stage 2, where Gemini can reason about it cleanly.
    *
-   * When Vision is available, Stage 1 prefers a server-built **center-strip
-   * panorama** (ordered frames → one wide JPEG) + single
-   * DOCUMENT_TEXT_DETECTION call; if that fails or returns too little text,
-   * it falls back to per-frame Vision + merge (original path).
+   * When Vision is available, Stage 1 is **always** per-frame
+   * DOCUMENT_TEXT_DETECTION (parallel). Frames are then stitched
+   * deterministically (`stitchSequentialFrameTexts`) before Stage 2.
+   *
+   * Optionally (`skipPanorama: false`, default) the server still builds a
+   * center-strip panorama JPEG after OCR for debug/R2 only — no Vision or
+   * Gemini runs on that image.
    *
    * Falls back to the legacy Gemini multi-image one-shot when the
    * Vision API key isn't configured (local dev without GCP setup).
    *
    * @param {Buffer[]} imageBuffers - 1+ image buffers (typically 6)
    * @param {string} mimeType
-   * @param {{ skipPanorama?: boolean }} [opts]  skipPanorama: if true, skip strip-panorama + panorama Gemini
-   *   and use per-frame Vision + text merge only (for A/B tests or when panorama
-   *   consistently misaligns for a capture mode). Default false — including
-   *   frames extracted from spin video.
+   * @param {{ skipPanorama?: boolean }} [opts]  skipPanorama: if true, skip the
+   *   optional post-OCR debug strip-panorama JPEG build (saves CPU). Default false.
    * @returns {{
    *   ingredientsList: string[],
    *   rawIngredientsText: string,
@@ -269,7 +270,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 
     const skipPanorama = Boolean(opts && opts.skipPanorama);
     const pipelineSalt = Buffer.from(
-      skipPanorama ? 'multiocr-ffmpeg-perframe-v7' : 'multiocr-panorama-gemini-primary-v6',
+      skipPanorama ? 'multiocr-perframe-stitch-primary-v8-nopano' : 'multiocr-perframe-stitch-primary-v8',
       'utf8'
     );
 
@@ -311,178 +312,9 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 
     const ingredientAnalyzer = require('./ingredientAnalyzer');
 
-    if (!skipPanorama) {
-      // ── STAGE 1 (preferred): center-strip panorama → single Vision OCR ─
-      const { buildStripPanoramaFromFrames } = require('./labelPanoramaService');
-
-      let panoramaBuffer = null;
-      let panMeta = null;
-      try {
-        const pan = await buildStripPanoramaFromFrames(imageBuffers);
-        panoramaBuffer = pan.buffer;
-        panMeta = pan.meta;
-        console.log(
-          `🖼️  [MULTI-OCR] Strip panorama ${panMeta.width}x${panMeta.height}px (${panoramaBuffer.length} bytes)`
-        );
-        try {
-          const dbg = await imageService.savePanoramaDebug(panoramaBuffer, {
-            cacheHashShort: combinedHash,
-            width: panMeta.width,
-            height: panMeta.height,
-          });
-          if (dbg.publicUrl) console.log(`🗂️  [Panorama] R2: ${dbg.publicUrl}`);
-        } catch (dbgErr) {
-          console.warn(`[Panorama] save failed: ${dbgErr.message}`);
-        }
-      } catch (panErr) {
-        console.warn(`[MULTI-OCR] Strip panorama build skipped: ${panErr.message}`);
-      }
-
-      if (panoramaBuffer) {
-        try {
-          let panTrim = '';
-          const tHay = Date.now();
-          try {
-            const { rawText: panRawFull } = await cloudVisionService.detectDocumentText(panoramaBuffer, {
-              languageHints: ['en'],
-            });
-            panTrim = String(panRawFull || '').trim();
-            console.log(
-              `👁️  [MULTI-OCR] Panorama Vision haystack: ${panTrim.length} chars in ${Date.now() - tHay}ms`
-            );
-            if (panTrim.length > 0) {
-              const panLogChunk = 8000;
-              const panLen = panTrim.length;
-              const panParts = Math.max(1, Math.ceil(panLen / panLogChunk));
-              console.log(
-                `[MULTI-OCR] Panorama Vision haystack FULL len=${panLen} — ${panParts} log chunk(s)`
-              );
-              for (let off = 0, part = 1; off < panLen; off += panLogChunk, part++) {
-                const end = Math.min(off + panLogChunk, panLen);
-                console.log(
-                  `[MULTI-OCR] Panorama Vision haystack part ${part}/${panParts} [char ${off}..${end}):\n${panTrim.slice(off, end)}`
-                );
-              }
-            }
-          } catch (hayErr) {
-            console.warn(`[MULTI-OCR] Panorama Vision haystack failed: ${hayErr.message}`);
-          }
-
-          const minChars = Math.max(120, imageBuffers.length * 40);
-          const tGem = Date.now();
-          try {
-            const gemPan = await this._extractIngredientsFromPanoramaImage(
-              panoramaBuffer,
-              mimeType,
-              imageBuffers.length
-            );
-            const gList = gemPan.ingredientsList || [];
-            let gemUnderSplit = false;
-            if (gList.length >= 3 && panTrim.length >= 50) {
-              const narrative = ingredientAnalyzer.sliceIngredientNarrativeFromRaw(panTrim);
-              const blob = (narrative || '').trim() || panTrim;
-              const outerSep = this._countOuterCommaSeparators(blob);
-              if (outerSep >= 14 && gList.length <= Math.min(12, outerSep - 4)) {
-                gemUnderSplit = true;
-                console.warn(
-                  `[MULTI-OCR] Panorama Gemini likely under-split (${gList.length} items vs ${outerSep} outer commas in declaration) — Vision+text merge`
-                );
-              }
-            }
-            if (gList.length >= 3 && !gemUnderSplit) {
-              let recovered = gList;
-              if (panTrim.length >= 50) {
-                recovered = this._reconcileListParenFromRaw(panTrim, recovered);
-              }
-              recovered = ingredientAnalyzer.postProcessExtractedIngredientList(recovered);
-              const mergedOutPan = {
-                ...gemPan,
-                ingredientsList: recovered,
-                rawIngredientsText: recovered.join(', '),
-              };
-              await this.cacheResult(combinedHash, {
-                rawIngredientsText: mergedOutPan.rawIngredientsText,
-                ingredientsList: mergedOutPan.ingredientsList,
-              });
-              const preVitPan = recovered.some(s =>
-                /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s))
-              );
-              console.log(
-                `✅ [MULTI-OCR] panorama Gemini image primary: n=${mergedOutPan.ingredientsList.length} ` +
-                  `mergeVitaminsLine=${preVitPan} in ${Date.now() - tGem}ms, ` +
-                  `confidence=${mergedOutPan.confidence.toFixed(2)}, complete=${mergedOutPan.isComplete}, ` +
-                  `missing=${mergedOutPan.missingSection || 'none'}`
-              );
-              return { ...mergedOutPan, imageCount: imageBuffers.length };
-            }
-            if (!gemUnderSplit) {
-              console.warn(
-                `[MULTI-OCR] Panorama Gemini image too few items (${gList.length}); Vision text-merge fallback`
-              );
-            }
-          } catch (gemErr) {
-            console.warn(
-              `[MULTI-OCR] Panorama Gemini image failed: ${gemErr.message} — Vision text-merge fallback`
-            );
-          }
-
-          if (panTrim.length >= minChars) {
-            const narrative = ingredientAnalyzer.sliceIngredientNarrativeFromRaw(panTrim);
-            const textForMerge = narrative.length >= 80 ? narrative : panTrim;
-            if (textForMerge.length < panTrim.length) {
-              console.log(
-                `[MULTI-OCR] Panorama merge input: focused ${textForMerge.length} chars (Vision ${panTrim.length})`
-              );
-            }
-            const mergedPan = await this._mergeRawTextWithGemini(
-              [{ frameIndex: 1, rawText: textForMerge }],
-              imageBuffers.length
-            );
-            const preListPan = mergedPan.ingredientsList || [];
-            const preVitPan = preListPan.some(s =>
-              /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s))
-            );
-            console.log(
-              `[MULTI-OCR] Stage2 (panorama Vision text fallback): n=${preListPan.length} mergeVitaminsLine=${preVitPan}`
-            );
-
-            const haystackPan = panTrim;
-            let recoveredPan = mergedPan.ingredientsList || [];
-            recoveredPan = this._reconcileListParenFromRaw(haystackPan, recoveredPan);
-            recoveredPan = ingredientAnalyzer.postProcessExtractedIngredientList(recoveredPan);
-            const mergedOutPan = {
-              ...mergedPan,
-              ingredientsList: recoveredPan,
-              rawIngredientsText: recoveredPan.join(', '),
-            };
-
-            await this.cacheResult(combinedHash, {
-              rawIngredientsText: mergedOutPan.rawIngredientsText,
-              ingredientsList: mergedOutPan.ingredientsList,
-            });
-
-            console.log(
-              `✅ [MULTI-OCR] panorama Vision+text path ${mergedOutPan.ingredientsList.length} ingredients, ` +
-                `confidence=${mergedOutPan.confidence.toFixed(2)}, complete=${mergedOutPan.isComplete}, ` +
-                `missing=${mergedOutPan.missingSection || 'none'}`
-            );
-
-            return { ...mergedOutPan, imageCount: imageBuffers.length };
-          }
-          console.warn(
-            `[MULTI-OCR] Panorama haystack too short (${panTrim.length} < ${minChars}) — per-frame Vision fallback`
-          );
-        } catch (visErr) {
-          console.warn(`[MULTI-OCR] Panorama branch failed: ${visErr.message} — per-frame fallback`);
-        }
-      }
-    } else {
-      console.log('[MULTI-OCR] skipPanorama — per-frame Vision + text merge only (opt-in)');
-    }
-
-    // ── STAGE 1 (fallback): Cloud Vision per-frame OCR (parallel) ────
+    // ── PRIMARY: Cloud Vision per frame → stitchSequentialFrameTexts → Gemini text merge
     console.log(
-      `👁️  [MULTI-OCR] Stage 1: Cloud Vision OCR for ${imageBuffers.length} frames`
+      `👁️  [MULTI-OCR] Stage 1 (primary): Cloud Vision OCR for ${imageBuffers.length} frames`
     );
     const t0 = Date.now();
     const frames = await Promise.all(
@@ -494,10 +326,6 @@ INGREDIENT LIST EXTRACTION RULES (very important):
             rawText: rawText.trim(),
           }))
           .catch(err => {
-            // One bad frame (network blip, transient 5xx) shouldn't
-            // tank the burst. Drop it; Stage 2 still works with the
-            // surviving frames and the missing coverage shows up in
-            // the final confidence.
             console.warn(`[MULTI-OCR] Frame ${i + 1} Vision OCR failed: ${err.message}`);
             return { frameIndex: i + 1, rawText: '' };
           })
@@ -505,7 +333,6 @@ INGREDIENT LIST EXTRACTION RULES (very important):
     );
     console.log(`👁️  [MULTI-OCR] Stage 1 done in ${Date.now() - t0}ms`);
 
-    // Log Vision OCR per frame (fixed preview cap — no env toggles).
     const visionRawPreviewChars = 2500;
     const sortedForLog = this._sortFramesByCaptureOrder(frames);
     for (const f of sortedForLog) {
@@ -517,9 +344,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       const oneLine = raw.replace(/\s+/g, ' ').trim();
       const clipped =
         oneLine.length > visionRawPreviewChars
-          ? `${oneLine.slice(0, visionRawPreviewChars)} …[+${
-              oneLine.length - visionRawPreviewChars
-            } more chars]`
+          ? `${oneLine.slice(0, visionRawPreviewChars)} …[+${oneLine.length - visionRawPreviewChars} more chars]`
           : oneLine;
       console.log(`👁️  [MULTI-OCR] Vision raw frame ${f.frameIndex} len=${raw.length}: ${clipped}`);
     }
@@ -538,16 +363,13 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       };
     }
 
-    // ── STAGE 2: Gemini text merge ─────────────────────────────────
     console.log(
-      `🧩 [MULTI-OCR] Stage 2: Gemini merge of ${usableFrames.length}/${imageBuffers.length} frame texts`
+      `🧩 [MULTI-OCR] Stage 2 (primary): Gemini merge of ${usableFrames.length}/${imageBuffers.length} stitched frame texts`
     );
     const merged = await this._mergeRawTextWithGemini(usableFrames, imageBuffers.length);
     const preList = merged.ingredientsList || [];
     const preVit = preList.some(s => /^\s*(?:vitamins?|itamins)\s*\(/i.test(String(s)));
-    console.log(
-      `[MULTI-OCR] Stage2 merge only: n=${preList.length} mergeVitaminsLine=${preVit}`
-    );
+    console.log(`[MULTI-OCR] Stage2 merge: n=${preList.length} mergeVitaminsLine=${preVit}`);
 
     const haystack = stitchSequentialFrameTexts(usableFrames);
     let recoveredList = merged.ingredientsList || [];
@@ -565,10 +387,34 @@ INGREDIENT LIST EXTRACTION RULES (very important):
     });
 
     console.log(
-      `✅ [MULTI-OCR] ${mergedOut.ingredientsList.length} ingredients, ` +
-      `confidence=${mergedOut.confidence.toFixed(2)}, complete=${mergedOut.isComplete}, ` +
-      `missing=${mergedOut.missingSection || 'none'}`
+      `✅ [MULTI-OCR] per-frame Vision + stitch primary: ${mergedOut.ingredientsList.length} ingredients, ` +
+        `confidence=${mergedOut.confidence.toFixed(2)}, complete=${mergedOut.isComplete}, ` +
+        `missing=${mergedOut.missingSection || 'none'}`
     );
+
+    if (!skipPanorama) {
+      try {
+        const { buildStripPanoramaFromFrames } = require('./labelPanoramaService');
+        const pan = await buildStripPanoramaFromFrames(imageBuffers);
+        console.log(
+          `🖼️  [MULTI-OCR] Debug strip panorama ${pan.meta.width}x${pan.meta.height}px (${pan.buffer.length} bytes, no OCR)`
+        );
+        try {
+          const dbg = await imageService.savePanoramaDebug(pan.buffer, {
+            cacheHashShort: combinedHash,
+            width: pan.meta.width,
+            height: pan.meta.height,
+          });
+          if (dbg.publicUrl) console.log(`🗂️  [Panorama] R2: ${dbg.publicUrl}`);
+        } catch (dbgErr) {
+          console.warn(`[Panorama] save failed: ${dbgErr.message}`);
+        }
+      } catch (panErr) {
+        console.warn(`[MULTI-OCR] Debug strip panorama skipped: ${panErr.message}`);
+      }
+    } else {
+      console.log('[MULTI-OCR] skipPanorama — skipped debug strip panorama build');
+    }
 
     return { ...mergedOut, imageCount: imageBuffers.length };
   }
@@ -970,23 +816,6 @@ If the literal "Ingredients:" header is visible, set has_start_anchor true and s
   }
 
   /**
-   * Commas/semicolons at paren depth 0 — rough lower bound on how many
-   * top-level ingredient breaks the printed declaration has (FDA-style).
-   */
-  _countOuterCommaSeparators(text) {
-    const t = String(text || '');
-    let depth = 0;
-    let n = 0;
-    for (let i = 0; i < t.length; i++) {
-      const ch = t[i];
-      if (ch === '(' || ch === '[') depth++;
-      else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
-      else if ((ch === ',' || ch === ';') && depth === 0) n++;
-    }
-    return n;
-  }
-
-  /**
    * Regex-only tags prepended to each Vision OCR dump. Helps Gemini
    * separate regulatory tables from the ingredient narrative before merging.
    */
@@ -1142,7 +971,7 @@ Return ONLY this JSON (no prose, no code fences):
       .update(
         Buffer.concat([
           ...imageBuffers.map(b => crypto.createHash('sha256').update(b).digest()),
-          Buffer.from('multiocr-panorama-gemini-primary-v6', 'utf8'),
+          Buffer.from('multiocr-oneshot-legacy-v8', 'utf8'),
         ])
       )
       .digest('hex');
