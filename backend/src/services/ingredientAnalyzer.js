@@ -386,18 +386,8 @@ class IngredientAnalyzer {
             }
           }
 
-          // Fix 1: Amplify HIGH/DANGER ingredients — position doesn't soften them
-          // DANGER (risk > 30): × 1.5 multiplier (ignores position)
-          // HIGH (risk > 15): × 1.25 multiplier (ignores position)
-          // LOW/MODERATE: normal position weight
-          let effectiveWeight;
-          if (riskScore > 30) {
-            effectiveWeight = 1.5;
-          } else if (riskScore > 15) {
-            effectiveWeight = 1.25;
-          } else {
-            effectiveWeight = positionWeight;
-          }
+          // Position-weighted penalty only — high cached risk does not bypass placement
+          const effectiveWeight = positionWeight;
 
           const adjusted = parseFloat((riskScore * effectiveWeight).toFixed(2));
           // Only count penalties (positive risk) — beneficial ingredients are the expected baseline
