@@ -414,6 +414,277 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
     };
   }
 
+  /** @returns {number} index of closing ')' that balances openParenIdx, or -1 */
+  _closingParenIndex(haystack, openParenIdx) {
+    let depth = 0;
+    for (let i = openParenIdx; i < haystack.length; i++) {
+      const c = haystack[i];
+      if (c === '(') depth++;
+      else if (c === ')') {
+        depth--;
+        if (depth === 0) return i;
+      }
+    }
+    return -1;
+  }
+
+  /** First top-level "( … )" in a single line (merge output), or null. */
+  _firstBalancedParenSpanInLine(line) {
+    const s = String(line || '');
+    const open = s.indexOf('(');
+    if (open <= 0) return null;
+    const close = this._closingParenIndex(s, open);
+    if (close === -1 || close <= open) return null;
+    return { open, close, inner: s.slice(open + 1, close) };
+  }
+
+  /** Tokens for overlap (letters/digits; min length 2). */
+  _overlapTokens(s) {
+    return String(s || '')
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(w => w.length >= 2);
+  }
+
+  /** Index after ")" that precedes openIdx with no "(" or ")" in the gap (start of next surface ingredient). */
+  _gapStartAfterPrevCloseParen(raw, openIdx) {
+    for (let i = openIdx - 1; i >= 0; i--) {
+      if (raw[i] !== ')') continue;
+      const gap = raw.slice(i + 1, openIdx);
+      if (!/[\(\)]/.test(gap)) return i + 1;
+    }
+    return -1;
+  }
+
+  /** Last comma/semicolon before openIdx at parenthesis depth 0 (ignores commas inside nested "(...)"). */
+  _lastTopLevelCommaBefore(raw, openIdx) {
+    let depth = 0;
+    for (let i = openIdx - 1; i >= 0; i--) {
+      const c = raw[i];
+      if (c === ')') depth++;
+      else if (c === '(') depth--;
+      else if ((c === ',' || c === ';') && depth === 0) return i;
+    }
+    return -1;
+  }
+
+  /**
+   * Start index in raw for the header immediately preceding `openIdx` '('.
+   * Uses depth-0 commas, else tail-word trim when many tokens lack commas,
+   * else a short character walkback.
+   */
+  _headerStartBeforeParen(raw, openIdx) {
+    const before = raw.slice(0, openIdx);
+    const lastComma = this._lastTopLevelCommaBefore(raw, openIdx);
+    if (lastComma >= 0) {
+      let s = lastComma + 1;
+      while (s < openIdx && /\s/.test(raw[s])) s++;
+      return s;
+    }
+    const trimmed = before.trimEnd();
+    if (!trimmed.length) return openIdx;
+    const words = trimmed.split(/\s+/);
+    const head0 = (words[0] || '').toLowerCase();
+    const longPhrase =
+      /^(contains|including|less\s+than|added|with\s+added)\b/.test(head0) ||
+      /^[\d.]+%?$/.test(head0);
+    if (longPhrase || words.length <= 4) {
+      const si = openIdx - trimmed.length;
+      return si >= 0 ? si : 0;
+    }
+    const nTail = words.length >= 8 ? 5 : 3;
+    const tail = words.slice(-nTail).join(' ');
+    let idx = before.lastIndexOf(tail);
+    if (idx < 0) {
+      const ir = trimmed.indexOf(tail);
+      idx = ir >= 0 ? openIdx - trimmed.length + ir : -1;
+    }
+    if (idx < 0) {
+      let start = openIdx;
+      let steps = 0;
+      const maxHeaderChars = 56;
+      while (start > 0 && steps < maxHeaderChars) {
+        const c = raw[start - 1];
+        if (c === '\n' || c === '\r') break;
+        if (c === ',' || c === ';') break;
+        if (/[A-Za-z0-9'\-.]/.test(c) || c === ' ') {
+          start -= 1;
+          steps++;
+        } else break;
+      }
+      return start;
+    }
+    return Math.max(0, idx);
+  }
+
+  /** Enumerate balanced "(…)" spans in Vision haystack with safe header bounds. */
+  _listHaystackParenSpans(rawS) {
+    const raw = String(rawS || '');
+    const out = [];
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i] !== '(') continue;
+      const close = this._closingParenIndex(raw, i);
+      if (close === -1) continue;
+      let start = this._headerStartBeforeParen(raw, i);
+      const afterClose = this._gapStartAfterPrevCloseParen(raw, i);
+      if (afterClose >= 0) start = Math.max(start, afterClose);
+      while (start < raw.length && /\s/.test(raw[start])) start++;
+      const inner = raw.slice(i + 1, close).replace(/\s+/g, ' ').trim();
+      const full = raw.slice(start, close + 1).replace(/\s+/g, ' ').trim();
+      if (full.length >= 10 && full.length <= 2200 && inner.length >= 3) out.push({ full, inner });
+    }
+    return out;
+  }
+
+  /**
+   * When merge drops a header ("Modified …"), drops "Roasted …", or omits
+   * parentheses entirely, snap to a haystack span whose INNER token set
+   * matches the merge line (Jaccard / coverage). No product names — only
+   * structure + token overlap against the same Vision dump.
+   */
+  _reconcileLineByParenInnerOverlap(rawS, line) {
+    const L = String(line || '').trim();
+    if (!rawS || rawS.length < 40 || !L) return L;
+    const spans = this._listHaystackParenSpans(rawS);
+    if (!spans.length) return L;
+
+    const spanL = this._firstBalancedParenSpanInLine(L);
+    const innerL = spanL ? spanL.inner : null;
+    const toksL = new Set(this._overlapTokens(innerL || L));
+    if (toksL.size < 2) return L;
+
+    let best = null;
+    let bestAdj = -1;
+
+    for (const { full, inner } of spans) {
+      const toksI = new Set(this._overlapTokens(inner));
+      const toksF = new Set(this._overlapTokens(full));
+      if (toksI.size < 2) continue;
+
+      let score = 0;
+      if (innerL) {
+        const a = new Set(this._overlapTokens(innerL));
+        const b = toksI;
+        let inter = 0;
+        for (const x of a) if (b.has(x)) inter++;
+        const uni = new Set([...a, ...b]).size;
+        score = uni ? inter / uni : 0;
+        if (score < 0.56) continue;
+      } else {
+        if (toksL.size < 4) continue;
+        let interI = 0;
+        for (const x of toksI) if (toksL.has(x)) interI++;
+        const coverI = toksI.size ? interI / toksI.size : 0;
+        let interF = 0;
+        for (const x of toksL) if (toksF.has(x)) interF++;
+        const coverF = toksL.size ? interF / toksL.size : 0;
+        score = Math.min(coverI, coverF) * 0.55 + Math.max(coverI, coverF) * 0.45;
+        if (score < 0.74) continue;
+      }
+
+      const lenPen = full.replace(/\s+/g, ' ').length * 0.00012;
+      const adj = score - lenPen;
+      if (adj > bestAdj) {
+        bestAdj = adj;
+        best = full;
+      }
+    }
+
+    if (!best) return L;
+    if (!this._reconcileHaystackSwapPassesSanity(L, best)) return L;
+    const nL = L.replace(/\s+/g, ' ').toLowerCase();
+    const nB = best.replace(/\s+/g, ' ').toLowerCase();
+    if (nB === nL) return L;
+    if (L.includes('(') && best.length < L.length * 0.82) return L;
+    return best.replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * Reject haystack replacements that are almost certainly multi-ingredient
+   * OCR blobs or runaway repeats (would poison AI cache keys).
+   */
+  _reconcileHaystackSwapPassesSanity(line, candidate) {
+    const L = String(line || '').trim();
+    const B = String(candidate || '').trim();
+    if (!L || !B) return false;
+    const l = L.length;
+    const b = B.length;
+    if (b > 520) return false;
+    if (b > Math.max(220, l * 2.0 + 80)) return false;
+    if (l > 140 && b > l + 100) return false;
+    const wc = B.split(/\s+/).filter(Boolean).length;
+    if (wc > 44) return false;
+    const compact = B.replace(/\s+/g, ' ');
+    if (/(.{14,42})\1\1/i.test(compact)) return false;
+    const opens = (B.match(/\(/g) || []).length;
+    if (opens > 3) return false;
+    return true;
+  }
+
+  /**
+   * Snap a parenthetical line to the literal balanced "(…)" span found in
+   * raw OCR / rawIngredientsText so dropped prefixes (MODIFIED …) or
+   * invented inner tokens (, WATER) can be corrected when the source text
+   * still contains the true span.
+   */
+  _reconcileParenLineFromRaw(rawOrHaystack, line) {
+    const trimmed = String(line || '').trim();
+    const rawS = String(rawOrHaystack || '');
+    if (rawS.length < 40) return this._reconcileLineByParenInnerOverlap(rawS, trimmed);
+
+    let out = trimmed;
+    const open = trimmed.indexOf('(');
+    if (open > 0 && trimmed.lastIndexOf(')') > open) {
+      const words = trimmed
+        .slice(0, open)
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+      if (words.length) {
+        outer: for (let take = words.length; take >= 1; take -= 1) {
+          const h = words.slice(-take).join(' ');
+          if (h.length < 3) continue;
+          const esc = h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const re = new RegExp(esc + '\\s*\\(', 'gi');
+          let m;
+          while ((m = re.exec(rawS)) !== null) {
+            const openIdx = m.index + m[0].length - 1;
+            if (rawS[openIdx] !== '(') continue;
+            let start = this._headerStartBeforeParen(rawS, openIdx);
+            const afterClose = this._gapStartAfterPrevCloseParen(rawS, openIdx);
+            if (afterClose >= 0) start = Math.max(start, afterClose);
+            while (start < rawS.length && /\s/.test(rawS[start])) start++;
+            const closeIdx = this._closingParenIndex(rawS, openIdx);
+            if (closeIdx === -1) continue;
+            const candidate = rawS
+              .slice(start, closeIdx + 1)
+              .replace(/\s+/g, ' ')
+              .trim();
+            if (candidate.length < 8 || candidate.length > 2200) continue;
+            if (!this._reconcileHaystackSwapPassesSanity(trimmed, candidate)) continue;
+            const nC = candidate.replace(/\s+/g, ' ').toLowerCase();
+            const nT = trimmed.replace(/\s+/g, ' ').toLowerCase();
+            if (nC === nT) continue;
+            const ratio = candidate.length / Math.max(trimmed.length, 1);
+            if (ratio > 1.45 && take < words.length) continue;
+            if (ratio > 1.55) continue;
+            out = candidate;
+            break outer;
+          }
+        }
+      }
+    }
+
+    return this._reconcileLineByParenInnerOverlap(rawS, out);
+  }
+
+  _reconcileListParenFromRaw(rawOrHaystack, list) {
+    if (!Array.isArray(list) || list.length === 0) return list;
+    const hay = String(rawOrHaystack || '');
+    if (hay.length < 50) return list;
+    return list.map(line => this._reconcileParenLineFromRaw(hay, line));
+  }
+
   /**
    * Parse Gemini response and extract JSON
    */
