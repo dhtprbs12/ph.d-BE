@@ -341,7 +341,6 @@ class IngredientAnalyzer {
     const keyIssues = [];
     const positives = [];
     let hasTaurine = false;
-    let hasToxic = false;
 
     // Detect treat/supplement vs food from conditionHash (e.g., "allergy_chicken_treats" vs "healthy_food")
     const isTreat = conditionHash.endsWith('_treats');
@@ -415,9 +414,7 @@ class IngredientAnalyzer {
             penalties.push(adjusted);
           }
 
-          // Track toxic
           if (riskScore > 40) {
-            hasToxic = true;
             keyIssues.push(cached[0].explanation || `${name}: dangerous`);
           } else if (riskScore > 5) {
             keyIssues.push(cached[0].explanation || `${name}: moderate concern`);
@@ -513,11 +510,6 @@ class IngredientAnalyzer {
       finalScore -= 25;
     }
 
-    // Toxic cap
-    if (hasToxic) {
-      finalScore = Math.min(finalScore, 15);
-    }
-
     // Clamp to 0-100
     finalScore = Math.max(0, Math.min(100, Math.round(finalScore)));
 
@@ -528,7 +520,7 @@ class IngredientAnalyzer {
     }
 
     // Grade & recommendation
-    const { grade, recommendation } = this.getGradeAndRecommendation(finalScore, hasToxic);
+    const { grade, recommendation } = this.getGradeAndRecommendation(finalScore, false);
 
     // Determine primary ingredient type and protein quality for treats
     let proteinQuality = null;
