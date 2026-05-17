@@ -982,6 +982,49 @@ class IngredientAnalyzer {
   }
 
   /**
+   * Split ingredient narrative on top-level commas/semicolons only, respecting
+   * nested (), []. Used by parseIngredientText and by reconcileExtractedListWithRaw.
+   * @param {string} cleanedText — already narrative-sliced + newline-normalized if needed
+   * @param {number} [maxSegment=560] — permissive cap for long legal premix lines (reconcile uses higher)
+   * @returns {string[]}
+   */
+  _splitTopLevelIngredientSegments(cleanedText, maxSegment = 560) {
+    const cap = typeof maxSegment === 'number' && maxSegment > 0 ? maxSegment : 560;
+    const ingredients = [];
+    let current = '';
+    let depth = 0;
+
+    for (const ch of String(cleanedText || '')) {
+      if (ch === '(' || ch === '[') {
+        depth++;
+        current += ch;
+      } else if (ch === ')' || ch === ']') {
+        depth = Math.max(0, depth - 1);
+        current += ch;
+      } else if ((ch === ',' || ch === ';') && depth === 0) {
+        const trimmed = current
+          .trim()
+          .replace(/\.$/, '')
+          .replace(/^ingredients\s*:\s*/i, '');
+        if (trimmed.length > 0 && trimmed.length <= cap) {
+          ingredients.push(trimmed);
+        }
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    const last = current
+      .trim()
+      .replace(/\.$/, '')
+      .replace(/^ingredients\s*:\s*/i, '');
+    if (last.length > 0 && last.length <= cap) {
+      ingredients.push(last);
+    }
+    return ingredients;
+  }
+
+  /**
    * Parse raw ingredient text into list.
    * Handles parenthetical sub-ingredients correctly:
    *   "Soft Gel Capsule (Bovine Gelatin, Glycerin, Water)" → one ingredient, not three.
@@ -996,41 +1039,7 @@ class IngredientAnalyzer {
     // Newlines outside parens are usually one ingredient wrapped across lines → space.
     cleanedText = this._normalizeIngredientNewlines(cleanedText).replace(/\.\s/g, ', ');
 
-    const MAX_SEGMENT = 560;
-
-    // Split on commas that are NOT inside parentheses/brackets
-    // Walk char-by-char to respect nesting
-    const ingredients = [];
-    let current = '';
-    let depth = 0;
-
-    for (const ch of cleanedText) {
-      if (ch === '(' || ch === '[') {
-        depth++;
-        current += ch;
-      } else if (ch === ')' || ch === ']') {
-        depth = Math.max(0, depth - 1);
-        current += ch;
-      } else if (ch === ',' && depth === 0) {
-        // Top-level comma → split here
-        const trimmed = current.trim()
-          .replace(/\.$/, '')                          // Remove trailing period
-          .replace(/^ingredients\s*:\s*/i, '');        // Remove prefix if still there
-        if (trimmed.length > 0 && trimmed.length <= MAX_SEGMENT) {
-          ingredients.push(trimmed);
-        }
-        current = '';
-      } else {
-        current += ch;
-      }
-    }
-    // Don't forget the last segment
-    const last = current.trim()
-      .replace(/\.$/, '')
-      .replace(/^ingredients\s*:\s*/i, '');
-    if (last.length > 0 && last.length <= MAX_SEGMENT) {
-      ingredients.push(last);
-    }
+    const ingredients = this._splitTopLevelIngredientSegments(cleanedText, 560);
 
     // Remove common non-ingredient text and sentence-like fragments.
     // Heuristic: real ingredients are short noun phrases; disclaimers contain
@@ -1090,107 +1099,115 @@ class IngredientAnalyzer {
   }
 
   /**
-   * Extract "Vitamins ( ... )" or "Minerals ( ... )" from raw label text using
-   * parenthesis depth (handles inner parens like "Niacin (Vitamin B-3)").
-   * @param {string} raw
-   * @param {'Vitamins'|'Minerals'} label
-   * @returns {string|null}
-   */
-  _extractOuterPremixFromRaw(raw, label) {
-    const s = String(raw || '');
-    if (!s || s.length < 20) return null;
-    const re = new RegExp(`\\b${label}\\b\\s*\\(`, 'i');
-    const m = re.exec(s);
-    if (!m) return null;
-    const openIdx = s.indexOf('(', m.index);
-    if (openIdx < 0) return null;
-    const start = m.index;
-    let depth = 0;
-    for (let i = openIdx; i < s.length; i++) {
-      const c = s[i];
-      if (c === '(') depth++;
-      else if (c === ')') {
-        depth--;
-        if (depth === 0) {
-          return s.slice(start, i + 1).replace(/\s+/g, ' ').trim();
-        }
-      }
-    }
-    return null;
-  }
-
-  /**
-   * When Gemini splits a legal premix into inner fragments but rawIngredientsText
-   * still contains the full "Vitamins(...)" / "Minerals(...)" block, splice that
-   * block back as one list item (consecutive fragment rows only).
+   * When structured `ingredientsList` from vision JSON disagrees with the same
+   * declaration split mechanically from `rawIngredientsText` (depth-aware commas),
+   * prefer the raw-derived list if evidence suggests the model dropped/merged/split
+   * wrong (not keyword-specific — works for vitamins, minerals, probiotics,
+   * enzymes, "natural flavors (…)", long cheese headers, etc.).
+   *
+   * Caller should still run postProcessExtractedIngredientList afterward.
    * @param {string[]} ingredientsList
    * @param {string} rawIngredientsText
    * @returns {string[]}
    */
-  mergePremixFragmentsFromRaw(ingredientsList, rawIngredientsText) {
+  reconcileExtractedListWithRaw(ingredientsList, rawIngredientsText) {
     if (!Array.isArray(ingredientsList) || ingredientsList.length === 0) return ingredientsList;
-    const rawStr = String(rawIngredientsText || '');
-    if (rawStr.length < 40) return ingredientsList;
+    const raw = String(rawIngredientsText || '').trim();
+    if (raw.length < 50) return ingredientsList;
 
-    const norm = t =>
-      String(t || '')
+    const narr = this.sliceIngredientNarrativeFromRaw(raw);
+    if (narr.length < 40) return ingredientsList;
+
+    let body = this._normalizeIngredientNewlines(narr).replace(/\.\s/g, ', ');
+    let R = this._splitTopLevelIngredientSegments(body, 2400);
+
+    const sentencePattern =
+      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|naturally\s+preserved|preserve(?:d|s)?\s+freshness|facility|guaranteed\s+analysis|feeding|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|nutrition\s+facts|serving\s+size|daily\s+value|calories\s+per|amount\s*\/\s*serving|shake\s+well|refrigerate|distributed\s+by|dist\.?\s*&\s*sold|sku\s*#)\b/i;
+
+    R = R.filter(seg => {
+      const t = String(seg || '').trim();
+      if (!t) return false;
+      if (sentencePattern.test(t)) return false;
+      if (/^\d+%?$/.test(t)) return false;
+      if (/\bGuaranteed\s+Analysis\b/i.test(t)) return false;
+      return true;
+    });
+    if (!R.length) return ingredientsList;
+
+    const L = ingredientsList.map(s => String(s || '').trim()).filter(Boolean);
+    const norm = s =>
+      String(s || '')
         .toLowerCase()
         .replace(/\s+/g, ' ')
         .trim();
+    const joinL = norm(L.join(', '));
+    const joinR = norm(R.join(', '));
 
-    const out = ingredientsList.map(x => String(x || '').trim()).filter(Boolean);
+    // Looks like GA table leaked into narrative — do not swap
+    if (R.some(s => /\bcrude\s+(?:protein|fat|fiber)\b/i.test(s) && /\bmoisture\b/i.test(s))) {
+      return ingredientsList;
+    }
 
-    const mergeKind = (label, isFragment) => {
-      const block = this._extractOuterPremixFromRaw(rawStr, label);
-      if (!block || block.length < 40) return;
-
-      const headerRe = new RegExp(`^\\s*${label}\\s*\\(`, 'i');
-      if (out.some(line => headerRe.test(line))) return;
-
-      const nBlock = norm(block);
-      let i = 0;
-      while (i < out.length) {
-        if (isFragment(out[i], block, nBlock)) {
-          let j = i;
-          while (j + 1 < out.length && isFragment(out[j + 1], block, nBlock)) j++;
-          out.splice(i, j - i + 1, block);
-          i += 1;
-        } else {
-          i += 1;
+    const coverageLR = (() => {
+      const nR = R.map(norm);
+      const nL = L.map(norm);
+      let hitL = 0;
+      for (const nl of nL) {
+        if (nR.some(nr => nr.includes(nl) || nl.includes(nr))) hitL++;
+      }
+      let hitR = 0;
+      for (const nr of nR) {
+        if (
+          nL.some(
+            nl =>
+              nr.includes(nl) &&
+              nl.length >= Math.min(12, Math.floor(0.27 * Math.max(nr.length, 1)))
+          )
+        ) {
+          hitR++;
         }
       }
-    };
-
-    mergeKind('Vitamins', (line, block, nBlock) => {
-      if (/^\s*Vitamins\s*\(/i.test(line)) return false;
-      if (line.length >= block.length * 0.52) return false;
-      if (line.length < 12) return false;
-      const nLine = norm(line);
-      if (!nBlock.includes(nLine)) return false;
-      if (
-        /\b(salmon|rice|chicken|beef|turkey|lamb|barley|oat|meal|oil|flour)\b/i.test(line) &&
-        !/\b(vitamin|niacin|thiam|riboflav|folic|biotin|pyridox|pantothen|cyanocobal|menadione|tocopherol|ascorb|supplement)\b/i.test(line)
-      ) {
-        return false;
-      }
       return (
-        /\b(vitamin|niacin|thiam|riboflav|folic|biotin|pyridox|pantothen|cyanocobal|menadione|tocopherol|ascorb|supplement)\b/i.test(line) ||
-        (line.includes('(') && /\b(vitamin|supplement)\b/i.test(line))
-      );
-    });
+        hitL / Math.max(nL.length, 1) +
+        hitR / Math.max(nR.length, 1)
+      ) / 2;
+    })();
 
-    mergeKind('Minerals', (line, block, nBlock) => {
-      if (/^\s*Minerals\s*\(/i.test(line)) return false;
-      if (line.length >= block.length * 0.48) return false;
-      if (line.length < 12) return false;
-      const nLine = norm(line);
-      if (!nBlock.includes(nLine)) return false;
-      return /\b(zinc|iron|copper|manganese|calcium|sodium|selenium|iodate|iodide|sulfate|chloride|oxide|phosphate|proteinate|selenite|carbonate|sulfur)\b/i.test(
-        line
-      );
-    });
+    const lenRatio = joinR.length / Math.max(joinL.length, 1);
+    const countDelta = R.length - L.length;
 
-    return out;
+    // Strong agreement AND similar total characters → trust vision JSON list
+    const similarSize = lenRatio <= 1.12 && lenRatio >= 0.86;
+    if (
+      joinR.length + 35 >= joinL.length &&
+      coverageLR >= 0.88 &&
+      similarSize &&
+      Math.abs(countDelta) <= 2
+    ) {
+      return ingredientsList;
+    }
+
+    if (joinR.length + 30 < joinL.length) {
+      return ingredientsList;
+    }
+
+    let useRaw = false;
+    if (lenRatio > 1.055) {
+      useRaw = true;
+    } else if (countDelta >= 3 && lenRatio > 0.92) {
+      useRaw = true;
+    } else if (coverageLR < 0.52 && lenRatio > 1.0) {
+      useRaw = true;
+    } else if (countDelta >= 2 && lenRatio > 1.03) {
+      useRaw = true;
+    } else if (L.length >= R.length + 5 && lenRatio > 0.95) {
+      useRaw = true;
+    } else if (countDelta <= -3 && lenRatio > 1.06) {
+      useRaw = true;
+    }
+
+    if (!useRaw) return ingredientsList;
+    return R;
   }
 
   /**

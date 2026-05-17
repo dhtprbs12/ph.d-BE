@@ -134,12 +134,13 @@ PRINT-FIDELITY — synonyms & parentheses (highest priority when text is legible
 - Inside a long premix parenthesis (vitamins/minerals), keep inner items in the same left-to-right comma order as printed; do not alphabetize, regroup by nutrient class, or merge lines for readability.
 - Each string in ingredientsList that corresponds to one printed slot must use the same wording and parenthetical layout as that slot on the label (casing as printed when you can read it).
 
-VITAMIN / MINERAL PREMIX (most common failure — do not truncate):
-- When the label prints "Vitamins (" or "VITAMINS (" (or "Minerals (" / "MINERALS (") as a HEADER immediately before a long parenthetical list, the ENTIRE printed unit from that header word through its matching closing ")" MUST appear as EXACTLY ONE string in ingredientsList (one array element). Include the word "Vitamins" or "Minerals" before "(" — never drop the header.
-- NEVER return only a single inner enumerator (e.g. only "Niacin (Vitamin B-3)") while omitting the rest of the parenthetical list and omitting the printed "Vitamins" header. That is an incomplete extraction.
-- Inner entries may themselves contain parentheses (e.g. "Niacin (Vitamin B-3)"); keep nesting balanced so the OUTER premix closing ")" matches the header's "(".
-- rawIngredientsText must contain the full same premix text as printed (so a downstream repair can recover if ingredientsList is wrong).
-- If the premix is partly unreadable, lower "confidence" and explain in "notes" — do not silently output a tiny fragment as if it were the whole premix.
+TOP-LEVEL LEGAL PARENTHETICAL SLOTS (any product category — do not truncate):
+- Many labels use ONE printed ingredient slot that is "HEADER (" … many sub-parts … ")" — not only Vitamins/Minerals but also e.g. Natural Flavors (…), Probiotics (…), Enzymes (…), Trace Minerals (…), Dried Fermentation Products (…), Cheese (cultured milk, …), etc.
+- For EVERY such slot, the entire printed unit from the HEADER word(s) through the matching closing ")" MUST be exactly ONE string in ingredientsList. Keep nested "(…)" inside that string balanced.
+- NEVER output only an inner sub-enumerator (e.g. a single vitamin line) while dropping the printed header and the rest of the same parenthesis block — that is incomplete extraction.
+- Inner sub-items stay in left-to-right printed order; do not alphabetize or regroup.
+- If part of a long slot is unreadable, lower "confidence" and explain in "notes" — do not silently emit a tiny fragment as the whole slot.
+- rawIngredientsText must still contain the full same declaration text for those slots (so mechanical reconciliation from raw is possible).
 
 INGREDIENT LIST EXTRACTION RULES (very important):
 - Include ONLY actual food/nutrient ingredients (e.g., "Deboned Chicken", "Vitamin E Supplement", "Rosemary Extract").

@@ -1189,7 +1189,7 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
         ingredientsList
       );
     }
-    ingredientsList = ingredientAnalyzer.mergePremixFragmentsFromRaw(
+    ingredientsList = ingredientAnalyzer.reconcileExtractedListWithRaw(
       ingredientsList,
       extracted.rawIngredientsText || ''
     );
@@ -1629,7 +1629,7 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
           ingredientsList
         );
       }
-      ingredientsList = ingredientAnalyzer.mergePremixFragmentsFromRaw(
+      ingredientsList = ingredientAnalyzer.reconcileExtractedListWithRaw(
         ingredientsList,
         rawForRepair
       );
