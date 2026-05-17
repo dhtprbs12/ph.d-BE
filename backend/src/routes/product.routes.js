@@ -54,8 +54,8 @@ router.get('/search', optionalAuth, async (req, res, next) => {
 
 /**
  * GET /api/products/filter
- * Filter products by multiple criteria (for product discovery)
- * Now also computes personalized scores and fetches images inline.
+ * Filter products by multiple criteria (for product discovery).
+ * Does not compute or attach scores — use GET /products/:id/analyze (Result) for AI/cache-fill scoring.
  */
 router.get('/filter', optionalAuth, async (req, res, next) => {
   try {
@@ -80,13 +80,11 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
 
     console.log('🔍 Filter request:', { petType, productType, lifeStage, q, limit });
 
-    // Parse health conditions early — used for both DB filtering and scoring
+    // Used for SQL disease/allergy filtering only (not for scoring on this route)
     let healthConditions = [];
     try {
       healthConditions = healthConditionsRaw ? JSON.parse(healthConditionsRaw) : [];
     } catch (e) { /* ignore parse errors */ }
-
-    const pet_type = petType || 'dog';
 
     const filterResult = await productService.filterProducts({
       petType,
@@ -113,125 +111,11 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
 
     const { products, total: totalCount } = filterResult;
 
-    // =============================================
-    // SCORE LOOKUP (Tier 1 + Tier 2, no AI calls)
-    // Skip scoring entirely when no pet info was provided (e.g. dog owner browsing cat products)
-    // =============================================
-    const scores = {};
-    const skipScoring = !healthConditionsRaw;
-
-    if (skipScoring) {
-      console.log(`📊 [FILTER] Skipping scoring — no pet conditions provided`);
-    }
-
-    if (!skipScoring) {
-      console.log(`📊 [FILTER] Universal scoring for ${products.length} products`);
-    }
-
-    !skipScoring && await Promise.all(products.map(async (product) => {
-      try {
-        if (!product.ingredient_hash && !product.raw_ingredients_text) return;
-
-        const ingredientsList = ingredientAnalyzer.parseIngredientText(product.raw_ingredients_text);
-        if (!ingredientsList || ingredientsList.length === 0) return;
-
-        const ingredientHash = product.ingredient_hash || productService.generateIngredientHash(ingredientsList);
-        if (!ingredientHash) return;
-
-        const isTreatProduct = product.product_type === 'treats' || product.product_type === 'supplement' || ingredientsList.length <= 6;
-        const productTypeForHash = isTreatProduct ? 'treats' : 'food';
-        const actualProductType = product.product_type || (isTreatProduct ? 'treats' : 'food');
-
-        // Universal scoring — always use "healthy" baseline
-        const conditionHash = getSingleConditionHash('healthy', productTypeForHash);
-        let review = null;
-
-        // Tier 1: product_review_cache
-        try {
-          const cached = await query(
-            `SELECT final_score, grade, recommendation FROM product_review_cache 
-             WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ? LIMIT 1`,
-            [ingredientHash, conditionHash, pet_type]
-          );
-          if (cached.length > 0) {
-            review = { finalScore: cached[0].final_score, grade: cached[0].grade, recommendation: cached[0].recommendation };
-          }
-        } catch (err) { /* continue to Tier 2 */ }
-
-        // Tier 2: compute from ai_assessment_cache (after filling any MISS via AI)
-        if (!review) {
-          try {
-            await ingredientAnalyzer.ensureIngredientAssessmentsInCache({
-              ingredientsList,
-              condition: 'healthy',
-              productTypeForHash,
-              petType: pet_type,
-              petName: 'your pet',
-              productTypeForAI: actualProductType
-            });
-            const computed = await ingredientAnalyzer.computeScoreFromCache(ingredientsList, conditionHash, pet_type, actualProductType);
-            if (computed.finalScore !== undefined && computed.allCached) {
-              review = { finalScore: computed.finalScore, grade: computed.grade, recommendation: computed.recommendation };
-              try {
-                const { v4: uuidv4 } = require('uuid');
-                await query(
-                  `INSERT INTO product_review_cache 
-                   (id, ingredient_hash, conditions_hash, pet_type, product_type, final_score, grade, recommendation,
-                    key_issues, positives, ai_summary, protein_quality, has_artificial_additives, primary_ingredient_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON DUPLICATE KEY UPDATE 
-                    final_score = VALUES(final_score), grade = VALUES(grade), recommendation = VALUES(recommendation),
-                    hit_count = hit_count + 1`,
-                  [
-                    uuidv4(), ingredientHash, conditionHash, pet_type,
-                    product.product_type || 'dry_food',
-                    computed.finalScore, computed.grade, computed.recommendation || 'consider',
-                    JSON.stringify(computed.keyIssues || []),
-                    JSON.stringify(computed.positives || []),
-                    computed.aiSummary || '', computed.proteinQuality || null,
-                    computed.hasArtificialAdditives ? 1 : 0, computed.primaryIngredientType || null
-                  ]
-                );
-              } catch (err) { /* cache save failed */ }
-            }
-          } catch (err) { /* continue */ }
-        }
-
-        if (review) {
-          // Generate condition warnings (rule-based)
-          const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(
-            ingredientsList, healthConditions
-          );
-
-          scores[product.id] = {
-            score: review.finalScore,
-            grade: review.grade,
-            recommendation: review.recommendation || 'consider',
-            conditionWarnings: conditionWarnings.length > 0 ? conditionWarnings : undefined
-          };
-        }
-      } catch (err) {
-        // skip scoring for this product
-      }
-    }));
-
-    console.log(`✅ [FILTER] Scored ${Object.keys(scores).length}/${products.length} products (universal, no AI)`);
-
-    // =============================================
-    // SORT: scored products first (score desc), then unscored alphabetically
-    // =============================================
-    products.sort((a, b) => {
-      const sA = scores[a.id]?.score;
-      const sB = scores[b.id]?.score;
-      if (sA !== undefined && sB !== undefined) return sB - sA;
-      if (sA !== undefined) return -1;
-      if (sB !== undefined) return 1;
-      return (a.name || '').localeCompare(b.name || '');
-    });
+    console.log(`✅ [FILTER] ${products.length} products (order: DB name ASC, no scores)`);
 
     res.json({ 
       products,
-      scores,
+      scores: {},
       filters: {
         petType,
         productType,
