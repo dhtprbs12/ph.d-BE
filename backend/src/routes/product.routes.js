@@ -158,9 +158,17 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
           }
         } catch (err) { /* continue to Tier 2 */ }
 
-        // Tier 2: compute from ai_assessment_cache
+        // Tier 2: compute from ai_assessment_cache (after filling any MISS via AI)
         if (!review) {
           try {
+            await ingredientAnalyzer.ensureIngredientAssessmentsInCache({
+              ingredientsList,
+              condition: 'healthy',
+              productTypeForHash,
+              petType: pet_type,
+              petName: 'your pet',
+              productTypeForAI: actualProductType
+            });
             const computed = await ingredientAnalyzer.computeScoreFromCache(ingredientsList, conditionHash, pet_type, actualProductType);
             if (computed.finalScore !== undefined && computed.allCached) {
               review = { finalScore: computed.finalScore, grade: computed.grade, recommendation: computed.recommendation };
@@ -611,14 +619,26 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
 
     // =============================================
     // PHASE 2: PER-CONDITION HOLISTIC REVIEW
-    // Now ai_assessment_cache is fully populated, so Tier 2
-    // can compute accurate scores from ALL ingredients
+    // Fill any ai_assessment_cache MISS for this condition, then Tier 2 computes from DB.
     // =============================================
     const conditionReviews = {};
     const cacheInserts = [];
     
     for (const condition of conditionsToEvaluate) {
       const conditionHash = getSingleConditionHash(condition, productTypeForHash);
+
+      try {
+        await ingredientAnalyzer.ensureIngredientAssessmentsInCache({
+          ingredientsList,
+          condition,
+          productTypeForHash,
+          petType: pet.pet_type,
+          petName: pet.name,
+          productTypeForAI
+        });
+      } catch (fillErr) {
+        console.warn(`[ANALYZE] ensureIngredientAssessmentsInCache failed for ${condition}:`, fillErr.message);
+      }
       
       // ── Tier 1: product_review_cache (narrative + legacy scores; may be stale) ──
       let productCacheHit = null;
@@ -982,8 +1002,8 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
 
     // Step 2 & 3: Score each candidate using 3-tier approach:
     //   Tier 1: product_review_cache (holistic product score) → instant
-    //   Tier 2: ai_assessment_cache (individual ingredients) → compute & cache → no AI call
-    //   Tier 3: AI fallback (only if ingredients also missing from cache) → slow, last resort
+    //   Tier 2: fill ai_assessment_cache MISS via per-ingredient AI, then compute from cache
+    //   Tier 3: holistic AI only if deterministic score still unavailable
     await Promise.all(candidates.map(async (candidate) => {
       try {
         const ingredientsList = ingredientAnalyzer.parseIngredientText(candidate.raw_ingredients_text);
@@ -1027,9 +1047,17 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
             // Cache table might not exist, continue
           }
 
-          // ── Tier 2: Compute from ai_assessment_cache (individual ingredients) ──
+          // ── Tier 2: Fill MISS rows, then compute from ai_assessment_cache ──
           if (!review) {
             try {
+              await ingredientAnalyzer.ensureIngredientAssessmentsInCache({
+                ingredientsList,
+                condition,
+                productTypeForHash,
+                petType,
+                petName,
+                productTypeForAI: actualCandidateType
+              });
               const computed = await ingredientAnalyzer.computeScoreFromCache(ingredientsList, conditionHash, petType, actualCandidateType);
               
               if (computed.allCached && computed.finalScore !== undefined) {

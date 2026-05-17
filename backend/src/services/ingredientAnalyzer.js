@@ -565,6 +565,172 @@ class IngredientAnalyzer {
   }
 
   /**
+   * For every line in ingredientsList, ensure ai_assessment_cache has a row for
+   * (ingredient_normalized, getSingleConditionHash(condition, productTypeForHash), pet_type).
+   * On MISS: batch Gemini assessIngredientsForPet, then INSERT … ON DUPLICATE KEY UPDATE.
+   * Rows Gemini does not map get risk_score=0 neutral fallback so deterministic scoring can proceed.
+   *
+   * @param {string[]} ingredientsList
+   * @param {string} condition - e.g. 'healthy'
+   * @param {string} productTypeForHash - 'food' | 'treats' (cacheHelpers second segment)
+   * @param {string} petType - 'dog' | 'cat'
+   * @param {string} [petName]
+   * @param {string} [productTypeForAI] - passed to Gemini (e.g. dry_food)
+   * @returns {{ filledFromAi: number, neutralFallbacks: number }}
+   */
+  async ensureIngredientAssessmentsInCache({
+    ingredientsList,
+    condition,
+    productTypeForHash,
+    petType,
+    petName,
+    productTypeForAI
+  }) {
+    const { getSingleConditionHash } = require('../utils/cacheHelpers');
+    const geminiService = require('../services/geminiService');
+    const conditionHash = getSingleConditionHash(condition, productTypeForHash);
+    const displayName = petName || 'your pet';
+
+    const collectUncached = async () => {
+      const out = [];
+      for (let i = 0; i < ingredientsList.length; i++) {
+        const name = String(ingredientsList[i] || '').trim();
+        if (!name) continue;
+        const normalizedName = this.normalizeIngredientName(name);
+        const cached = await this.cacheLookup(normalizedName, conditionHash, petType);
+        if (!cached.length) {
+          out.push({ name, normalizedName, position: i + 1 });
+        }
+      }
+      return out;
+    };
+
+    let uncached = await collectUncached();
+    if (!uncached.length) {
+      return { filledFromAi: 0, neutralFallbacks: 0 };
+    }
+
+    console.log(
+      `🧱 [CACHE-FILL] ${uncached.length} ingredient(s) miss ${conditionHash}/${petType} — AI assess + DB upsert`
+    );
+
+    const singleConditionList = condition === 'healthy' ? [] : [{ condition_type: condition }];
+    let aiAssessments = {};
+
+    try {
+      geminiService.initialize();
+      if (geminiService.model) {
+        aiAssessments = await geminiService.assessIngredientsForPet(
+          uncached,
+          petType,
+          displayName,
+          singleConditionList,
+          productTypeForAI || 'food'
+        );
+      } else {
+        console.warn('[CACHE-FILL] Gemini model unavailable — using neutral rows only');
+      }
+    } catch (err) {
+      console.error('[CACHE-FILL] assessIngredientsForPet failed:', err.message);
+    }
+
+    const ingCacheInserts = [];
+    const matchedNorm = new Set();
+
+    const takeAssessment = (ing) => {
+      let assessment = aiAssessments[ing.name];
+      if (!assessment) {
+        const lowerName = ing.name.toLowerCase();
+        for (const [key, value] of Object.entries(aiAssessments)) {
+          if (
+            key.toLowerCase() === lowerName ||
+            key.toLowerCase().includes(lowerName) ||
+            lowerName.includes(key.toLowerCase())
+          ) {
+            assessment = value;
+            break;
+          }
+        }
+      }
+      return assessment;
+    };
+
+    for (const ing of uncached) {
+      const assessment = takeAssessment(ing);
+      if (assessment && ing.normalizedName) {
+        matchedNorm.add(ing.normalizedName);
+        ingCacheInserts.push([
+          ing.normalizedName,
+          conditionHash,
+          petType,
+          assessment.riskScore ?? 0,
+          assessment.explanation || '',
+          assessment.benefit || ''
+        ]);
+      }
+    }
+
+    let neutralFallbacks = 0;
+    for (const ing of uncached) {
+      if (!matchedNorm.has(ing.normalizedName)) {
+        neutralFallbacks += 1;
+        ingCacheInserts.push([
+          ing.normalizedName,
+          conditionHash,
+          petType,
+          0,
+          'No matching AI row; neutral risk used so deterministic scoring can proceed',
+          ''
+        ]);
+      }
+    }
+
+    if (ingCacheInserts.length > 0) {
+      try {
+        const placeholders = ingCacheInserts.map(() => '(UUID(), ?, ?, ?, ?, ?, ?)').join(', ');
+        await query(
+          `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit)
+           VALUES ${placeholders}
+           ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), hit_count = hit_count + 1`,
+          ingCacheInserts.flat()
+        );
+        console.log(
+          `💾 [CACHE-FILL] Upserted ${ingCacheInserts.length} row(s) for ${conditionHash} (AI-matched: ${matchedNorm.size}, neutral: ${neutralFallbacks})`
+        );
+      } catch (err) {
+        console.warn('[CACHE-FILL] ai_assessment_cache batch failed:', err.message);
+      }
+    }
+
+    uncached = await collectUncached();
+    if (uncached.length > 0) {
+      console.warn(`[CACHE-FILL] ${uncached.length} still missing after batch — neutral upsert each`);
+      for (const ing of uncached) {
+        try {
+          await query(
+            `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit)
+             VALUES (UUID(), ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), hit_count = hit_count + 1`,
+            [
+              ing.normalizedName,
+              conditionHash,
+              petType,
+              0,
+              'Retry neutral insert after batch failure',
+              ''
+            ]
+          );
+          neutralFallbacks += 1;
+        } catch (e2) {
+          console.warn('[CACHE-FILL] Single insert failed for', ing.normalizedName, e2.message);
+        }
+      }
+    }
+
+    return { filledFromAi: matchedNorm.size, neutralFallbacks };
+  }
+
+  /**
    * Compute condition-specific profile penalty by scanning the full ingredient list
    * for problematic patterns (e.g., multiple fat sources for digestive sensitivity).
    * 

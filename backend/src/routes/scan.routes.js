@@ -495,8 +495,7 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
       }
     }
     
-    // Tier 2: Compute from ai_assessment_cache for conditions still uncached
-    // All ingredient gaps were just filled by AI above, so computeScoreFromCache should find everything
+    // Tier 2: ensure ai_assessment_cache for this condition, then compute holistic score from cache
     const afterMergeUncached = conditionsToEvaluate.filter(c => !conditionReviews[c]);
     
     if (afterMergeUncached.length > 0) {
@@ -505,6 +504,14 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
       for (const condition of afterMergeUncached) {
         const conditionHash = getSingleConditionHash(condition, productType);
         try {
+          await ingredientAnalyzer.ensureIngredientAssessmentsInCache({
+            ingredientsList,
+            condition,
+            productTypeForHash: productType,
+            petType: pet.pet_type,
+            petName: pet.name,
+            productTypeForAI: extracted.productType || product?.product_type || productType
+          });
           const computed = await ingredientAnalyzer.computeScoreFromCache(ingredientsList, conditionHash, pet.pet_type, productType);
           
           if (computed.allCached && computed.finalScore !== undefined) {
