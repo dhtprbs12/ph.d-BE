@@ -1,6 +1,98 @@
 const { query } = require('../database/connection');
 
 /**
+ * Rule-based toxic / high-risk substrings (matched on normalizeIngredientName output).
+ * - analyzeIngredient: any matching line flags that ingredient toxic.
+ * - computeScoreFromCache: if any of the first 5 list lines matches, holistic finalScore is capped at 15.
+ * Ultra-high-risk tokens (RULE_TOXIC_LEVENSHTEIN1) also match edit-distance ≤ 1 on tokens / letter runs (OCR typos).
+ * Omit bare "alcohol" / "grape" to reduce false positives (fatty alcohols, grapefruit).
+ */
+const RULE_TOXIC_SUBSTRINGS = [
+  'xylitol',
+  'acetaminophen',
+  'paracetamol',
+  'ibuprofen',
+  'pseudoephedrine',
+  'chocolate',
+  'cocoa',
+  'cacao',
+  'theobromine',
+  'caffeine',
+  'coffee',
+  'grapes',
+  'raisin',
+  'currant',
+  'sultana',
+  'zante',
+  'grape pomace',
+  'onion',
+  'garlic',
+  'leek',
+  'shallot',
+  'chive',
+  'scallion',
+  'avocado',
+  'macadamia',
+  'hops',
+  'nutmeg',
+  'yeast dough',
+  'ethylene glycol',
+  'lilium',
+  'lily',
+];
+
+/**
+ * Ultra-high-risk tokens: allow Levenshtein distance ≤ 1 (OCR / single-letter typos).
+ * Keep this list tiny — fuzzy matching is high-sensitivity.
+ */
+const RULE_TOXIC_LEVENSHTEIN1 = ['xylitol', 'theobromine'];
+
+function levenshteinDistance(a, b) {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[m][n];
+}
+
+/**
+ * @param {string} normalizedLine - output of normalizeIngredientName
+ */
+function normalizedLineHasUltraFuzzyToxic(normalizedLine) {
+  if (!normalizedLine) return false;
+  for (const canonical of RULE_TOXIC_LEVENSHTEIN1) {
+    const L = canonical.length;
+    const words = normalizedLine.split(/[^a-z0-9]+/).filter((w) => w.length >= L - 1 && w.length <= L + 1);
+    for (const word of words) {
+      if (levenshteinDistance(word, canonical) <= 1) return true;
+    }
+    for (let wLen = Math.max(4, L - 1); wLen <= L + 1; wLen++) {
+      for (let i = 0; i + wLen <= normalizedLine.length; i++) {
+        const slice = normalizedLine.slice(i, i + wLen);
+        if (!/^[a-z0-9]+$/i.test(slice)) continue;
+        if (levenshteinDistance(slice.toLowerCase(), canonical) <= 1) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function normalizedLineHasRuleToxic(normalizedLine) {
+  if (!normalizedLine) return false;
+  if (RULE_TOXIC_SUBSTRINGS.some((tok) => normalizedLine.includes(tok))) return true;
+  return normalizedLineHasUltraFuzzyToxic(normalizedLine);
+}
+
+/**
  * INGREDIENT ANALYSIS ENGINE
  * 
  * Personalized scoring algorithm that accounts for:
@@ -149,13 +241,14 @@ class IngredientAnalyzer {
       });
     }
 
-    // Toxic ingredient penalty (instant fail)
-    if (toxicIngredients.length > 0) {
+    // Toxic in first five positions → cap aggregate score (trace amounts lower on the list do not trigger this)
+    const toxicTopFive = analysis.ingredients.filter((ing) => ing.isToxic && ing.position <= 5);
+    if (toxicTopFive.length > 0) {
       finalScore = Math.min(finalScore, 15);
       analysis.warnings.unshift({
-        ingredient: toxicIngredients.map(t => t.name).join(', '),
+        ingredient: toxicTopFive.map((t) => t.name).join(', '),
         level: 'danger',
-        reason: `TOXIC INGREDIENTS DETECTED. This food is dangerous for your ${pet.pet_type}.`
+        reason: `TOXIC INGREDIENT(S) in the first five listed items. Capped score for your ${pet.pet_type}.`
       });
     }
 
@@ -168,10 +261,10 @@ class IngredientAnalyzer {
     finalScore = Math.max(0, Math.min(100, Math.round(finalScore)));
 
     // Determine grade and recommendation
-    const { grade, recommendation } = this.getGradeAndRecommendation(finalScore, toxicIngredients.length > 0);
+    const { grade, recommendation } = this.getGradeAndRecommendation(finalScore, toxicTopFive.length > 0);
 
-    // Build summary
-    const summary = this.buildSummary(pet, finalScore, grade, toxicIngredients, allergenMatches, healthConcerns, hasTaurine);
+    // Build summary (NOT SAFE only when toxic rule hit in top five — same as score cap)
+    const summary = this.buildSummary(pet, finalScore, grade, toxicTopFive, allergenMatches, healthConcerns, hasTaurine);
 
     return {
       ...analysis,
@@ -271,9 +364,8 @@ class IngredientAnalyzer {
     result.explanation = '';
     result.needsAIAssessment = true;
 
-    // Check for known toxic ingredients (safety net)
-    const toxicIngredients = ['xylitol', 'chocolate', 'grapes', 'raisins', 'onion', 'garlic', 'avocado', 'macadamia'];
-    if (toxicIngredients.some(toxic => normalizedName.includes(toxic))) {
+    // Check for known toxic ingredients (safety net): substring list + fuzzy for ultra-high-risk tokens
+    if (normalizedLineHasRuleToxic(normalizedName)) {
       result.isToxic = true;
       result.riskLevel = 'danger';
       result.adjustedRiskScore = 100;
@@ -517,6 +609,20 @@ class IngredientAnalyzer {
     if (finalScore < 50) {
       if (isTreat && !isSupplement) finalScore = Math.min(100, finalScore + 20);
       if (isSupplement) finalScore = Math.min(100, finalScore + 15);
+    }
+
+    // First 5 ingredients (label order): rule-based toxic term → cap holistic score at 15
+    const topCheck = Math.min(5, normalizedNames.length);
+    for (let ti = 0; ti < topCheck; ti++) {
+      const nn = normalizedNames[ti] || '';
+      if (nn && normalizedLineHasRuleToxic(nn)) {
+        finalScore = Math.min(finalScore, 15);
+        const lineName = String(ingredientsList[ti] || '').trim().slice(0, 80) || `row ${ti + 1}`;
+        keyIssues.unshift(
+          `Toxic / high-risk term in the first five ingredients (${lineName}); overall score capped at 15.`
+        );
+        break;
+      }
     }
 
     // Grade & recommendation
