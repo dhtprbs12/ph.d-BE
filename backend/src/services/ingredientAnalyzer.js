@@ -1610,6 +1610,62 @@ class IngredientAnalyzer {
 
     return warnings;
   }
+
+  /**
+   * Replace LLM holistic finalScore/grade/recommendation with computeScoreFromCache
+   * (position-weighted AI risk scores, 0–100 clamp) when every ingredient has cache coverage.
+   * Preserves keyIssues, positives, aiSummary, etc. from the holistic review.
+   *
+   * @param {Record<string, object>} conditionReviews - { [condition]: review }
+   * @param {string[]} ingredientsList
+   * @param {string} petType
+   * @param {string} productTypeForHash - second arg to getSingleConditionHash (e.g. food, treats, dry_food)
+   * @param {string} [productTypeForCompute] - computeScoreFromCache productType (supplement detection); defaults to productTypeForHash
+   */
+  async overlayDeterministicConditionReviews(conditionReviews, ingredientsList, petType, productTypeForHash, productTypeForCompute) {
+    const { getSingleConditionHash } = require('../utils/cacheHelpers');
+    if (!conditionReviews || !ingredientsList?.length) return conditionReviews;
+    const ptCompute = productTypeForCompute != null ? productTypeForCompute : productTypeForHash;
+    const out = { ...conditionReviews };
+    for (const [condition, review] of Object.entries(out)) {
+      if (!review) continue;
+      const conditionHash = getSingleConditionHash(condition, productTypeForHash);
+      try {
+        const computed = await this.computeScoreFromCache(ingredientsList, conditionHash, petType, ptCompute);
+        if (computed.allCached && computed.finalScore !== undefined) {
+          out[condition] = {
+            ...review,
+            finalScore: computed.finalScore,
+            grade: computed.grade,
+            recommendation: computed.recommendation,
+            proteinQuality: computed.proteinQuality != null ? computed.proteinQuality : review.proteinQuality,
+            primaryIngredientType: computed.primaryIngredientType != null ? computed.primaryIngredientType : review.primaryIngredientType,
+            hasArtificialAdditives: computed.hasArtificialAdditives
+          };
+        }
+      } catch (_) {
+        /* keep LLM scores */
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Same as overlayDeterministicConditionReviews but for a single combined review object
+   * (universal healthy baseline — uses condition key "healthy").
+   */
+  async overlayDeterministicHolisticScores(holisticReview, ingredientsList, petType, productTypeForHash, productTypeForCompute) {
+    if (!holisticReview) return holisticReview;
+    const wrapped = { healthy: holisticReview };
+    const out = await this.overlayDeterministicConditionReviews(
+      wrapped,
+      ingredientsList,
+      petType,
+      productTypeForHash,
+      productTypeForCompute
+    );
+    return out.healthy || holisticReview;
+  }
 }
 
 module.exports = new IngredientAnalyzer();

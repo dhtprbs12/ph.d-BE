@@ -616,6 +616,18 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
         console.warn(`[BG] Failed to cache product review:`, err.message);
       }
     }
+
+    // Deterministic final score per condition (AI cache + position weights) before worst-of combine
+    Object.assign(
+      conditionReviews,
+      await ingredientAnalyzer.overlayDeterministicConditionReviews(
+        conditionReviews,
+        ingredientsList,
+        pet.pet_type,
+        productType,
+        productType
+      )
+    );
     
     // =============================================
     // COMBINE REVIEWS: Take WORST score/grade
@@ -706,6 +718,38 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
       } catch (cacheErr) {
         console.warn('[BG] Failed to cache holistic review:', cacheErr.message);
       }
+    }
+
+    if (reviewValues.length === 0) {
+      holisticReview = await ingredientAnalyzer.overlayDeterministicHolisticScores(
+        holisticReview,
+        ingredientsList,
+        pet.pet_type,
+        productType,
+        productType
+      );
+    }
+
+    try {
+      for (const [condition, review] of Object.entries(conditionReviews)) {
+        if (!review) continue;
+        const ch = getSingleConditionHash(condition, productType);
+        await query(
+          `UPDATE product_review_cache SET final_score = ?, grade = ?, recommendation = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
+          [review.finalScore, review.grade, review.recommendation || getRecommendationFromGrade(review.grade), ingredientHash, ch, pet.pet_type]
+        );
+      }
+      if (reviewValues.length === 0 && holisticReview) {
+        const ch = getSingleConditionHash('healthy', productType);
+        await query(
+          `UPDATE product_review_cache SET final_score = ?, grade = ?, recommendation = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
+          [holisticReview.finalScore, holisticReview.grade, holisticReview.recommendation || getRecommendationFromGrade(holisticReview.grade), ingredientHash, ch, pet.pet_type]
+        );
+      }
+    } catch (e) {
+      console.warn('[BG] product_review_cache score sync:', e.message);
     }
     
     // Apply holistic review results to analysis
@@ -2007,6 +2051,25 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
         console.warn('Failed to cache holistic review:', cacheErr.message);
       }
     }
+
+    if (holisticReview) {
+      holisticReview = await ingredientAnalyzer.overlayDeterministicHolisticScores(
+        holisticReview,
+        ingredientsList,
+        pet.pet_type,
+        productType,
+        productType
+      );
+      try {
+        await query(
+          `UPDATE product_review_cache SET final_score = ?, grade = ?, recommendation = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
+          [holisticReview.finalScore, holisticReview.grade, holisticReview.recommendation || getRecommendationFromGrade(holisticReview.grade), ingredientHash, syncConditionsHash, pet.pet_type]
+        );
+      } catch (e) {
+        console.warn('[SYNC] product_review_cache score sync:', e.message);
+      }
+    }
     
     // Apply holistic review results to analysis
     analysis.finalScore = Math.round(holisticReview.finalScore);
@@ -2634,6 +2697,17 @@ router.post('/manual', async (req, res, next) => {
         console.warn('[Manual] Failed to cache:', cacheErr.message);
       }
     }
+
+    Object.assign(
+      conditionReviews,
+      await ingredientAnalyzer.overlayDeterministicConditionReviews(
+        conditionReviews,
+        ingredientsList,
+        pet.pet_type,
+        productType,
+        productType
+      )
+    );
     
     // Combine reviews: Take WORST score/grade
     let holisticReview = null;
@@ -2678,6 +2752,35 @@ router.post('/manual', async (req, res, next) => {
         productType: productType,
         petName: pet.name
       });
+      holisticReview = await ingredientAnalyzer.overlayDeterministicHolisticScores(
+        holisticReview,
+        ingredientsList,
+        pet.pet_type,
+        productType,
+        productType
+      );
+    }
+
+    try {
+      for (const [condition, review] of Object.entries(conditionReviews)) {
+        if (!review) continue;
+        const ch = getSingleConditionHash(condition, productType);
+        await query(
+          `UPDATE product_review_cache SET final_score = ?, grade = ?, recommendation = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
+          [review.finalScore, review.grade, review.recommendation || getRecommendationFromGrade(review.grade), ingredientHash, ch, pet.pet_type]
+        );
+      }
+      if (Object.keys(conditionReviews).length === 0 && holisticReview) {
+        const ch = getSingleConditionHash('healthy', productType);
+        await query(
+          `UPDATE product_review_cache SET final_score = ?, grade = ?, recommendation = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
+          [holisticReview.finalScore, holisticReview.grade, holisticReview.recommendation || getRecommendationFromGrade(holisticReview.grade), ingredientHash, ch, pet.pet_type]
+        );
+      }
+    } catch (e) {
+      console.warn('[Manual] product_review_cache score sync:', e.message);
     }
     
     // Apply holistic review to analysis

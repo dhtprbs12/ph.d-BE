@@ -733,6 +733,17 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
         console.warn('[ANALYZE] Failed to cache review:', cacheErr.message);
       }
     }
+
+    Object.assign(
+      conditionReviews,
+      await ingredientAnalyzer.overlayDeterministicConditionReviews(
+        conditionReviews,
+        ingredientsList,
+        pet.pet_type,
+        productTypeForHash,
+        productTypeForAI
+      )
+    );
     
     // =============================================
     // COMBINE REVIEWS: Take WORST score/grade
@@ -772,6 +783,27 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
     } else {
       console.error('[ANALYZE] No condition reviews available');
       return res.status(500).json({ error: 'Analysis failed' });
+    }
+
+    try {
+      for (const [condition, review] of Object.entries(conditionReviews)) {
+        if (!review) continue;
+        const ch = getSingleConditionHash(condition, productTypeForHash);
+        await query(
+          `UPDATE product_review_cache SET final_score = ?, grade = ?, recommendation = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
+          [
+            review.finalScore,
+            review.grade,
+            toHistoryRecommendation(review.grade, review.recommendation),
+            ingredientHash,
+            ch,
+            pet.pet_type
+          ]
+        );
+      }
+    } catch (e) {
+      console.warn('[ANALYZE] product_review_cache score sync:', e.message);
     }
 
     // Build analysis response - use holistic score but ingredient-level details
