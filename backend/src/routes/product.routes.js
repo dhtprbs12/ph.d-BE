@@ -620,7 +620,8 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
     for (const condition of conditionsToEvaluate) {
       const conditionHash = getSingleConditionHash(condition, productTypeForHash);
       
-      // ── Tier 1: product_review_cache (instant DB read) ──
+      // ── Tier 1: product_review_cache (narrative + legacy scores; may be stale) ──
+      let productCacheHit = null;
       try {
         const cached = await query(
           `SELECT * FROM product_review_cache 
@@ -629,7 +630,8 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
         );
         
         if (cached.length > 0) {
-          conditionReviews[condition] = {
+          productCacheHit = {
+            cacheRowId: cached[0].id,
             finalScore: cached[0].final_score,
             grade: cached[0].grade,
             recommendation: cached[0].recommendation,
@@ -642,34 +644,67 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
             fromCache: true
           };
           console.log(`⚡ [ANALYZE] Cache hit for ${condition}: score=${cached[0].final_score}`);
-          
-          await query('UPDATE product_review_cache SET hit_count = hit_count + 1 WHERE id = ?', [cached[0].id]);
         }
       } catch (err) {
         console.warn(`[ANALYZE] Cache check failed for ${condition}:`, err.message);
       }
       
-      // ── Tier 2: Compute from ai_assessment_cache (all ingredients now cached) ──
-      // ONLY use score if ALL ingredients are cached — no partial scores
-      if (!conditionReviews[condition]) {
-        try {
-          const computed = await ingredientAnalyzer.computeScoreFromCache(ingredientsList, conditionHash, pet.pet_type, productTypeForAI);
-          
-          if (computed.finalScore !== undefined && computed.allCached) {
-            conditionReviews[condition] = { ...computed, fromCache: false };
-            console.log(`🧮 [ANALYZE-T2] Computed from ingredients: ${condition} = ${computed.finalScore} (${ingredientsList.length}/${ingredientsList.length} cached)`);
-            
-            // Save to product_review_cache for future Tier 1 hits
-            cacheInserts.push({
-              ingredientHash,
-              conditionHash,
-              petType: pet.pet_type,
-              productType: product.product_type || 'dry_food',
-              review: computed
-            });
-          }
-        } catch (err) {
-          console.warn(`[ANALYZE-T2] Compute failed for ${condition}:`, err.message);
+      // ── Tier 2: Always try deterministic score from ai_assessment_cache ──
+      // If Tier 1 filled conditionReviews, we still recompute so product_review_cache
+      // cannot pin an old holistic score after scoring rules change.
+      let computed = null;
+      try {
+        computed = await ingredientAnalyzer.computeScoreFromCache(
+          ingredientsList,
+          conditionHash,
+          pet.pet_type,
+          productTypeForAI
+        );
+      } catch (err) {
+        console.warn(`[ANALYZE-T2] Compute failed for ${condition}:`, err.message);
+      }
+
+      if (computed && computed.finalScore !== undefined && computed.allCached) {
+        const merged = {
+          ...computed,
+          fromCache: false,
+          keyIssues:
+            productCacheHit?.keyIssues?.length > 0
+              ? productCacheHit.keyIssues
+              : (computed.keyIssues || []),
+          positives:
+            productCacheHit?.positives?.length > 0
+              ? productCacheHit.positives
+              : (computed.positives || []),
+          aiSummary: productCacheHit?.aiSummary || computed.aiSummary || '',
+          proteinQuality: computed.proteinQuality ?? productCacheHit?.proteinQuality,
+          primaryIngredientType: computed.primaryIngredientType ?? productCacheHit?.primaryIngredientType,
+          hasArtificialAdditives:
+            computed.hasArtificialAdditives ?? productCacheHit?.hasArtificialAdditives
+        };
+        conditionReviews[condition] = merged;
+        const prev = productCacheHit?.finalScore;
+        console.log(
+          `🧮 [ANALYZE-T2] Deterministic score for ${condition}: ${computed.finalScore}` +
+            (prev !== undefined && prev !== computed.finalScore ? ` (overrides cache ${prev})` : '')
+        );
+        cacheInserts.push({
+          ingredientHash,
+          conditionHash,
+          petType: pet.pet_type,
+          productType: product.product_type || 'dry_food',
+          review: merged
+        });
+      } else if (productCacheHit) {
+        const { cacheRowId, ...reviewFromProductCache } = productCacheHit;
+        conditionReviews[condition] = reviewFromProductCache;
+        if (computed && !computed.allCached) {
+          console.warn(
+            `[ANALYZE] Deterministic score skipped for ${condition} (${(computed.missingIngredients || []).length} missing ingredients); using product_review_cache`
+          );
+        }
+        if (cacheRowId) {
+          await query('UPDATE product_review_cache SET hit_count = hit_count + 1 WHERE id = ?', [cacheRowId]);
         }
       }
 
@@ -711,7 +746,19 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
            (id, ingredient_hash, conditions_hash, pet_type, product_type, final_score, grade, recommendation,
             key_issues, positives, ai_summary, protein_quality, has_artificial_additives, primary_ingredient_type)
            VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE hit_count = hit_count + 1`,
+           ON DUPLICATE KEY UPDATE
+             final_score = VALUES(final_score),
+             grade = VALUES(grade),
+             recommendation = VALUES(recommendation),
+             key_issues = VALUES(key_issues),
+             positives = VALUES(positives),
+             ai_summary = VALUES(ai_summary),
+             protein_quality = VALUES(protein_quality),
+             has_artificial_additives = VALUES(has_artificial_additives),
+             primary_ingredient_type = VALUES(primary_ingredient_type),
+             product_type = VALUES(product_type),
+             hit_count = hit_count + 1,
+             updated_at = CURRENT_TIMESTAMP`,
           [
             insert.ingredientHash,
             insert.conditionHash,
