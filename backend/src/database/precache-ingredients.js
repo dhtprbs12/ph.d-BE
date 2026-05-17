@@ -5,10 +5,12 @@
  * 
  * Pre-populates ai_assessment_cache with AI assessments for ALL known ingredients
  * across ALL health conditions, product types, and pet types.
- * 
- * This uses the EXACT SAME geminiService.assessIngredientsForPet() function
- * and getSingleConditionHash() that the live app uses, so cached results
- * are immediately usable by label scan, product search, etc.
+ *
+ * Uses the same geminiService.assessIngredientsForPet() and getSingleConditionHash()
+ * as production. Live paths pass options.fullIngredientLines (whole label) for context;
+ * this script batches unrelated names and does not pass that option.
+ *
+ * Cached results are immediately usable by label scan, product analyze, etc.
  * 
  * Combos: 21 conditions × 2 product types × 2 pet types = 84 combos
  * Ingredients: ~1,400

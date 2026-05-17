@@ -319,7 +319,10 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
             try {
               const singleCondition = condition === 'healthy' ? [] : [{ condition_type: condition }];
               const aiAssessments = await geminiService.assessIngredientsForPet(
-                ingredients, pet.pet_type, pet.name, singleCondition, productType
+                ingredients, pet.pet_type, pet.name, singleCondition, productType,
+                {
+                  fullIngredientLines: ingredientsList.map((s) => String(s || '').trim()).filter(Boolean),
+                }
               );
               return { condition, conditionHash, ingredients, aiAssessments, holistic: null, merged: false, success: true };
             } catch (err) {
@@ -1854,7 +1857,10 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
             pet.pet_type,
             pet.name,
             healthConditions, // ignored: per-ingredient AI is universal healthy baseline
-            productType
+            productType,
+            {
+              fullIngredientLines: ingredientsList.map((s) => String(s || '').trim()).filter(Boolean),
+            }
           );
           console.log('🤖 AI returned assessments for:', Object.keys(aiAssessments));
         } catch (aiError) {
@@ -2521,7 +2527,10 @@ router.post('/manual', async (req, res, next) => {
             pet.pet_type,
             pet.name,
             singleCondition,
-            productType
+            productType,
+            {
+              fullIngredientLines: ingredientsList.map((s) => String(s || '').trim()).filter(Boolean),
+            }
           );
           
           // Process AI results

@@ -863,29 +863,44 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
    * layers (e.g. allergen match) and conditionWarnings elsewhere.
    *
    * @param {unknown} _healthConditions ignored (kept for call-site compatibility)
+   * @param {object} [options]
+   * @param {string[]} [options.fullIngredientLines] Full label-ordered lines for this product (context only).
+   *        When set, the model sees the complete formula but must return JSON only for `ingredients` targets.
    */
-  async assessIngredientsForPet(ingredients, petType, petName, _healthConditions = [], productType = 'food') {
+  async assessIngredientsForPet(ingredients, petType, petName, _healthConditions = [], productType = 'food', options = {}) {
     this.initialize();
 
     if (!this.model || ingredients.length === 0) {
       return {};
     }
 
-    // Build ingredient list with positions
+    const fullIngredientLines = Array.isArray(options.fullIngredientLines)
+      ? options.fullIngredientLines.map((s) => String(s || '').trim()).filter(Boolean)
+      : null;
+    const hasFullContext = fullIngredientLines && fullIngredientLines.length > 0;
+
+    const linesForProductClass = hasFullContext
+      ? fullIngredientLines
+      : ingredients.map((i) => String(i.name || i || '').trim()).filter(Boolean);
+
+    // Build target list (only rows we need assessments for)
     const ingredientDetails = ingredients.map((i, idx) => {
       const name = i.name || i;
       const position = i.position || (idx + 1);
       return `${position}. ${name}`;
     }).join('\n');
-    
+
     const totalIngredients = ingredients.length;
-    
+    const fullListBlock = hasFullContext
+      ? fullIngredientLines.map((line, i) => `${i + 1}. ${line}`).join('\n')
+      : '';
+
     // Determine if this is a treat or supplement (more lenient scoring)
     const isSupplement = productType === 'supplement';
-    const isTreat = isSupplement || productType === 'treats' || productType === 'treat' || 
-                    (ingredients.length <= 6 && ingredients.some(i => 
-                      (i.name || i).toLowerCase().includes('jerky') || 
-                      (i.name || i).toLowerCase().includes('treat')));
+    const isTreat = isSupplement || productType === 'treats' || productType === 'treat' ||
+                    (linesForProductClass.length <= 6 && linesForProductClass.some((line) =>
+                      line.toLowerCase().includes('jerky') ||
+                      line.toLowerCase().includes('treat')));
 
     // Product type context
     const productContext = isSupplement ? `
@@ -909,13 +924,39 @@ PRODUCT TYPE: DAILY FOOD (regular consumption)
 - Prioritize nutritional completeness and digestibility
 `;
 
-    const prompt = `You are a veterinary nutritionist. Assess these pet food ingredients for a ${petType} named ${petName}.
-Assume a generally healthy, typical ${petType} (no special medical conditions) — this is a universal product assessment.
+    const listSection = hasFullContext ? `
+FULL INGREDIENT LIST (label order — complete product formula; CONTEXT ONLY):
+${fullListBlock}
 
+Use this list only to interpret each target line (e.g. "water sufficient for processing" as the first item in a canned/wet formula is normal moisture for processing — it does NOT mean the entire product is only water). Score each target for its typical role in this complete formula, not as if it were the sole component of the diet.
+
+INGREDIENTS TO ASSESS — return JSON "assessments" ONLY for these exact lines (one object per line below; keys must match these strings):
+${ingredientDetails}
+` : `
 INGREDIENTS (by position - earlier = larger amount):
 ${ingredientDetails}
+`;
 
-TOTAL INGREDIENTS: ${totalIngredients}
+    const opening = hasFullContext
+      ? `You are a veterinary nutritionist. For a ${petType} named ${petName}, assign risk scores ONLY for the ingredient lines listed under "INGREDIENTS TO ASSESS".`
+      : `You are a veterinary nutritionist. Assess these pet food ingredients for a ${petType} named ${petName}.`;
+
+    const countLines = hasFullContext
+      ? `FULL_PRODUCT_INGREDIENT_LINES: ${fullIngredientLines.length}
+TARGET_LINES_TO_SCORE: ${totalIngredients}`
+      : `TOTAL INGREDIENTS: ${totalIngredients}`;
+
+    const extraRules = hasFullContext ? `
+4. The "assessments" object must contain ONLY the target ingredient names from "INGREDIENTS TO ASSESS" — do not include keys for other lines from the full list.
+5. Each explanation describes that ingredient's role in this product type (wet/dry/treat), using the full list only as context — do not claim the product is only water or only one line unless the full list truly contains nothing else.
+` : '';
+
+    const prompt = `${opening}
+Assume a generally healthy, typical ${petType} (no special medical conditions) — this is a universal product assessment.
+
+${listSection}
+
+${countLines}
 PET TYPE: ${petType}
 HEALTH CONDITIONS: None (universal / healthy-pet baseline — do not personalize for diseases or allergies)
 ${productContext}
@@ -952,6 +993,7 @@ For DAILY FOOD (healthy pets):
   - Any added sugars: +8 to +15 (more strict for daily consumption)
   - Artificial colors/flavors: +10 to +18
   - Byproducts (unspecified): +5 to +10
+  - Water as moisture/processing aid in wet food (e.g. "water sufficient for processing", "water", "filtered water" early in list): typically NEUTRAL (-2 to +2) when the full formula clearly includes proteins, vitamins, and minerals — do NOT score as if water were the entire diet.
 
 GRAIN/FILLER DISTINCTION (important!):
 - GOOD whole grains: oatmeal, brown rice, barley, quinoa, millet → score NEGATIVE (beneficial)
@@ -963,7 +1005,7 @@ IMPORTANT RULES:
 1. Consider ingredient QUALITY (organic > conventional > artificial)
 2. Use position to WEIGHT the risk score (earlier = more impactful), but...
 3. DO NOT mention position/order in explanations! Write descriptions that apply to the ingredient itself, regardless of where it appears in the list.
-
+${extraRules}
 BAD explanation: "As the 5th ingredient, its quantity is likely small"
 GOOD explanation: "Provides empty calories with no nutritional benefit"
 

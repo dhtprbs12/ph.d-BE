@@ -665,7 +665,8 @@ class IngredientAnalyzer {
   /**
    * For every line in ingredientsList, ensure ai_assessment_cache has a row for
    * (ingredient_normalized, getSingleConditionHash(condition, productTypeForHash), pet_type).
-   * On MISS: batch Gemini assessIngredientsForPet, then INSERT … ON DUPLICATE KEY UPDATE.
+   * On MISS: batch Gemini assessIngredientsForPet (full label list as prompt context,
+   * JSON assessments only for misses), then INSERT … ON DUPLICATE KEY UPDATE.
    * Rows Gemini does not map get risk_score=0 neutral fallback so deterministic scoring can proceed.
    *
    * @param {string[]} ingredientsList
@@ -723,7 +724,10 @@ class IngredientAnalyzer {
           petType,
           displayName,
           singleConditionList,
-          productTypeForAI || 'food'
+          productTypeForAI || 'food',
+          {
+            fullIngredientLines: ingredientsList.map((s) => String(s || '').trim()).filter(Boolean),
+          }
         );
       } else {
         console.warn('[CACHE-FILL] Gemini model unavailable — using neutral rows only');

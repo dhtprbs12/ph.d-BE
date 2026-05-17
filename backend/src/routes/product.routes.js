@@ -396,7 +396,10 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
                 pet.pet_type,
                 pet.name,
                 singleCondition,
-                productTypeForAI
+                productTypeForAI,
+                {
+                  fullIngredientLines: ingredientsList.map((s) => String(s || '').trim()).filter(Boolean),
+                }
               );
               return { condition, conditionHash, ingredients, aiAssessments, success: true };
             } catch (err) {
