@@ -42,16 +42,15 @@ async function traceRow(conditionHash, petType, productType) {
   const penalties = [];
   const missing = [];
 
+  const listLen = Math.max(1, ingredientsList.length);
+
   for (let i = 0; i < ingredientsList.length; i++) {
     const name = ingredientsList[i].trim();
     if (!name) continue;
     const normalizedName = normalizedNames[i];
     const position = i + 1;
 
-    let positionWeight = 1.0;
-    if (position > 10) positionWeight = 0.25;
-    else if (position > 6) positionWeight = 0.5;
-    else if (position > 3) positionWeight = 0.75;
+    const positionWeight = ingredientAnalyzer.getPositionWeightFromListOrder(position, listLen);
 
     const cached = await ingredientAnalyzer.cacheLookup(normalizedName, conditionHash, petType);
     if (!cached.length) {

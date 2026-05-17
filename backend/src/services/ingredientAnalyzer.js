@@ -75,6 +75,8 @@ class IngredientAnalyzer {
     let allergenMatches = [];
     let healthConcerns = [];
 
+    const listLen = Math.max(1, ingredientsList.length);
+
     // Create analysis promises for all ingredients
     const analysisPromises = ingredientsList.map((ingredientName, i) => {
       const trimmedName = ingredientName.trim();
@@ -84,7 +86,8 @@ class IngredientAnalyzer {
         trimmedName,
         i + 1, // position (1-indexed)
         pet,
-        petConditions
+        petConditions,
+        listLen
       );
     });
 
@@ -185,16 +188,21 @@ class IngredientAnalyzer {
 
   /**
    * Analyze a single ingredient
+   * @param {number} [ingredientListLength] - N for (N-i+1)/N position weight; omit for legacy tier weights
    */
-  async analyzeIngredient(name, position, pet, petConditions) {
+  async analyzeIngredient(name, position, pet, petConditions, ingredientListLength = null) {
     const normalizedName = this.normalizeIngredientName(name);
     
-    // Position weight: first ingredients matter more
-    // Position 1-3: 100% weight, Position 4-6: 75%, Position 7-10: 50%, 11+: 25%
-    let positionWeight = 1.0;
-    if (position > 10) positionWeight = 0.25;
-    else if (position > 6) positionWeight = 0.5;
-    else if (position > 3) positionWeight = 0.75;
+    let positionWeight =
+      ingredientListLength != null
+        ? this.getPositionWeightFromListOrder(position, ingredientListLength)
+        : (() => {
+            let w = 1.0;
+            if (position > 10) w = 0.25;
+            else if (position > 6) w = 0.5;
+            else if (position > 3) w = 0.75;
+            return w;
+          })();
 
     let result = {
       name,
@@ -298,10 +306,24 @@ class IngredientAnalyzer {
   }
 
   /**
+   * Position weight from 1-based index among N listed ingredients (mass-order proxy).
+   * w_i = (N - i + 1) / N — first row weight 1, last row 1/N.
+   * @param {number} position - 1-based ingredient order
+   * @param {number} listLength - N (ingredient array length)
+   */
+  getPositionWeightFromListOrder(position, listLength) {
+    const N = Math.max(1, Number(listLength) || 1);
+    const i = Math.min(Math.max(Number(position) || 1, 1), N);
+    return (N - i + 1) / N;
+  }
+
+  /**
    * Compute a product score from ai_assessment_cache (no AI call needed)
    * Uses pre-cached individual ingredient scores to derive a holistic product score.
-   * 
-   * Scoring model aligned with AI (Tier 3) prompts:
+   *
+   * Position weights: w_i = (N - i + 1) / N for i = 1..N (N = ingredientsList.length).
+   *
+   * Scoring model:
    *  - Supplements: base 85
    *  - Treats: base 75, with bonuses for protein/#1, clean list, natural preservatives
    *  - Food:   base 100
@@ -358,6 +380,8 @@ class IngredientAnalyzer {
       'urinary_issues': ['calcium', 'calcium carbonate', 'magnesium']
     };
 
+    const listLen = Math.max(1, ingredientsList.length);
+
     for (let i = 0; i < ingredientsList.length; i++) {
       const name = ingredientsList[i].trim();
       if (!name) continue;
@@ -365,11 +389,7 @@ class IngredientAnalyzer {
       const normalizedName = normalizedNames[i];
       const position = i + 1;
 
-      // Position weight — with minimum floors for high-risk ingredients
-      let positionWeight = 1.0;
-      if (position > 10) positionWeight = 0.25;
-      else if (position > 6) positionWeight = 0.5;
-      else if (position > 3) positionWeight = 0.75;
+      const positionWeight = this.getPositionWeightFromListOrder(position, listLen);
 
       // Look up in ai_assessment_cache for this specific condition (with fallbacks)
       try {
