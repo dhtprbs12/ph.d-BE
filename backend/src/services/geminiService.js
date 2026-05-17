@@ -134,6 +134,13 @@ PRINT-FIDELITY — synonyms & parentheses (highest priority when text is legible
 - Inside a long premix parenthesis (vitamins/minerals), keep inner items in the same left-to-right comma order as printed; do not alphabetize, regroup by nutrient class, or merge lines for readability.
 - Each string in ingredientsList that corresponds to one printed slot must use the same wording and parenthetical layout as that slot on the label (casing as printed when you can read it).
 
+VITAMIN / MINERAL PREMIX (most common failure — do not truncate):
+- When the label prints "Vitamins (" or "VITAMINS (" (or "Minerals (" / "MINERALS (") as a HEADER immediately before a long parenthetical list, the ENTIRE printed unit from that header word through its matching closing ")" MUST appear as EXACTLY ONE string in ingredientsList (one array element). Include the word "Vitamins" or "Minerals" before "(" — never drop the header.
+- NEVER return only a single inner enumerator (e.g. only "Niacin (Vitamin B-3)") while omitting the rest of the parenthetical list and omitting the printed "Vitamins" header. That is an incomplete extraction.
+- Inner entries may themselves contain parentheses (e.g. "Niacin (Vitamin B-3)"); keep nesting balanced so the OUTER premix closing ")" matches the header's "(".
+- rawIngredientsText must contain the full same premix text as printed (so a downstream repair can recover if ingredientsList is wrong).
+- If the premix is partly unreadable, lower "confidence" and explain in "notes" — do not silently output a tiny fragment as if it were the whole premix.
+
 INGREDIENT LIST EXTRACTION RULES (very important):
 - Include ONLY actual food/nutrient ingredients (e.g., "Deboned Chicken", "Vitamin E Supplement", "Rosemary Extract").
 - DO NOT include any of the following — they are NOT ingredients, even if they appear right next to the ingredient list:
@@ -180,15 +187,22 @@ INGREDIENT LIST EXTRACTION RULES (very important):
   balanced parentheses only for its own sub-ingredients.`;
 
     try {
-      const result = await this.model.generateContent([
-        {
-          inlineData: {
-            mimeType,
-            data: imageBase64
-          }
+      const result = await this.model.generateContent({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { inlineData: { mimeType, data: imageBase64 } },
+              { text: prompt },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0,
+          candidateCount: 1,
+          maxOutputTokens: 8192,
         },
-        prompt
-      ]);
+      });
 
       const response = result.response;
       const text = response.text();

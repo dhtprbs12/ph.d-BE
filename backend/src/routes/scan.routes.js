@@ -1189,6 +1189,10 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
         ingredientsList
       );
     }
+    ingredientsList = ingredientAnalyzer.mergePremixFragmentsFromRaw(
+      ingredientsList,
+      extracted.rawIngredientsText || ''
+    );
     ingredientsList = ingredientAnalyzer.postProcessExtractedIngredientList(ingredientsList);
 
     if (ingredientsList.length === 0) {
@@ -1613,6 +1617,23 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
           suggestion: 'Make sure the ingredients list is clearly visible in the photo.'
         });
       }
+    }
+
+    if (ingredientsList.length > 0) {
+      const rawForRepair =
+        String(extracted.rawIngredientsText || '').trim() ||
+        String(product?.raw_ingredients_text || '').trim();
+      if (rawForRepair.length > 50) {
+        ingredientsList = geminiService._reconcileListParenFromRaw(
+          rawForRepair,
+          ingredientsList
+        );
+      }
+      ingredientsList = ingredientAnalyzer.mergePremixFragmentsFromRaw(
+        ingredientsList,
+        rawForRepair
+      );
+      ingredientsList = ingredientAnalyzer.postProcessExtractedIngredientList(ingredientsList);
     }
     
     // Still no ingredients after all attempts

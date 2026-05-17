@@ -1090,6 +1090,110 @@ class IngredientAnalyzer {
   }
 
   /**
+   * Extract "Vitamins ( ... )" or "Minerals ( ... )" from raw label text using
+   * parenthesis depth (handles inner parens like "Niacin (Vitamin B-3)").
+   * @param {string} raw
+   * @param {'Vitamins'|'Minerals'} label
+   * @returns {string|null}
+   */
+  _extractOuterPremixFromRaw(raw, label) {
+    const s = String(raw || '');
+    if (!s || s.length < 20) return null;
+    const re = new RegExp(`\\b${label}\\b\\s*\\(`, 'i');
+    const m = re.exec(s);
+    if (!m) return null;
+    const openIdx = s.indexOf('(', m.index);
+    if (openIdx < 0) return null;
+    const start = m.index;
+    let depth = 0;
+    for (let i = openIdx; i < s.length; i++) {
+      const c = s[i];
+      if (c === '(') depth++;
+      else if (c === ')') {
+        depth--;
+        if (depth === 0) {
+          return s.slice(start, i + 1).replace(/\s+/g, ' ').trim();
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * When Gemini splits a legal premix into inner fragments but rawIngredientsText
+   * still contains the full "Vitamins(...)" / "Minerals(...)" block, splice that
+   * block back as one list item (consecutive fragment rows only).
+   * @param {string[]} ingredientsList
+   * @param {string} rawIngredientsText
+   * @returns {string[]}
+   */
+  mergePremixFragmentsFromRaw(ingredientsList, rawIngredientsText) {
+    if (!Array.isArray(ingredientsList) || ingredientsList.length === 0) return ingredientsList;
+    const rawStr = String(rawIngredientsText || '');
+    if (rawStr.length < 40) return ingredientsList;
+
+    const norm = t =>
+      String(t || '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const out = ingredientsList.map(x => String(x || '').trim()).filter(Boolean);
+
+    const mergeKind = (label, isFragment) => {
+      const block = this._extractOuterPremixFromRaw(rawStr, label);
+      if (!block || block.length < 40) return;
+
+      const headerRe = new RegExp(`^\\s*${label}\\s*\\(`, 'i');
+      if (out.some(line => headerRe.test(line))) return;
+
+      const nBlock = norm(block);
+      let i = 0;
+      while (i < out.length) {
+        if (isFragment(out[i], block, nBlock)) {
+          let j = i;
+          while (j + 1 < out.length && isFragment(out[j + 1], block, nBlock)) j++;
+          out.splice(i, j - i + 1, block);
+          i += 1;
+        } else {
+          i += 1;
+        }
+      }
+    };
+
+    mergeKind('Vitamins', (line, block, nBlock) => {
+      if (/^\s*Vitamins\s*\(/i.test(line)) return false;
+      if (line.length >= block.length * 0.52) return false;
+      if (line.length < 12) return false;
+      const nLine = norm(line);
+      if (!nBlock.includes(nLine)) return false;
+      if (
+        /\b(salmon|rice|chicken|beef|turkey|lamb|barley|oat|meal|oil|flour)\b/i.test(line) &&
+        !/\b(vitamin|niacin|thiam|riboflav|folic|biotin|pyridox|pantothen|cyanocobal|menadione|tocopherol|ascorb|supplement)\b/i.test(line)
+      ) {
+        return false;
+      }
+      return (
+        /\b(vitamin|niacin|thiam|riboflav|folic|biotin|pyridox|pantothen|cyanocobal|menadione|tocopherol|ascorb|supplement)\b/i.test(line) ||
+        (line.includes('(') && /\b(vitamin|supplement)\b/i.test(line))
+      );
+    });
+
+    mergeKind('Minerals', (line, block, nBlock) => {
+      if (/^\s*Minerals\s*\(/i.test(line)) return false;
+      if (line.length >= block.length * 0.48) return false;
+      if (line.length < 12) return false;
+      const nLine = norm(line);
+      if (!nBlock.includes(nLine)) return false;
+      return /\b(zinc|iron|copper|manganese|calcium|sodium|selenium|iodate|iodide|sulfate|chloride|oxide|phosphate|proteinate|selenite|carbonate|sulfur)\b/i.test(
+        line
+      );
+    });
+
+    return out;
+  }
+
+  /**
    * Fix common OCR / layout errors on extracted lines, then drop duplicate
    * Minerals(/Vitamins( rows when one copy is clearly corrupted.
    */
