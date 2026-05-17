@@ -996,6 +996,32 @@ Use standard nutritional assessment for a healthy ${petType}. Explanations descr
   }
 
   /**
+   * Pull the text out of a Gemini response, tolerating cases where one
+   * of the candidates was blocked (RECITATION / SAFETY) but another
+   * succeeded. Throws if NO candidate yielded usable text — in which
+   * case the caller will handle the retry.
+   */
+  _extractFirstText(response) {
+    if (!response) throw new Error('Empty Gemini response');
+
+    const candidates = response.candidates || [];
+    for (const c of candidates) {
+      const finish = c?.finishReason;
+      // STOP / MAX_TOKENS are fine; RECITATION / SAFETY mean blocked.
+      if (finish && finish !== 'STOP' && finish !== 'MAX_TOKENS') continue;
+      const partsText = (c?.content?.parts || [])
+        .map(p => p?.text || '')
+        .join('')
+        .trim();
+      if (partsText) return partsText;
+    }
+
+    // Fall back to .text() — it throws on a fully blocked response,
+    // surfacing the RECITATION error to the caller's catch block.
+    return response.text();
+  }
+
+  /**
    * HOLISTIC PRODUCT REVIEW
    * AI evaluates the ENTIRE product and gives a final score (universal healthy-pet product quality only).
    * @param {Object} params
