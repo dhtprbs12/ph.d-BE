@@ -82,7 +82,7 @@ Return your response in this exact JSON format:
   "lifeStage": "puppy_kitten" | "adult" | "senior" | "all" | null,
   "packageShape": "flat" | "round" | "pouch" | null,
   "ingredientsList": ["ingredient1", "ingredient2", ...],
-  "rawIngredientsText": "original text as written on label or null if not visible",
+  "rawIngredientsText": "ingredient paragraph copied as printed on the label (see PRINT-FIDELITY); null if not visible",
   "guaranteedAnalysis": {
     "protein": number or null,
     "fat": number or null,
@@ -127,6 +127,12 @@ CRITICAL RULES:
 - Ingredients are listed in order of weight (most to least)
 - If you cannot read something clearly, note it but still extract what you can
 - VERBATIM INTEGRITY (parentheticals and qualifiers). Copy each ingredient line from the label when possible. Never invent comma-separated tokens inside "(" … ")" that are not visible (e.g. do not add ", WATER" inside "BUTTER (CREAM)"). Preserve leading adjectives and legal qualifiers exactly ("MODIFIED EGG YOLK", not "EGG YOLK"). Do not normalize spellings or compress official names. For rawIngredientsText, stay faithful to the printed list paragraph (harmless whitespace collapse only).
+
+PRINT-FIDELITY — synonyms & parentheses (highest priority when text is legible):
+- If the package prints "OUTER (INNER)" for a nutrient or synonym pair, keep that exact surface order. WRONG: label shows "Niacin (Vitamin B-3)" but you output "Vitamin B-3 (Niacin)" or swap which name is outside vs inside the parentheses. Same rule for every "A (B)" / "Name (alternate name)" on the label.
+- Do not "canonicalize" to a textbook or database name when the label uses a different legal/common name order (e.g. do not rewrite for consistency across the list).
+- Inside a long premix parenthesis (vitamins/minerals), keep inner items in the same left-to-right comma order as printed; do not alphabetize, regroup by nutrient class, or merge lines for readability.
+- Each string in ingredientsList that corresponds to one printed slot must use the same wording and parenthetical layout as that slot on the label (casing as printed when you can read it).
 
 INGREDIENT LIST EXTRACTION RULES (very important):
 - Include ONLY actual food/nutrient ingredients (e.g., "Deboned Chicken", "Vitamin E Supplement", "Rosemary Extract").
