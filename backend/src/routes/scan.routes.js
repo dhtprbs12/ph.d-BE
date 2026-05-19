@@ -78,6 +78,62 @@ router.get('/stats', async (req, res, next) => {
   }
 });
 
+// Curated ingredient names for manual-entry autocomplete (same pool as precache seeds)
+const { getAllIngredients } = require('../database/comprehensive-ingredients');
+let ingredientSuggestPool = null;
+function getIngredientSuggestPool() {
+  if (!ingredientSuggestPool) {
+    ingredientSuggestPool = getAllIngredients();
+  }
+  return ingredientSuggestPool;
+}
+
+/**
+ * GET /api/scan/ingredient-suggest?q=...&limit=15
+ * Prefix matches first, then substring matches; for manual label entry UX.
+ */
+router.get('/ingredient-suggest', (req, res, next) => {
+  try {
+    const raw = String(req.query.q || '').trim();
+    const limit = Math.min(40, Math.max(1, parseInt(String(req.query.limit || '15'), 10) || 15));
+    if (raw.length < 1) {
+      return res.json({ suggestions: [] });
+    }
+    const q = raw.toLowerCase();
+    const pool = getIngredientSuggestPool();
+    const startsWith = [];
+    const contains = [];
+    for (const item of pool) {
+      const low = item.toLowerCase();
+      if (low.startsWith(q)) {
+        if (startsWith.length < limit) startsWith.push(item);
+      } else if (low.includes(q)) {
+        if (contains.length < limit) contains.push(item);
+      }
+    }
+    const seen = new Set();
+    const out = [];
+    for (const s of startsWith) {
+      const k = s.toLowerCase();
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(s);
+      }
+    }
+    for (const s of contains) {
+      if (out.length >= limit) break;
+      const k = s.toLowerCase();
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(s);
+      }
+    }
+    res.json({ suggestions: out.slice(0, limit) });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ============================================
 // USER STATS & BADGE (for gamification)
 // ============================================
