@@ -2527,6 +2527,27 @@ router.post('/manual', async (req, res, next) => {
       });
     }
 
+    /** food | treats — drives conditions_hash (e.g. healthy_food vs healthy_treats) for cache alignment. */
+    let productType = req.body.productType ?? req.body.product_type;
+    if (productType != null && String(productType).trim() !== '') {
+      const pt = String(productType).toLowerCase().trim();
+      if (pt === 'treat' || pt === 'treats') {
+        productType = 'treats';
+      } else if (pt === 'food') {
+        productType = 'food';
+      } else {
+        return res.status(400).json({ error: 'productType must be "food" or "treats"' });
+      }
+    } else {
+      productType = ingredientsList.length <= 6 ? 'treats' : 'food';
+    }
+
+    console.log(
+      `🏷️ [Manual] productType=${productType}${
+        req.body.productType || req.body.product_type ? ' (client)' : ' (length heuristic fallback)'
+      }`
+    );
+
     // Analyze ingredients (basic per-ingredient assessment)
     let analysis = await ingredientAnalyzer.analyzeIngredients(ingredientsList, pet);
 
@@ -2536,7 +2557,6 @@ router.post('/manual', async (req, res, next) => {
     // =============================================
     const healthConditions = pet.healthConditions || [];
     const hasConditions = healthConditions.length > 0;
-    const productType = ingredientsList.length <= 6 ? 'treats' : 'food';
     
     // Universal scoring — always evaluate as "healthy"
     const conditionsToEvaluate = ['healthy'];

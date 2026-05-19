@@ -65,7 +65,7 @@
  * Scans:
  *   POST /api/scan/barcode { barcode, petId }
  *   POST /api/scan/label (multipart: image, petId)
- *   POST /api/scan/manual { ingredientsText, petId }
+ *   POST /api/scan/manual { ingredientsText, productType: "food"|"treats", petType, ... }
  *   GET /api/scan/history?petId=xxx
  *   GET /api/scan/:id
  * 
