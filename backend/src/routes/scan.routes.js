@@ -78,56 +78,59 @@ router.get('/stats', async (req, res, next) => {
   }
 });
 
-// Curated ingredient names for manual-entry autocomplete (same pool as precache seeds)
-const { getAllIngredients } = require('../database/comprehensive-ingredients');
-let ingredientSuggestPool = null;
-function getIngredientSuggestPool() {
-  if (!ingredientSuggestPool) {
-    ingredientSuggestPool = getAllIngredients();
-  }
-  return ingredientSuggestPool;
+/** Escape %, _, \ for SQL LIKE patterns (MySQL ESCAPE '\\'). */
+function escapeSqlLikePattern(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 
 /**
  * GET /api/scan/ingredient-suggest?q=...&limit=15
- * Prefix matches first, then substring matches; for manual label entry UX.
+ * Distinct ingredient_normalized from ai_assessment_cache: prefix matches first, then substring.
  */
-router.get('/ingredient-suggest', (req, res, next) => {
+router.get('/ingredient-suggest', async (req, res, next) => {
   try {
     const raw = String(req.query.q || '').trim();
     const limit = Math.min(40, Math.max(1, parseInt(String(req.query.limit || '15'), 10) || 15));
     if (raw.length < 1) {
       return res.json({ suggestions: [] });
     }
-    const q = raw.toLowerCase();
-    const pool = getIngredientSuggestPool();
-    const startsWith = [];
-    const contains = [];
-    for (const item of pool) {
-      const low = item.toLowerCase();
-      if (low.startsWith(q)) {
-        if (startsWith.length < limit) startsWith.push(item);
-      } else if (low.includes(q)) {
-        if (contains.length < limit) contains.push(item);
+    const qLower = raw.toLowerCase();
+    const esc = escapeSqlLikePattern(qLower);
+    const prefixPat = `${esc}%`;
+    const containPat = `%${esc}%`;
+
+    const prefixRows = await query(
+      `SELECT DISTINCT ingredient_normalized AS n
+       FROM ai_assessment_cache
+       WHERE ingredient_normalized LIKE ? ESCAPE '\\\\'
+       ORDER BY n ASC
+       LIMIT ?`,
+      [prefixPat, limit]
+    );
+    const out = prefixRows.map((r) => r.n);
+    const seen = new Set(out.map((x) => x.toLowerCase()));
+
+    if (out.length < limit) {
+      const need = limit - out.length;
+      const containRows = await query(
+        `SELECT DISTINCT ingredient_normalized AS n
+         FROM ai_assessment_cache
+         WHERE ingredient_normalized LIKE ? ESCAPE '\\\\'
+           AND NOT (ingredient_normalized LIKE ? ESCAPE '\\\\')
+         ORDER BY n ASC
+         LIMIT ?`,
+        [containPat, prefixPat, need]
+      );
+      for (const r of containRows) {
+        const k = r.n.toLowerCase();
+        if (!seen.has(k)) {
+          seen.add(k);
+          out.push(r.n);
+          if (out.length >= limit) break;
+        }
       }
     }
-    const seen = new Set();
-    const out = [];
-    for (const s of startsWith) {
-      const k = s.toLowerCase();
-      if (!seen.has(k)) {
-        seen.add(k);
-        out.push(s);
-      }
-    }
-    for (const s of contains) {
-      if (out.length >= limit) break;
-      const k = s.toLowerCase();
-      if (!seen.has(k)) {
-        seen.add(k);
-        out.push(s);
-      }
-    }
+
     res.json({ suggestions: out.slice(0, limit) });
   } catch (e) {
     next(e);
