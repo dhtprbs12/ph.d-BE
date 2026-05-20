@@ -38,6 +38,33 @@ class ProductService {
       .trim();
   }
 
+  /** Tokens for Jaccard / overlap; each token trim()d, empties dropped. */
+  _tokensFromNormalized(norm) {
+    if (!norm || !String(norm).trim()) return [];
+    return String(norm)
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+  }
+
+  /** Jaccard similarity on token sets in [0, 1]. Both empty => 1; one empty => 0. */
+  _jaccardTokenSimilarity(normA, normB) {
+    const ta = this._tokensFromNormalized(normA);
+    const tb = this._tokensFromNormalized(normB);
+    if (ta.length === 0 && tb.length === 0) return 1;
+    if (ta.length === 0 || tb.length === 0) return 0;
+    const setA = new Set(ta);
+    const setB = new Set(tb);
+    let inter = 0;
+    for (const x of setA) {
+      if (setB.has(x)) inter += 1;
+    }
+    const union = setA.size + setB.size - inter;
+    return union === 0 ? 0 : inter / union;
+  }
+
+  static MATCH_TOKEN_JACCARD_MIN = 0.7;
+
   /**
    * Find product by ingredient hash, optionally narrowing by brand + name.
    *
@@ -49,7 +76,9 @@ class ProductService {
    * Matching rules when brand/name are provided:
    *   1. Exact-ish match: hash + brand fuzzy-equal + name fuzzy-equal → that row
    *   2. Otherwise: hash + brand fuzzy-equal → first row (handles OCR noise on name)
-   *   3. Otherwise: null (treat as a new product even though ingredients match)
+   *   3. Otherwise: hash + token Jaccard ≥ MATCH_TOKEN_JACCARD_MIN on each
+   *      non-empty scan field (brand and/or name; empty scan side skipped as 1) → best row
+   *   4. Otherwise: null (treat as a new product even though ingredients match)
    *
    * If brand/name are not provided, falls back to hash-only (legacy behavior).
    */
@@ -83,6 +112,30 @@ class ProductService {
       );
       if (brandMatch) return brandMatch;
     }
+
+    // Token Jaccard on brand AND name (each side with signal must pass ≥ min).
+    if (!normBrand && !normName) {
+      return null;
+    }
+    const minJ = ProductService.MATCH_TOKEN_JACCARD_MIN;
+    let best = null;
+    let bestKey = -1;
+    for (const r of results) {
+      const dbBrand = this.normalizeForMatch(r.brand);
+      const dbName = this.normalizeForMatch(r.name);
+      const jb = normBrand ? this._jaccardTokenSimilarity(normBrand, dbBrand) : 1;
+      const jn = normName ? this._jaccardTokenSimilarity(normName, dbName) : 1;
+      if (jb >= minJ && jn >= minJ) {
+        const mn = Math.min(jb, jn);
+        const av = (jb + jn) / 2;
+        const key = mn * 1000 + av;
+        if (key > bestKey) {
+          bestKey = key;
+          best = r;
+        }
+      }
+    }
+    if (best) return best;
 
     return null;
   }
