@@ -1307,6 +1307,11 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
       extracted.rawIngredientsText || ''
     );
     ingredientsList = ingredientAnalyzer.postProcessExtractedIngredientList(ingredientsList);
+    ingredientsList = ingredientAnalyzer.fillMissingIngredientsFromRaw(
+      ingredientsList,
+      extracted.rawIngredientsText || ''
+    );
+    ingredientsList = ingredientAnalyzer.postProcessExtractedIngredientList(ingredientsList);
 
     if (ingredientsList.length === 0) {
       return res.status(422).json({
@@ -1743,6 +1748,11 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
         );
       }
       ingredientsList = ingredientAnalyzer.reconcileExtractedListWithRaw(
+        ingredientsList,
+        rawForRepair
+      );
+      ingredientsList = ingredientAnalyzer.postProcessExtractedIngredientList(ingredientsList);
+      ingredientsList = ingredientAnalyzer.fillMissingIngredientsFromRaw(
         ingredientsList,
         rawForRepair
       );

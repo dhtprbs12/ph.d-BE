@@ -1377,6 +1377,117 @@ class IngredientAnalyzer {
   }
 
   /**
+   * Split raw label text into top-level ingredient segments (paren-aware commas).
+   * Shared by reconcileExtractedListWithRaw and fillMissingIngredientsFromRaw.
+   * @returns {string[]}
+   */
+  _deriveRawIngredientSegments(rawIngredientsText, maxSegment = 2400) {
+    const raw = String(rawIngredientsText || '').trim();
+    if (raw.length < 50) return [];
+
+    const narr = this.sliceIngredientNarrativeFromRaw(raw);
+    if (narr.length < 40) return [];
+
+    let body = this._normalizeIngredientNewlines(narr).replace(/\.\s/g, ', ');
+    let R = this._splitTopLevelIngredientSegments(body, maxSegment);
+
+    const sentencePattern =
+      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|naturally\s+preserved|preserve(?:d|s)?\s+freshness|facility|guaranteed\s+analysis|feeding|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|nutrition\s+facts|serving\s+size|daily\s+value|calories\s+per|amount\s*\/\s*serving|shake\s+well|refrigerate|distributed\s+by|dist\.?\s*&\s*sold|sku\s*#)\b/i;
+
+    R = R.filter(seg => {
+      const t = String(seg || '').trim();
+      if (!t) return false;
+      if (sentencePattern.test(t)) return false;
+      if (/^\d+%?$/.test(t)) return false;
+      if (/\bGuaranteed\s+Analysis\b/i.test(t)) return false;
+      return true;
+    });
+    if (!R.length) return [];
+
+    if (R.some(s => /\bcrude\s+(?:protein|fat|fiber)\b/i.test(s) && /\bmoisture\b/i.test(s))) {
+      return [];
+    }
+    return R;
+  }
+
+  _normMatchLine(s) {
+    return String(s || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /** True when a vision list row and a raw segment refer to the same printed ingredient. */
+  _listItemMatchesRawSegment(listItem, rawSeg) {
+    const nl = this._normMatchLine(listItem);
+    const nr = this._normMatchLine(rawSeg);
+    if (!nl || !nr) return false;
+    if (nl === nr) return true;
+    const minSub = 4;
+    if (nl.length >= minSub && nr.includes(nl)) return true;
+    if (nr.length >= minSub && nl.includes(nr)) return true;
+    return false;
+  }
+
+  _rawSegmentIsPlausibleIngredient(seg) {
+    const t = String(seg || '').trim();
+    if (!t || t.length > 2400) return false;
+    const sentencePattern =
+      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|guaranteed\s+analysis|distributed\s+by)\b/i;
+    if (sentencePattern.test(t)) return false;
+    if (/^\d+%?$/.test(t)) return false;
+    const wordCount = t.replace(/\([^)]*\)/g, '').trim().split(/\s+/).filter(Boolean).length;
+    const maxWords = /\(/.test(t) ? 28 : 14;
+    return wordCount > 0 && wordCount <= maxWords;
+  }
+
+  /**
+   * Insert raw-only segments into the vision JSON list in label order.
+   * Fixes cases where rawIngredientsText is complete but ingredientsList drops a line
+   * (e.g. "canola oil (preserved with mixed tocopherols)").
+   */
+  fillMissingIngredientsFromRaw(ingredientsList, rawIngredientsText) {
+    if (!Array.isArray(ingredientsList) || ingredientsList.length === 0) return ingredientsList;
+
+    const R = this._deriveRawIngredientSegments(rawIngredientsText);
+    if (R.length === 0) return ingredientsList;
+
+    const L = ingredientsList.map(s => String(s || '').trim()).filter(Boolean);
+    const usedL = new Set();
+    const out = [];
+
+    for (const rSeg of R) {
+      let matched = -1;
+      for (let j = 0; j < L.length; j++) {
+        if (usedL.has(j)) continue;
+        if (this._listItemMatchesRawSegment(L[j], rSeg)) {
+          matched = j;
+          break;
+        }
+      }
+      if (matched >= 0) {
+        out.push(L[matched]);
+        usedL.add(matched);
+      } else if (this._rawSegmentIsPlausibleIngredient(rSeg)) {
+        out.push(String(rSeg).trim());
+      }
+    }
+
+    for (let j = 0; j < L.length; j++) {
+      if (!usedL.has(j)) out.push(L[j]);
+    }
+
+    const added = out.length - L.length;
+    if (added > 0) {
+      console.log(
+        `🔧 [Ingredients] Filled ${added} missing from raw (${L.length} → ${out.length})`
+      );
+    }
+
+    return out.length > 0 ? out : ingredientsList;
+  }
+
+  /**
    * When structured `ingredientsList` from vision JSON disagrees with the same
    * declaration split mechanically from `rawIngredientsText` (depth-aware commas),
    * prefer the raw-derived list if evidence suggests the model dropped/merged/split
@@ -1390,41 +1501,14 @@ class IngredientAnalyzer {
    */
   reconcileExtractedListWithRaw(ingredientsList, rawIngredientsText) {
     if (!Array.isArray(ingredientsList) || ingredientsList.length === 0) return ingredientsList;
-    const raw = String(rawIngredientsText || '').trim();
-    if (raw.length < 50) return ingredientsList;
 
-    const narr = this.sliceIngredientNarrativeFromRaw(raw);
-    if (narr.length < 40) return ingredientsList;
-
-    let body = this._normalizeIngredientNewlines(narr).replace(/\.\s/g, ', ');
-    let R = this._splitTopLevelIngredientSegments(body, 2400);
-
-    const sentencePattern =
-      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|naturally\s+preserved|preserve(?:d|s)?\s+freshness|facility|guaranteed\s+analysis|feeding|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|nutrition\s+facts|serving\s+size|daily\s+value|calories\s+per|amount\s*\/\s*serving|shake\s+well|refrigerate|distributed\s+by|dist\.?\s*&\s*sold|sku\s*#)\b/i;
-
-    R = R.filter(seg => {
-      const t = String(seg || '').trim();
-      if (!t) return false;
-      if (sentencePattern.test(t)) return false;
-      if (/^\d+%?$/.test(t)) return false;
-      if (/\bGuaranteed\s+Analysis\b/i.test(t)) return false;
-      return true;
-    });
+    let R = this._deriveRawIngredientSegments(rawIngredientsText);
     if (!R.length) return ingredientsList;
 
     const L = ingredientsList.map(s => String(s || '').trim()).filter(Boolean);
-    const norm = s =>
-      String(s || '')
-        .toLowerCase()
-        .replace(/\s+/g, ' ')
-        .trim();
+    const norm = s => this._normMatchLine(s);
     const joinL = norm(L.join(', '));
     const joinR = norm(R.join(', '));
-
-    // Looks like GA table leaked into narrative — do not swap
-    if (R.some(s => /\bcrude\s+(?:protein|fat|fiber)\b/i.test(s) && /\bmoisture\b/i.test(s))) {
-      return ingredientsList;
-    }
 
     const coverageLR = (() => {
       const nR = R.map(norm);
