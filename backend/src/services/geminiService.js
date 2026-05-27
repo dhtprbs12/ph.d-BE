@@ -2,14 +2,16 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const crypto = require('crypto');
 const { query } = require('../database/connection');
 const { v4: uuidv4 } = require('uuid');
+const visionService = require('./visionService');
+const ingredientAnalyzer = require('./ingredientAnalyzer');
 
 /**
  * GEMINI AI SERVICE
- * 
+ *
  * Handles:
- * 1. OCR extraction from pet food label images
- * 2. Ingredient normalization and parsing
- * 3. Product information extraction
+ * 1. Label metadata extraction (product type, brand, GA, image type)
+ * 2. Ingredient risk assessment and holistic review
+ * 3. Legacy Gemini-only OCR fallback when Cloud Vision is unavailable
  */
 
 class GeminiService {
@@ -37,7 +39,9 @@ class GeminiService {
   }
 
   /**
-   * Extract ingredients from pet food label image
+   * Extract label data from image.
+   * Hybrid: Cloud Vision OCR for ingredient text + Gemini for metadata.
+   * Falls back to Gemini-only when Vision is unavailable.
    * @param {Buffer} imageBuffer - Image data
    * @param {string} mimeType - Image MIME type
    * @returns {Object} Extracted data
@@ -49,17 +53,154 @@ class GeminiService {
       throw new Error('Gemini AI not initialized. Check API key.');
     }
 
-    // Generate image hash for caching
     const imageHash = crypto.createHash('sha256').update(imageBuffer).digest('hex');
 
-    // Check cache
     const cached = await this.checkCache(imageHash);
     if (cached) {
       console.log('📦 Using cached OCR result');
       return cached;
     }
 
-    // Convert buffer to base64 for Gemini
+    let extracted;
+    if (visionService.isConfigured()) {
+      try {
+        extracted = await this._extractFromImageHybrid(imageBuffer, mimeType);
+      } catch (err) {
+        console.warn('⚠️ Cloud Vision hybrid failed, falling back to Gemini OCR:', err.message);
+        extracted = await this._extractFromImageGeminiLegacy(imageBuffer, mimeType);
+      }
+    } else {
+      console.log('ℹ️ GOOGLE_CLOUD_VISION_API_KEY not set — Gemini-only OCR');
+      extracted = await this._extractFromImageGeminiLegacy(imageBuffer, mimeType);
+    }
+
+    await this.cacheResult(imageHash, extracted);
+    const { ocrFullText: _omit, ...result } = extracted;
+    return result;
+  }
+
+  /**
+   * Cloud Vision document OCR + Gemini metadata (no Gemini ingredient rewriting).
+   */
+  async _extractFromImageHybrid(imageBuffer, mimeType) {
+    const ocrFullText = await visionService.detectDocumentText(imageBuffer);
+    console.log(`👁️ [Vision OCR] ${ocrFullText.length} chars`);
+
+    const metadata = await this._extractLabelMetadataFromImage(
+      imageBuffer,
+      mimeType,
+      ocrFullText
+    );
+
+    const rawIngredientsText = this._buildRawIngredientsFromOcr(
+      ocrFullText,
+      metadata.imageType
+    );
+    const ingredientsList =
+      rawIngredientsText.length > 0
+        ? ingredientAnalyzer.parseIngredientText(rawIngredientsText)
+        : [];
+
+    return {
+      ...metadata,
+      rawIngredientsText,
+      ingredientsList,
+      ocrSource: 'cloud_vision',
+      ocrFullText,
+    };
+  }
+
+  /**
+   * Slice Vision OCR to the ingredient declaration; never use Gemini for this text.
+   */
+  _buildRawIngredientsFromOcr(ocrFullText, imageType) {
+    const full = String(ocrFullText || '').trim();
+    if (!full || imageType === 'front_label') return '';
+
+    const sliced = ingredientAnalyzer.sliceIngredientNarrativeFromRaw(full);
+    if (sliced.length >= 40) return sliced;
+
+    if (imageType === 'ingredients_label' || imageType === 'mixed') {
+      return sliced.length > 0 ? sliced : full;
+    }
+
+    return sliced;
+  }
+
+  /**
+   * Product / package metadata from image (+ optional Vision OCR for GA context).
+   */
+  async _extractLabelMetadataFromImage(imageBuffer, mimeType, ocrFullText) {
+    const imageBase64 = imageBuffer.toString('base64');
+    const ocrBlock = ocrFullText
+      ? `\nCLOUD VISION OCR (verbatim — do NOT rewrite as ingredient list output):\n---\n${String(ocrFullText).slice(0, 12000)}\n---\n`
+      : '';
+
+    const prompt = `You classify pet food label photos and extract product METADATA only.
+Do NOT output ingredient list text — OCR is handled separately.
+
+${ocrBlock}
+
+Return JSON only:
+{
+  "imageType": "ingredients_label" | "front_label" | "mixed",
+  "productName": "string or null",
+  "brand": "string or null",
+  "productType": "dry_food" | "wet_food" | "treats" | "supplement" | "other" | null,
+  "texture": "dry" | "wet" | "semi_moist" | "freeze_dried" | null,
+  "targetPet": "dog" | "cat" | "both" | null,
+  "lifeStage": "puppy_kitten" | "adult" | "senior" | "all" | null,
+  "packageShape": "flat" | "round" | "pouch" | null,
+  "guaranteedAnalysis": { "protein": number or null, "fat": number or null, "fiber": number or null, "moisture": number or null },
+  "confidence": number between 0 and 1,
+  "notes": "brief notes on photo quality / what is visible"
+}
+
+Rules:
+- front_label: no ingredient declaration visible → imageType "front_label"
+- ingredients_label: ingredient panel is the main subject
+- mixed: both front marketing and ingredients visible
+- packageShape: round = can/cylinder, pouch = soft bag, flat = default box/bag panel
+- Read guaranteedAnalysis numbers from the label or OCR when visible; null if not shown
+- Do not invent product names; use null when unreadable`;
+
+    const result = await this.model.generateContent({
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType, data: imageBase64 } },
+            { text: prompt },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0,
+        candidateCount: 1,
+        maxOutputTokens: 4096,
+      },
+    });
+
+    const parsed = this.parseGeminiResponse(result.response.text());
+    const allowedShapes = new Set(['flat', 'round', 'pouch']);
+    return {
+      imageType: parsed.imageType || null,
+      productType: parsed.productType || null,
+      productName: parsed.productName || null,
+      brand: parsed.brand || null,
+      targetPet: parsed.targetPet || null,
+      lifeStage: parsed.lifeStage || null,
+      packageShape: allowedShapes.has(parsed.packageShape) ? parsed.packageShape : null,
+      guaranteedAnalysis: parsed.guaranteedAnalysis || {},
+      confidence: parsed.confidence ?? 0.5,
+      notes: parsed.notes || '',
+    };
+  }
+
+  /**
+   * Legacy: Gemini reads image and outputs ingredients + metadata in one shot.
+   */
+  async _extractFromImageGeminiLegacy(imageBuffer, mimeType) {
     const imageBase64 = imageBuffer.toString('base64');
 
     const prompt = `You are analyzing a pet food product image. First, determine what type of image this is, then extract information accordingly.
@@ -210,11 +351,7 @@ INGREDIENT LIST EXTRACTION RULES (very important):
 
       // Parse JSON from response
       const extracted = this.parseGeminiResponse(text);
-
-      // Cache the result
-      await this.cacheResult(imageHash, extracted);
-
-      return extracted;
+      return { ...extracted, ocrSource: 'gemini' };
 
     } catch (error) {
       console.error('Gemini OCR error:', error);
