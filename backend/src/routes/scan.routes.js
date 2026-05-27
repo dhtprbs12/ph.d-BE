@@ -27,6 +27,11 @@ function getRecommendationFromGrade(grade) {
   return recommendations[grade] || 'unknown';
 }
 
+/** Analysis ingredient list from OCR raw text only (ignores vision JSON ingredientsList). */
+function ingredientsListFromOcrText(rawText) {
+  return ingredientAnalyzer.parseIngredientText(String(rawText || '').trim());
+}
+
 // ============================================
 // IN-MEMORY STORE FOR PENDING ANALYSES
 // ============================================
@@ -953,8 +958,8 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     console.log('📸 [FRONT] Processing front label...');
     const extracted = await geminiService.extractFromImage(optimizedBuffer, 'image/jpeg');
     
-    // Validate it's actually a front label
-    if (extracted.ingredientsList && extracted.ingredientsList.length > 3) {
+    // Validate it's actually a front label (use OCR raw paragraph, not JSON array)
+    if (ingredientsListFromOcrText(extracted.rawIngredientsText).length > 3) {
       // This looks like a back label with ingredients - redirect to full flow
       return res.status(422).json({
         error: 'back_label_detected',
@@ -1285,33 +1290,7 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
     console.log('📸 [BACK] Processing back label...');
     const extracted = await geminiService.extractFromImage(optimizedBuffer, 'image/jpeg');
     
-    // Parse ingredients
-    let ingredientsList = extracted.ingredientsList || [];
-    if (ingredientsList.length === 0 && extracted.rawIngredientsText) {
-      ingredientsList = ingredientAnalyzer.parseIngredientText(extracted.rawIngredientsText);
-    }
-
-    // Align parenthetical lines with raw label text when available (no haystack splice/inject).
-    if (
-      typeof extracted.rawIngredientsText === 'string' &&
-      extracted.rawIngredientsText.trim().length > 50 &&
-      ingredientsList.length > 0
-    ) {
-      ingredientsList = geminiService._reconcileListParenFromRaw(
-        extracted.rawIngredientsText.trim(),
-        ingredientsList
-      );
-    }
-    ingredientsList = ingredientAnalyzer.reconcileExtractedListWithRaw(
-      ingredientsList,
-      extracted.rawIngredientsText || ''
-    );
-    ingredientsList = ingredientAnalyzer.postProcessExtractedIngredientList(ingredientsList);
-    ingredientsList = ingredientAnalyzer.fillMissingIngredientsFromRaw(
-      ingredientsList,
-      extracted.rawIngredientsText || ''
-    );
-    ingredientsList = ingredientAnalyzer.postProcessExtractedIngredientList(ingredientsList);
+    const ingredientsList = ingredientsListFromOcrText(extracted.rawIngredientsText);
 
     if (ingredientsList.length === 0) {
       return res.status(422).json({
@@ -1605,17 +1584,17 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
       imageType: extracted.imageType,
       productName: extracted.productName,
       brand: extracted.brand,
-      ingredientsCount: extracted.ingredientsList?.length || 0,
+      ingredientsCount: ingredientsListFromOcrText(extracted.rawIngredientsText).length,
       confidence: extracted.confidence,
       notes: extracted.notes
     });
 
-    let ingredientsList = extracted.ingredientsList || [];
+    let ingredientsList = ingredientsListFromOcrText(extracted.rawIngredientsText);
     let product = null;
     let usedStoredIngredients = false;
 
-    // Detect if this is a front label (no ingredients)
-    const isFrontLabel = extracted.imageType === 'front_label' || 
+    // Detect if this is a front label (no ingredients in OCR raw paragraph)
+    const isFrontLabel = extracted.imageType === 'front_label' ||
       (ingredientsList.length === 0 && (extracted.productName || extracted.brand));
 
     // SMART DETECTION: Handle front label vs ingredients label
@@ -1704,7 +1683,7 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
           const bestMatch = rankedResults[0];
           if (bestMatch && bestMatch.brandScore >= 10 && bestMatch.nameScore >= 3) {
             product = bestMatch;
-            ingredientsList = ingredientAnalyzer.parseIngredientText(product.raw_ingredients_text);
+            ingredientsList = ingredientsListFromOcrText(product.raw_ingredients_text);
             usedStoredIngredients = true;
             console.log('✅ Confident match:', product.name, '(brand:', bestMatch.brandScore, 'name:', bestMatch.nameScore, ')');
           } else if (bestMatch) {
@@ -1737,28 +1716,6 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
       }
     }
 
-    if (ingredientsList.length > 0) {
-      const rawForRepair =
-        String(extracted.rawIngredientsText || '').trim() ||
-        String(product?.raw_ingredients_text || '').trim();
-      if (rawForRepair.length > 50) {
-        ingredientsList = geminiService._reconcileListParenFromRaw(
-          rawForRepair,
-          ingredientsList
-        );
-      }
-      ingredientsList = ingredientAnalyzer.reconcileExtractedListWithRaw(
-        ingredientsList,
-        rawForRepair
-      );
-      ingredientsList = ingredientAnalyzer.postProcessExtractedIngredientList(ingredientsList);
-      ingredientsList = ingredientAnalyzer.fillMissingIngredientsFromRaw(
-        ingredientsList,
-        rawForRepair
-      );
-      ingredientsList = ingredientAnalyzer.postProcessExtractedIngredientList(ingredientsList);
-    }
-    
     // Still no ingredients after all attempts
     if (ingredientsList.length === 0) {
       return res.status(422).json({
