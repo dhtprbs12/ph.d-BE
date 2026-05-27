@@ -1334,6 +1334,41 @@ class IngredientAnalyzer {
     return ingredients;
   }
 
+  /** Text with parenthetical qualifiers removed — for disclaimer checks on split lines. */
+  _textOutsideParentheses(line) {
+    return String(line || '')
+      .replace(/\([^)]*\)/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * True when the non-parenthetical part of a split line looks like GA/marketing,
+   * not a real ingredient (e.g. "Manufactured in…"). Ignores text inside "(…)".
+   */
+  _isDisclaimerSplitLine(line) {
+    const outer = this._textOutsideParentheses(line);
+    if (!outer) return false;
+    const disclaimerPattern =
+      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|naturally\s+preserved|facility|guaranteed\s+analysis|feeding\s+(?:guide|instruction|direction)|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|use\s+(?:by|before)|nutrition\s+facts|serving\s+size|daily\s+value|calories\s+per|amount\s*\/\s*serving|shake\s+well|refrigerate|distributed\s+by|dist\.?\s*&\s*sold|sku\s*#)\b/i;
+    if (disclaimerPattern.test(outer)) return true;
+    // Standalone marketing sentence — not "Mixed Tocopherols (added to preserve freshness)"
+    if (/^[^()]*\bpreserve(?:d|s)?\s+freshness\b/i.test(outer)) return true;
+    return false;
+  }
+
+  /** Minimal gate after comma-split: keep OCR lines; drop empty/header/disclaimer only. */
+  _keepSplitIngredientLine(line) {
+    const s = String(line || '').trim();
+    if (!s) return false;
+    const lower = s.toLowerCase();
+    if (/^(?:ingredients?|ingredient\s+list|contains)\s*:?\s*$/.test(lower)) return false;
+    if (/^\d+%?$/.test(s)) return false;
+    if (/^\bnutrition\s+facts\b/i.test(lower)) return false;
+    if (this._isDisclaimerSplitLine(s)) return false;
+    return true;
+  }
+
   /**
    * Parse raw ingredient text into list.
    * Handles parenthetical sub-ingredients correctly:
@@ -1349,29 +1384,8 @@ class IngredientAnalyzer {
     // Newlines outside parens are usually one ingredient wrapped across lines → space.
     cleanedText = this._normalizeIngredientNewlines(cleanedText).replace(/\.\s/g, ', ');
 
-    const ingredients = this._splitTopLevelIngredientSegments(cleanedText, 560);
-
-    // Remove common non-ingredient text and sentence-like fragments.
-    // Heuristic: real ingredients are short noun phrases; disclaimers contain
-    // verbs ("is", "are", "may", "contain", "preserved") or process language
-    // ("manufactured", "processed", "packaged"). Anything matching gets dropped.
-    const filterWords = new Set(['ingredients:', 'contains:', 'and', 'or', 'with', 'including']);
-    const sentencePattern =
-      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|naturally\s+preserved|preserve(?:d|s)?\s+freshness|facility|guaranteed\s+analysis|feeding|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|nutrition\s+facts|serving\s+size|daily\s+value|calories\s+per|amount\s*\/\s*serving|shake\s+well|refrigerate|distributed\s+by|dist\.?\s*&\s*sold|sku\s*#)\b/i;
-
-    const filtered = ingredients.filter(i => {
-      const lower = i.toLowerCase();
-      if (filterWords.has(lower)) return false;
-      if (/^\d+%?$/.test(i)) return false;
-      if (sentencePattern.test(i)) return false;
-      if (/\bnutrition\s+facts\b/i.test(i)) return false;
-      // Long human-food names / legal parentheticals: allow more words when
-      // the line contains a top-level "(" (vitamin/cheese style clusters).
-      const wordCount = i.replace(/\([^)]*\)/g, '').trim().split(/\s+/).filter(Boolean).length;
-      const maxWords = /\(/.test(i) ? 28 : 14;
-      if (wordCount > maxWords) return false;
-      return true;
-    });
+    const ingredients = this._splitTopLevelIngredientSegments(cleanedText, 2400);
+    const filtered = ingredients.filter(i => this._keepSplitIngredientLine(i));
     return this.postProcessExtractedIngredientList(filtered);
   }
 
@@ -1423,17 +1437,7 @@ class IngredientAnalyzer {
     let body = this._normalizeIngredientNewlines(narr).replace(/\.\s/g, ', ');
     let R = this._splitTopLevelIngredientSegments(body, maxSegment);
 
-    const sentencePattern =
-      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|naturally\s+preserved|preserve(?:d|s)?\s+freshness|facility|guaranteed\s+analysis|feeding|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|nutrition\s+facts|serving\s+size|daily\s+value|calories\s+per|amount\s*\/\s*serving|shake\s+well|refrigerate|distributed\s+by|dist\.?\s*&\s*sold|sku\s*#)\b/i;
-
-    R = R.filter(seg => {
-      const t = String(seg || '').trim();
-      if (!t) return false;
-      if (sentencePattern.test(t)) return false;
-      if (/^\d+%?$/.test(t)) return false;
-      if (/\bGuaranteed\s+Analysis\b/i.test(t)) return false;
-      return true;
-    });
+    R = R.filter(seg => this._keepSplitIngredientLine(seg));
     if (!R.length) return [];
 
     if (R.some(s => /\bcrude\s+(?:protein|fat|fiber)\b/i.test(s) && /\bmoisture\b/i.test(s))) {
@@ -1464,13 +1468,7 @@ class IngredientAnalyzer {
   _rawSegmentIsPlausibleIngredient(seg) {
     const t = String(seg || '').trim();
     if (!t || t.length > 2400) return false;
-    const sentencePattern =
-      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|guaranteed\s+analysis|distributed\s+by)\b/i;
-    if (sentencePattern.test(t)) return false;
-    if (/^\d+%?$/.test(t)) return false;
-    const wordCount = t.replace(/\([^)]*\)/g, '').trim().split(/\s+/).filter(Boolean).length;
-    const maxWords = /\(/.test(t) ? 28 : 14;
-    return wordCount > 0 && wordCount <= maxWords;
+    return this._keepSplitIngredientLine(t);
   }
 
   /**
