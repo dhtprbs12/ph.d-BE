@@ -117,14 +117,21 @@ class GeminiService {
     const full = String(ocrFullText || '').trim();
     if (!full || imageType === 'front_label') return '';
 
+    const hasHeader = ingredientAnalyzer.rawTextHasIngredientSectionHeader(full);
     const sliced = ingredientAnalyzer.sliceIngredientNarrativeFromRaw(full);
-    if (sliced.length >= 40) return sliced;
 
-    if (imageType === 'ingredients_label' || imageType === 'mixed') {
-      return sliced.length > 0 ? sliced : full;
+    if (hasHeader && sliced.length >= 20) return sliced;
+
+    // Close-up ingredient panel: no header visible but OCR is mostly the list
+    if (
+      (imageType === 'ingredients_label' || imageType === 'mixed') &&
+      sliced.length >= 40 &&
+      !/\b(?:scan for more|complete & balanced|wellbeing|veterinarians|discover)\b/i.test(sliced)
+    ) {
+      return sliced;
     }
 
-    return sliced;
+    return hasHeader ? sliced : '';
   }
 
   /**

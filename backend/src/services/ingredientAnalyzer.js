@@ -1219,44 +1219,76 @@ class IngredientAnalyzer {
   }
 
   /**
-   * Ingredient narrative only: from first real "Ingredients:" (or equivalent)
-   * through first disclaimer / Nutrition Facts / GA tail — no comma split.
+   * Ingredient narrative only: from first real "Ingredients" header (with or
+   * without colon — e.g. "OUR INGREDIENTS") through GA / guarantee / disclaimer tail.
    * @param {string} rawText
    * @returns {string}
    */
   sliceIngredientNarrativeFromRaw(rawText) {
     if (!rawText) return '';
 
-    let cleanedText = rawText.replace(
-      /^\s*(?:our\s+)?(?:ingredients|ingredient\s+list|composition|recipe|made\s+with|contains)\s*[:\-]?\s*/i,
+    const src = String(rawText).replace(/\r\n/g, '\n').trim();
+
+    // Section headers — colon optional; "OUR INGREDIENTS" / "Ingredients:" / etc.
+    const headerPatterns = [
+      /\b(?:our|the|de)\s+ingredients?\s*[:\-]?\s*(?:\n|$)/i,
+      /\bingredients?\s*[:\-]\s*/i,
+      /\bingredients?\s*(?:\n|$)/i,
+      /\bingredient\s+list\s*[:\-]?\s*(?:\n|$|\s)/i,
+      /\bcomposition\s*[:\-]?\s*(?:\n|$|\s)/i,
+      /\b(?:made\s+with|contains)\s*[:\-]\s*/i,
+    ];
+
+    let startIdx = -1;
+    for (const re of headerPatterns) {
+      const m = src.match(re);
+      if (m && m.index != null) {
+        const candidate = m.index + m[0].length;
+        if (candidate > startIdx) startIdx = candidate;
+      }
+    }
+
+    let cleanedText = startIdx >= 0 ? src.slice(startIdx).trim() : src;
+
+    // Legacy: strip a leading header if the whole blob started with one
+    cleanedText = cleanedText.replace(
+      /^\s*(?:our\s+|the\s+)?(?:ingredients|ingredient\s+list|composition|recipe|made\s+with|contains)\s*[:\-]?\s*/i,
       ''
     );
 
-    const ingInBody = cleanedText.match(/\bingredients\s*:/i);
-    if (ingInBody && ingInBody.index != null && ingInBody.index > 0) {
-      cleanedText = cleanedText.slice(ingInBody.index + ingInBody[0].length).trim();
-      cleanedText = cleanedText.replace(
-        /^\s*(?:our\s+)?(?:ingredients|ingredient\s+list|composition|recipe|made\s+with|contains)\s*[:\-]?\s*/i,
-        ''
-      );
-    }
-
     const tailCutPattern =
-      /(?:^|[\.\s])(?:this\s+(?:is|product)|manufactured\s+in|made\s+in|produced\s+in|processed\s+in|packaged\s+in|guaranteed\s+analysis|feeding\s+(?:guide|instruction|direction)|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|use\s+(?:by|before)|net\s+(?:wt|weight))/i;
+      /(?:^|[\.\s\n])(?:this\s+(?:is|product)|manufactured\s+in|made\s+in|produced\s+in|processed\s+in|packaged\s+in|guaranteed\s+analysis|(?:the\s+\w+\s+){0,2}guarantee\b|feeding\s+(?:guide|instruction|direction)|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|use\s+(?:by|before)|net\s+(?:wt|weight)|if for any reason|contact us at|text live chat)/i;
+    const gaTailPattern =
+      /\b(?:crude\s+protein|crude\s+fat|crude\s+fiber|analytical\s+constituents|typical\s+analysis|nutritional\s+levels\s+established|not recognized as an essential|contains a source of live)\b/i;
     const humanTailCutPattern =
-      /\b(?:nutrition\s+facts|serving\s+size|calories\s+per\s+serving|amount\s*\/\s*serving|%\s*daily\s+value|daily\s+value|shake\s+well|refrigerate\s+after|dist\.?\s*&\s*sold|distributed\s+exclusively\s+by|distributed\s+by|sku\s*#|certified\s+organic\s+by|about\s+\d+\s+servings\s+per\s+container)\b/i;
+      /\b(?:nutrition\s+facts|serving\s+size|calories\s+per\s+serving|amount\s*\/\s*serving|%\s*daily\s+value|daily\s+value|shake\s+well|refrigerate\s+after|dist\.?\s*&\s*sold|distributed\s+exclusively\s+by|distributed\s+by|sku\s*#|certified\s+organic\s+by|about\s+\d+\s+servings\s+per\s+container|www\.\w)\b/i;
 
     let disclaimerStart = cleanedText.search(tailCutPattern);
+    const gaCut = cleanedText.search(gaTailPattern);
     const humanCut = cleanedText.search(humanTailCutPattern);
-    if (humanCut >= 0) {
-      disclaimerStart =
-        disclaimerStart === -1 ? humanCut : Math.min(disclaimerStart, humanCut);
+    for (const cut of [gaCut, humanCut]) {
+      if (cut >= 0) {
+        disclaimerStart = disclaimerStart === -1 ? cut : Math.min(disclaimerStart, cut);
+      }
     }
     if (disclaimerStart > 0) {
       cleanedText = cleanedText.slice(0, disclaimerStart);
     }
 
     return cleanedText.trim();
+  }
+
+  /** @returns {boolean} whether sliceIngredientNarrativeFromRaw found a real header anchor */
+  rawTextHasIngredientSectionHeader(rawText) {
+    if (!rawText) return false;
+    const src = String(rawText).replace(/\r\n/g, '\n');
+    return [
+      /\b(?:our|the|de)\s+ingredients?\s*[:\-]?\s*(?:\n|$)/i,
+      /\bingredients?\s*[:\-]/i,
+      /\bingredients?\s*(?:\n|$)/i,
+      /\bingredient\s+list\s*[:\-]?/i,
+      /\bcomposition\s*[:\-]?/i,
+    ].some(re => re.test(src));
   }
 
   /**
