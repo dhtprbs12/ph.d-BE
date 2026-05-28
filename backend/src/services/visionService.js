@@ -3,6 +3,8 @@
  * Uses API key auth (GOOGLE_CLOUD_VISION_API_KEY).
  */
 
+const imagePreprocess = require('./imagePreprocessService');
+
 class VisionService {
   isConfigured() {
     return Boolean(String(process.env.GOOGLE_CLOUD_VISION_API_KEY || '').trim());
@@ -18,6 +20,8 @@ class VisionService {
       throw new Error('GOOGLE_CLOUD_VISION_API_KEY not set');
     }
 
+    const ocrBuffer = await imagePreprocess.enhanceForOcr(imageBuffer);
+
     const url = `https://vision.googleapis.com/v1/images:annotate?key=${encodeURIComponent(apiKey)}`;
     const res = await fetch(url, {
       method: 'POST',
@@ -25,7 +29,7 @@ class VisionService {
       body: JSON.stringify({
         requests: [
           {
-            image: { content: imageBuffer.toString('base64') },
+            image: { content: ocrBuffer.toString('base64') },
             features: [{ type: 'DOCUMENT_TEXT_DETECTION', maxResults: 1 }],
           },
         ],

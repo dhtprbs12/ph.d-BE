@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const sharp = require('sharp');
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../database/connection');
 const ingredientAnalyzer = require('../services/ingredientAnalyzer');
@@ -14,6 +13,7 @@ const {
   numberToGrade 
 } = require('../utils/cacheHelpers');
 const imageService = require('../services/imageService');
+const imagePreprocess = require('../services/imagePreprocessService');
 
 // Helper: Get recommendation from grade if AI didn't provide one
 function getRecommendationFromGrade(grade) {
@@ -948,11 +948,9 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       return res.status(400).json({ error: 'Image is required' });
     }
 
-    // Optimize image for OCR
-    const optimizedBuffer = await sharp(req.file.buffer)
-      .resize(1500, 1500, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
-      .toBuffer();
+    const optimizedBuffer = await imagePreprocess.optimizeForUpload(req.file.buffer, {
+      maxDimension: 1500,
+    });
 
     // Extract info from front label
     console.log('📸 [FRONT] Processing front label...');
@@ -1280,11 +1278,9 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
       } catch (e) {}
     }
 
-    // Optimize image for OCR
-    const optimizedBuffer = await sharp(req.file.buffer)
-      .resize(1500, 1500, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
-      .toBuffer();
+    const optimizedBuffer = await imagePreprocess.optimizeForUpload(req.file.buffer, {
+      maxDimension: 1500,
+    });
 
     // Extract ingredients from back label
     console.log('📸 [BACK] Processing back label...');
@@ -1570,11 +1566,9 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
       healthConditions: safeJsonParse(petHealthConditions, [])
     };
 
-    // Process image (resize for API)
-    const processedImage = await sharp(req.file.buffer)
-      .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
-      .toBuffer();
+    const processedImage = await imagePreprocess.optimizeForUpload(req.file.buffer, {
+      maxDimension: 1024,
+    });
 
     // Extract info via Gemini OCR (now detects image type)
     const extracted = await geminiService.extractFromImage(processedImage, 'image/jpeg');
@@ -2312,16 +2306,9 @@ router.post('/food-check', upload.single('image'), async (req, res, next) => {
       return res.status(400).json({ error: 'petType is required (dog or cat)' });
     }
 
-    // Prepare image for Gemini
-    let imageBuffer;
-    try {
-      imageBuffer = await sharp(req.file.buffer)
-        .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 85 })
-        .toBuffer();
-    } catch (e) {
-      imageBuffer = req.file.buffer;
-    }
+    const imageBuffer = await imagePreprocess.optimizeForUpload(req.file.buffer, {
+      maxDimension: 1024,
+    });
 
     // Parse health conditions
     let healthConditions = [];
