@@ -2186,47 +2186,113 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
   }
 });
 
+/** Build poll-complete payload from scan_history when in-memory store is gone. */
+function buildPollCompleteFromHistoryRow(row) {
+  if (!row?.analysis_json) return null;
+
+  let parsed = row.analysis_json;
+  if (typeof parsed === 'string') {
+    parsed = safeJsonParse(parsed, null);
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  let analysis = parsed;
+  let aiInsights = null;
+  if (parsed.aiInsights != null) {
+    aiInsights = parsed.aiInsights;
+    const { aiInsights: _drop, ...rest } = parsed;
+    analysis = rest;
+  }
+
+  const productName =
+    row.product_name ||
+    (row.scan_type === 'manual_input' ? 'Manual entry' : undefined);
+
+  return {
+    scanId: row.id,
+    scanType: row.scan_type,
+    extracted: {
+      ...(productName ? { productName } : {}),
+      ...(row.product_brand ? { brand: row.product_brand } : {}),
+    },
+    product: row.product_id
+      ? {
+          id: row.product_id,
+          name: row.product_name,
+          brand: row.product_brand,
+          image_url: row.product_image,
+          product_type: row.product_type,
+        }
+      : null,
+    analysis,
+    ...(aiInsights ? { aiInsights } : {}),
+    pet: { name: row.pet_name, petType: row.pet_type },
+  };
+}
+
 /**
  * GET /api/scan/:scanId/result
- * Poll for analysis result (used with async mode)
+ * Poll for analysis result (used with async mode).
+ * Falls back to scan_history when the in-memory store is missing or expired.
  */
-router.get('/:scanId/result', (req, res) => {
-  const { scanId } = req.params;
-  
-  const data = analysisStore.get(scanId);
-  
-  if (!data) {
-    return res.status(404).json({
-      error: 'not_found',
-      message: 'Scan not found. It may have expired or never existed.'
-    });
-  }
-  
-  const elapsedSeconds = Math.round((Date.now() - data.createdAt) / 1000);
+router.get('/:scanId/result', async (req, res, next) => {
+  try {
+    const { scanId } = req.params;
+    const data = analysisStore.get(scanId);
 
-  if (data.status === 'complete') {
+    if (data?.status === 'complete') {
+      const elapsedSeconds = Math.round((Date.now() - data.createdAt) / 1000);
+      return res.json({
+        status: 'complete',
+        duration: data.duration,
+        elapsedSeconds,
+        ...data.result,
+      });
+    }
+
+    if (data?.status === 'error') {
+      const elapsedSeconds = Math.round((Date.now() - data.createdAt) / 1000);
+      return res.json({
+        status: 'error',
+        error: data.error,
+        elapsedSeconds,
+      });
+    }
+
+    if (data) {
+      return res.json({
+        status: data.status,
+        progress: data.progress,
+        elapsedSeconds: Math.round((Date.now() - data.createdAt) / 1000),
+      });
+    }
+
+    const rows = await query(
+      `SELECT sh.*, p.name AS product_name, p.brand AS product_brand,
+              p.image_url AS product_image, p.product_type
+       FROM scan_history sh
+       LEFT JOIN products p ON sh.product_id = p.id
+       WHERE sh.id = ?`,
+      [scanId]
+    );
+
+    const historyPayload = rows[0] ? buildPollCompleteFromHistoryRow(rows[0]) : null;
+    if (historyPayload) {
+      return res.json({
+        status: 'complete',
+        fromHistory: true,
+        ...historyPayload,
+      });
+    }
+
     return res.json({
-      status: 'complete',
-      duration: data.duration,
-      elapsedSeconds,
-      ...data.result
+      status: 'processing',
+      progress: 'Analyzing...',
+      elapsedSeconds: 0,
     });
+  } catch (error) {
+    next(error);
   }
-  
-  if (data.status === 'error') {
-    return res.json({
-      status: 'error',
-      error: data.error,
-      elapsedSeconds
-    });
-  }
-  
-  // Still processing
-  return res.json({
-    status: data.status,
-    progress: data.progress,
-    elapsedSeconds: Math.round((Date.now() - data.createdAt) / 1000)
-  });
 });
 
 /**
@@ -2975,7 +3041,8 @@ router.get('/:id', async (req, res, next) => {
     }
 
     const [scan] = await query(
-      `SELECT sh.*, p.name as product_name, p.brand as product_brand
+      `SELECT sh.*, p.name as product_name, p.brand as product_brand,
+              p.image_url as product_image, p.product_type
        FROM scan_history sh
        LEFT JOIN products p ON sh.product_id = p.id
        WHERE sh.id = ? AND sh.device_id = ?`,

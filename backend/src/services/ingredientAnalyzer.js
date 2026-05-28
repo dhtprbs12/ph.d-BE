@@ -1271,11 +1271,69 @@ class IngredientAnalyzer {
         disclaimerStart = disclaimerStart === -1 ? cut : Math.min(disclaimerStart, cut);
       }
     }
+
+    const periodCut = this._findIngredientListPeriodEndIndex(cleanedText);
+    if (periodCut >= 0) {
+      disclaimerStart =
+        disclaimerStart === -1 ? periodCut : Math.min(disclaimerStart, periodCut);
+    }
+
     if (disclaimerStart > 0) {
       cleanedText = cleanedText.slice(0, disclaimerStart);
     }
 
     return cleanedText.trim();
+  }
+
+  /**
+   * Top-level "." that ends the comma-separated ingredient list (paren-aware).
+   * Skips abbreviations (Vit., U.S.). Strong cut when tail/GA follows; weak when
+   * list ends at "." with nothing meaningful after.
+   * @param {string} text — post-header narrative slice
+   * @returns {number} index of "." to cut before, or -1
+   */
+  _findIngredientListPeriodEndIndex(text) {
+    const src = String(text || '');
+    const tailAfterPeriod =
+      /^\s*(?:\n|\r|$|[\r\n\s]*(?:guaranteed|crude\s+protein|crude\s+fat|crude\s+fiber|feeding|manufactured|made\s+in|produced\s+in|processed\s+in|packaged\s+in|distributed|typical\s+analysis|analytical\s+constituents|nutrition\s+facts|this\s+product|store\s+in|best\s+before|net\s+wt|www\.))/i;
+
+    let depth = 0;
+    let topLevelCommas = 0;
+    let weakCut = -1;
+
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '(' || ch === '[') {
+        depth++;
+      } else if (ch === ')' || ch === ']') {
+        depth = Math.max(0, depth - 1);
+      } else if (depth === 0 && ch === ',') {
+        topLevelCommas++;
+      } else if (depth === 0 && ch === '.') {
+        if (this._isLikelyAbbreviationPeriod(src, i)) continue;
+
+        const after = src.slice(i + 1);
+        const hasListShape = topLevelCommas >= 1;
+
+        if (tailAfterPeriod.test(after)) {
+          return i;
+        }
+        if (hasListShape && after.trim().length === 0) {
+          weakCut = i;
+        }
+      }
+    }
+
+    return weakCut;
+  }
+
+  /** Skip Vit., U.S., decimals — not end-of-ingredient-list periods. */
+  _isLikelyAbbreviationPeriod(src, dotIdx) {
+    const window = src.slice(Math.max(0, dotIdx - 8), dotIdx + 1);
+    if (/\b(?:Vit|Fig|No|St|Mt|Dr|vs|etc|U\.S|U\.K|E\.U)\.$/i.test(window)) return true;
+    if (/\b[A-Z]\.$/.test(window)) return true;
+    if (/\d\.$/.test(window)) return true;
+    return false;
   }
 
   /** @returns {boolean} whether sliceIngredientNarrativeFromRaw found a real header anchor */
@@ -1334,30 +1392,7 @@ class IngredientAnalyzer {
     return ingredients;
   }
 
-  /** Text with parenthetical qualifiers removed — for disclaimer checks on split lines. */
-  _textOutsideParentheses(line) {
-    return String(line || '')
-      .replace(/\([^)]*\)/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  /**
-   * True when the non-parenthetical part of a split line looks like GA/marketing,
-   * not a real ingredient (e.g. "Manufactured in…"). Ignores text inside "(…)".
-   */
-  _isDisclaimerSplitLine(line) {
-    const outer = this._textOutsideParentheses(line);
-    if (!outer) return false;
-    const disclaimerPattern =
-      /\b(?:this\s+(?:is|product)|manufactured|processed\s+in|packaged|may\s+contain|naturally\s+preserved|facility|guaranteed\s+analysis|feeding\s+(?:guide|instruction|direction)|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|use\s+(?:by|before)|nutrition\s+facts|serving\s+size|daily\s+value|calories\s+per|amount\s*\/\s*serving|shake\s+well|refrigerate|distributed\s+by|dist\.?\s*&\s*sold|sku\s*#)\b/i;
-    if (disclaimerPattern.test(outer)) return true;
-    // Standalone marketing sentence — not "Mixed Tocopherols (added to preserve freshness)"
-    if (/^[^()]*\bpreserve(?:d|s)?\s+freshness\b/i.test(outer)) return true;
-    return false;
-  }
-
-  /** Minimal gate after comma-split: keep OCR lines; drop empty/header/disclaimer only. */
+  /** After comma-split: drop empty/header artifacts only (no marketing filter inside ingredients). */
   _keepSplitIngredientLine(line) {
     const s = String(line || '').trim();
     if (!s) return false;
@@ -1365,7 +1400,6 @@ class IngredientAnalyzer {
     if (/^(?:ingredients?|ingredient\s+list|contains)\s*:?\s*$/.test(lower)) return false;
     if (/^\d+%?$/.test(s)) return false;
     if (/^\bnutrition\s+facts\b/i.test(lower)) return false;
-    if (this._isDisclaimerSplitLine(s)) return false;
     return true;
   }
 
@@ -1380,8 +1414,8 @@ class IngredientAnalyzer {
     let cleanedText = this.sliceIngredientNarrativeFromRaw(rawText);
     if (!cleanedText) return [];
 
-    // Newlines inside "(…)" are usually wrapped sub-ingredients → treat as comma.
-    // Newlines outside parens are usually one ingredient wrapped across lines → space.
+    // Newlines outside/inside parens: join with space (OCR line-wrap fidelity).
+    // Sub-lists inside "(…)" rely on commas already printed on the label.
     cleanedText = this._normalizeIngredientNewlines(cleanedText).replace(/\.\s/g, ', ');
 
     const ingredients = this._splitTopLevelIngredientSegments(cleanedText, 2400);
@@ -1652,26 +1686,20 @@ class IngredientAnalyzer {
   }
 
   /**
-   * Newline handling for a single ingredient paragraph before comma-splitting.
-   * Outside parentheses: join wrapped lines with a space (avoid "Parmesan, Cheese").
-   * Inside parentheses: join with ", " (FDA-style sub-enumerators often wrap per line).
+   * Newline handling before comma-splitting: always join with a space (paren-aware
+   * depth only tracks position — same rule inside and outside parentheses).
+   * Printed commas on the label remain the only sub-list separators; OCR line
+   * breaks must not become extra commas (e.g. "Ascorbic\\nAcid" → "Ascorbic Acid").
    */
   _normalizeIngredientNewlines(text) {
     const src = String(text || '');
     if (!src) return '';
     let out = '';
-    let depth = 0;
     for (let i = 0; i < src.length; i++) {
       const c = src[i];
-      if (c === '(' || c === '[') {
-        depth++;
-        out += c;
-      } else if (c === ')' || c === ']') {
-        depth = Math.max(0, depth - 1);
-        out += c;
-      } else if (c === '\r' || c === '\n') {
+      if (c === '\r' || c === '\n') {
         if (c === '\r' && src[i + 1] === '\n') i++;
-        out += depth > 0 ? ', ' : ' ';
+        out += ' ';
       } else {
         out += c;
       }
