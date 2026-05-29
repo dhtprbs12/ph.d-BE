@@ -32,6 +32,32 @@ function ingredientsListFromOcrText(rawText) {
   return ingredientAnalyzer.parseIngredientText(String(rawText || '').trim());
 }
 
+/** 422 when OCR parse looks like marketing or too few real ingredients. */
+function weakIngredientListResponse(res, ingredientsList, productType) {
+  const validation = ingredientAnalyzer.validateParsedIngredientList(ingredientsList, {
+    productType,
+  });
+  if (validation.ok) return null;
+
+  const messages = {
+    too_few:
+      'We could not read enough ingredients from the label. Please scan the full ingredients list more closely.',
+    marketing:
+      'We picked up marketing text instead of the ingredient list. Center the INGREDIENTS panel in the photo.',
+    empty:
+      'Could not detect ingredients list. Please try again with a clearer photo.',
+  };
+
+  return res.status(422).json({
+    error: 'ingredients_parse_low_quality',
+    reason: validation.reason,
+    message: messages[validation.reason] || messages.empty,
+    suggestion:
+      'Fill the frame with the ingredients list (under the INGREDIENTS heading), good lighting, and minimal blur.',
+    ingredientCount: ingredientsList?.length || 0,
+  });
+}
+
 // ============================================
 // IN-MEMORY STORE FOR PENDING ANALYSES
 // ============================================
@@ -1296,6 +1322,10 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
       });
     }
 
+    const productTypeForValidation = frontData.productType || extracted.productType;
+    const weakList = weakIngredientListResponse(res, ingredientsList, productTypeForValidation);
+    if (weakList) return weakList;
+
     // Merge front label data with back label data
     const mergedExtracted = {
       ...extracted,
@@ -1717,6 +1747,15 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
         message: 'Unable to read ingredients from the image. Please ensure the ingredient list is clearly visible.',
         rawText: extracted.rawIngredientsText
       });
+    }
+
+    if (!usedStoredIngredients) {
+      const weakList = weakIngredientListResponse(
+        res,
+        ingredientsList,
+        extracted.productType
+      );
+      if (weakList) return weakList;
     }
 
     // Try to find or create product using INGREDIENT HASH + brand/name

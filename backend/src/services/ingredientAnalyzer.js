@@ -1220,46 +1220,72 @@ class IngredientAnalyzer {
     return summary;
   }
 
-  /**
-   * Ingredient narrative only: from first real "Ingredients" header (with or
-   * without colon — e.g. "OUR INGREDIENTS") through GA / guarantee / disclaimer tail.
-   * @param {string} rawText
-   * @returns {string}
-   */
-  sliceIngredientNarrativeFromRaw(rawText) {
-    if (!rawText) return '';
-
-    const src = String(rawText).replace(/\r\n/g, '\n').trim();
-
-    // Section headers — colon optional; "OUR INGREDIENTS" / "Ingredients:" / etc.
-    const headerPatterns = [
-      /\b(?:our|the|de)\s+ingredients?\s*[:\-]?\s*(?:\n|$)/i,
-      /\bingredients?\s*[:\-]\s*/i,
-      /\bingredients?\s*(?:\n|$)/i,
-      /\bingredient\s+list\s*[:\-]?\s*(?:\n|$|\s)/i,
-      /\bcomposition\s*[:\-]?\s*(?:\n|$|\s)/i,
-      /\b(?:made\s+with|contains)\s*[:\-]\s*/i,
+  /** Header patterns for ingredient declaration anchors (global matching applied per pattern). */
+  _ingredientSectionHeaderPatterns() {
+    return [
+      /\b(?:our|the|de)\s+ingredients?\s*[:\-]?\s*(?:\n|$)/gi,
+      /\bingredients?\s*[:\-]\s*/gi,
+      /\bingredients?\s*(?:\n|$)/gi,
+      /\bingredient\s+list\s*[:\-]?\s*(?:\n|$|\s)/gi,
+      /\bcomposition\s*[:\-]?\s*(?:\n|$|\s)/gi,
+      /\b(?:made\s+with|contains)\s*[:\-]\s*/gi,
     ];
+  }
 
-    let startIdx = -1;
-    for (const re of headerPatterns) {
-      const m = src.match(re);
-      if (m && m.index != null) {
-        const candidate = m.index + m[0].length;
-        if (candidate > startIdx) startIdx = candidate;
+  /**
+   * Marketing copy after a false "Ingredients" line (e.g. "Ingredients\nare from quality…").
+   * Colon headers ("Ingredients: Duck") are not treated as marketing.
+   */
+  _isMarketingContinuationAfterHeader(src, bodyStartIdx) {
+    const after = String(src || '').slice(bodyStartIdx).replace(/^\s+/, '');
+    if (!after) return false;
+    if (/^(?:are|is|was|were|from|that|which|we|thoughtfully|crafted|made|contains)\b/i.test(after)) {
+      return true;
+    }
+    const head = after.slice(0, 140);
+    if (!/,/.test(head) && /\b(?:quality|animal sources?|commitment|recipes|sourced|crafted|wellbeing|protein-?rich)\b/i.test(head)) {
+      return true;
+    }
+    return false;
+  }
+
+  /** All non-marketing header body start indices in OCR text. */
+  _findAllIngredientHeaderStarts(src) {
+    const starts = new Set();
+    for (const re of this._ingredientSectionHeaderPatterns()) {
+      let m;
+      while ((m = re.exec(src)) !== null) {
+        const bodyStart = m.index + m[0].length;
+        if (!this._isMarketingContinuationAfterHeader(src, bodyStart)) {
+          starts.add(bodyStart);
+        }
       }
     }
+    return [...starts].sort((a, b) => a - b);
+  }
 
-    let cleanedText = startIdx >= 0 ? src.slice(startIdx).trim() : src;
+  /** Top-level comma count (paren/bracket aware) for slice scoring. */
+  _countTopLevelCommas(text) {
+    let depth = 0;
+    let n = 0;
+    for (const ch of String(text || '')) {
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
+      else if (depth === 0 && ch === ',') n++;
+    }
+    return n;
+  }
 
-    // Legacy: strip a leading header if the whole blob started with one
-    cleanedText = cleanedText.replace(
-      /^\s*(?:our\s+|the\s+)?(?:ingredients|ingredient\s+list|composition|recipe|made\s+with|contains)\s*[:\-]?\s*/i,
-      ''
-    );
+  _scoreIngredientNarrativeSlice(slice) {
+    const s = String(slice || '').trim();
+    if (!s) return -1;
+    const commas = this._countTopLevelCommas(s);
+    return commas * 10 + Math.min(Math.floor(s.length / 50), 24);
+  }
 
+  _applyNarrativeTailCuts(cleanedText) {
     const tailCutPattern =
-      /(?:^|[\.\s\n])(?:this\s+(?:is|product)|manufactured\s+in|made\s+in|produced\s+in|processed\s+in|packaged\s+in|guaranteed\s+analysis|(?:the\s+\w+\s+){0,2}guarantee\b|feeding\s+(?:guide|instruction|direction)|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|use\s+(?:by|before)|net\s+(?:wt|weight)|if for any reason|contact us at|text live chat)/i;
+      /(?:^|[\.\s\n])(?:this\s+(?:is|product)|manufactured\s+in|made\s+in|produced\s+in|processed\s+in|packaged\s+in|guaranteed\s+analysis|(?:the\s+\w+\s+){0,2}guarantee\b|feeding\s+(?:guide|instruction|direction)|store\s+in|keep\s+(?:in|away)|best\s+(?:by|before)|use\s+(?:by|before)|net\s+(?:wt|weight)|if for any reason|contact us at|text live chat|calorie\s+content)/i;
     const gaTailPattern =
       /\b(?:crude\s+protein|crude\s+fat|crude\s+fiber|analytical\s+constituents|typical\s+analysis|nutritional\s+levels\s+established|not recognized as an essential|contains a source of live)\b/i;
     const humanTailCutPattern =
@@ -1281,10 +1307,113 @@ class IngredientAnalyzer {
     }
 
     if (disclaimerStart > 0) {
-      cleanedText = cleanedText.slice(0, disclaimerStart);
+      return cleanedText.slice(0, disclaimerStart).trim();
+    }
+    return cleanedText.trim();
+  }
+
+  /**
+   * Slice OCR from a header body offset through disclaimer / GA tails.
+   * @param {string} src — normalized OCR
+   * @param {number} startIdx — body start after header, or -1 for full text
+   */
+  _sliceNarrativeFromStart(src, startIdx) {
+    let cleanedText = startIdx >= 0 ? src.slice(startIdx).trim() : src;
+    cleanedText = cleanedText.replace(
+      /^\s*(?:our\s+|the\s+)?(?:ingredients|ingredient\s+list|composition|recipe|made\s+with|contains)\s*[:\-]?\s*/i,
+      ''
+    );
+    return this._applyNarrativeTailCuts(cleanedText);
+  }
+
+  /**
+   * Ingredient narrative: try every header anchor, pick the slice with the richest
+   * comma-separated list (avoids marketing "Ingredients" lines above the real panel).
+   * @param {string} rawText
+   * @returns {string}
+   */
+  sliceIngredientNarrativeFromRaw(rawText) {
+    if (!rawText) return '';
+
+    const src = String(rawText).replace(/\r\n/g, '\n').trim();
+    const headerStarts = this._findAllIngredientHeaderStarts(src);
+
+    // When any real header anchor exists, do not use full OCR (marketing + list scores higher together).
+    const candidates = [];
+    if (headerStarts.length === 0) {
+      candidates.push({ label: 'full', slice: this._sliceNarrativeFromStart(src, -1) });
+    } else {
+      for (const startIdx of headerStarts) {
+        candidates.push({
+          label: `header@${startIdx}`,
+          slice: this._sliceNarrativeFromStart(src, startIdx),
+        });
+      }
     }
 
-    return cleanedText.trim();
+    let best = candidates[0].slice;
+    let bestScore = this._scoreIngredientNarrativeSlice(best);
+    let bestLabel = candidates[0].label;
+
+    for (let i = 1; i < candidates.length; i++) {
+      const score = this._scoreIngredientNarrativeSlice(candidates[i].slice);
+      if (score > bestScore) {
+        bestScore = score;
+        best = candidates[i].slice;
+        bestLabel = candidates[i].label;
+      }
+    }
+
+    if (bestScore >= 0 && (headerStarts.length > 0 || bestScore > 0)) {
+      console.log(
+        `🔧 [Ingredients] Narrative slice: ${bestLabel}, commas=${this._countTopLevelCommas(best)}, len=${best.length}, score=${bestScore}`
+      );
+    }
+
+    return best.trim();
+  }
+
+  /**
+   * Reject parsed lists that are too short or clearly marketing copy mistaken as ingredients.
+   * @param {string[]} list
+   * @param {{ minCount?: number, productType?: string }} [opts]
+   * @returns {{ ok: boolean, reason?: string }}
+   */
+  validateParsedIngredientList(list, opts = {}) {
+    const items = Array.isArray(list) ? list.map(s => String(s || '').trim()).filter(Boolean) : [];
+    if (items.length === 0) {
+      return { ok: false, reason: 'empty' };
+    }
+
+    const pt = String(opts.productType || '').toLowerCase();
+    const minCount =
+      typeof opts.minCount === 'number'
+        ? opts.minCount
+        : pt === 'treats' || pt === 'supplement'
+          ? 3
+          : 5;
+
+    if (items.length < minCount) {
+      return { ok: false, reason: 'too_few' };
+    }
+
+    const first = items[0].toLowerCase();
+    const marketingFirst =
+      /^(?:are|is|was|were)\b/.test(first) ||
+      /\b(?:quality animal|animal sources?|thoughtfully sourced|crafted with care|protein-?rich recipes?|our acana commitment)\b/i.test(first);
+
+    if (marketingFirst) {
+      return { ok: false, reason: 'marketing' };
+    }
+
+    if (
+      items.length === 1 &&
+      /\b(?:from|sources?|commitment|recipes|sourced|crafted|wellbeing)\b/i.test(first)
+    ) {
+      return { ok: false, reason: 'marketing' };
+    }
+
+    return { ok: true };
   }
 
   /**
@@ -1338,17 +1467,11 @@ class IngredientAnalyzer {
     return false;
   }
 
-  /** @returns {boolean} whether sliceIngredientNarrativeFromRaw found a real header anchor */
+  /** @returns {boolean} whether OCR has a plausible ingredient-section header anchor */
   rawTextHasIngredientSectionHeader(rawText) {
     if (!rawText) return false;
     const src = String(rawText).replace(/\r\n/g, '\n');
-    return [
-      /\b(?:our|the|de)\s+ingredients?\s*[:\-]?\s*(?:\n|$)/i,
-      /\bingredients?\s*[:\-]/i,
-      /\bingredients?\s*(?:\n|$)/i,
-      /\bingredient\s+list\s*[:\-]?/i,
-      /\bcomposition\s*[:\-]?/i,
-    ].some(re => re.test(src));
+    return this._findAllIngredientHeaderStarts(src).length > 0;
   }
 
   /**
