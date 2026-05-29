@@ -83,8 +83,11 @@ class GeminiService {
    * Cloud Vision document OCR + Gemini metadata (no Gemini ingredient rewriting).
    */
   async _extractFromImageHybrid(imageBuffer, mimeType) {
-    const ocrFullText = await visionService.detectDocumentText(imageBuffer);
-    console.log(`👁️ [Vision OCR] ${ocrFullText.length} chars`);
+    const { text: ocrFullText, lines: visionLines } =
+      await visionService.detectDocumentLayout(imageBuffer);
+    console.log(
+      `👁️ [Vision OCR] ${ocrFullText.length} chars, ${visionLines.length} layout lines`
+    );
 
     const metadata = await this._extractLabelMetadataFromImage(
       imageBuffer,
@@ -94,7 +97,8 @@ class GeminiService {
 
     const rawIngredientsText = this._buildRawIngredientsFromOcr(
       ocrFullText,
-      metadata.imageType
+      metadata.imageType,
+      visionLines
     );
     const ingredientsList =
       rawIngredientsText.length > 0
@@ -113,9 +117,19 @@ class GeminiService {
   /**
    * Slice Vision OCR to the ingredient declaration; never use Gemini for this text.
    */
-  _buildRawIngredientsFromOcr(ocrFullText, imageType) {
+  _buildRawIngredientsFromOcr(ocrFullText, imageType, visionLines = null) {
     const full = String(ocrFullText || '').trim();
     if (!full || imageType === 'front_label') return '';
+
+    if (Array.isArray(visionLines) && visionLines.length >= 2) {
+      const yOrdered = ingredientAnalyzer.buildIngredientNarrativeFromVisionLines(visionLines);
+      if (yOrdered.length >= 20) {
+        return yOrdered;
+      }
+      console.log(
+        `⚠️ [Ingredients] Y-sort unavailable or weak (${visionLines.length} lines) — falling back to text slice`
+      );
+    }
 
     const hasHeader = ingredientAnalyzer.rawTextHasIngredientSectionHeader(full);
     const sliced = ingredientAnalyzer.sliceIngredientNarrativeFromRaw(full);
