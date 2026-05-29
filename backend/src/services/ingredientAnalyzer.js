@@ -1,3 +1,5 @@
+const ORPHAN_PREFIX_KEEP = new Set(['dl', 'd', 'l']);
+
 const { query } = require('../database/connection');
 
 /**
@@ -1392,7 +1394,7 @@ class IngredientAnalyzer {
     return ingredients;
   }
 
-  /** After comma-split: drop empty/header artifacts only (no marketing filter inside ingredients). */
+  /** After comma-split: drop empty/header artifacts and standalone OCR orphan fragments. */
   _keepSplitIngredientLine(line) {
     const s = String(line || '').trim();
     if (!s) return false;
@@ -1400,6 +1402,7 @@ class IngredientAnalyzer {
     if (/^(?:ingredients?|ingredient\s+list|contains)\s*:?\s*$/.test(lower)) return false;
     if (/^\d+%?$/.test(s)) return false;
     if (/^\bnutrition\s+facts\b/i.test(lower)) return false;
+    if (this._isOrphanOcrLineFragment(s.replace(/[.,;:]+$/g, ''))) return false;
     return true;
   }
 
@@ -1416,7 +1419,7 @@ class IngredientAnalyzer {
 
     // Newlines outside/inside parens: join with space (OCR line-wrap fidelity).
     // Sub-lists inside "(…)" rely on commas already printed on the label.
-    cleanedText = this._normalizeIngredientNewlines(cleanedText).replace(/\.\s/g, ', ');
+    cleanedText = this._prepareOcrNarrativeForSplit(cleanedText).replace(/\.\s/g, ', ');
 
     const ingredients = this._splitTopLevelIngredientSegments(cleanedText, 2400);
     const filtered = ingredients.filter(i => this._keepSplitIngredientLine(i));
@@ -1468,7 +1471,7 @@ class IngredientAnalyzer {
     const narr = this.sliceIngredientNarrativeFromRaw(raw);
     if (narr.length < 40) return [];
 
-    let body = this._normalizeIngredientNewlines(narr).replace(/\.\s/g, ', ');
+    let body = this._prepareOcrNarrativeForSplit(narr).replace(/\.\s/g, ', ');
     let R = this._splitTopLevelIngredientSegments(body, maxSegment);
 
     R = R.filter(seg => this._keepSplitIngredientLine(seg));
@@ -1685,26 +1688,101 @@ class IngredientAnalyzer {
     return t;
   }
 
+  /** OCR list markers (bullets) before first ingredient or after commas. */
+  _stripOcrListMarkers(text) {
+    const bullet = /[\u2022\u2023\u25E6\u2043\u2219\u00B7\u25AA\u25CF•·▪‣●◦∙]/;
+    let s = String(text || '');
+    s = s.replace(new RegExp(`^\\s*${bullet.source}\\s*`, 'gm'), '');
+    s = s.replace(new RegExp(`([,;]\\s*)${bullet.source}\\s*`, 'g'), '$1');
+    return s;
+  }
+
   /**
-   * Newline handling before comma-splitting: always join with a space (paren-aware
-   * depth only tracks position — same rule inside and outside parentheses).
-   * Printed commas on the label remain the only sub-list separators; OCR line
-   * breaks must not become extra commas (e.g. "Ascorbic\\nAcid" → "Ascorbic Acid").
+   * Whole OCR line that is only a 1–3 letter lowercase wrap fragment (not dl/d/l).
+   * @param {string} line
+   * @returns {boolean}
+   */
+  _isOrphanOcrLineFragment(line) {
+    let t = String(line || '')
+      .trim()
+      .replace(/^[,;]+|[,;]+$/g, '')
+      .trim();
+    if (!t) return true;
+    if (ORPHAN_PREFIX_KEEP.has(t.toLowerCase())) return false;
+    return /^[a-z]{1,3}$/.test(t);
+  }
+
+  /** Next line after an orphan looks like a real ingredient slot (not another fragment). */
+  _lineLooksLikeIngredientStart(line) {
+    const t = String(line || '')
+      .trim()
+      .replace(/^[,;]+/, '')
+      .trim();
+    if (!t) return false;
+    return /^[A-Z(0-9]/.test(t) || /^d-/i.test(t);
+  }
+
+  /**
+   * Drop comma-separated 1–3 letter orphans before a capitalized ingredient
+   * (e.g. ", pe Green Tea Extract" → ", Green Tea Extract").
+   */
+  _dropOrphanOcrWordFragments(text) {
+    return String(text || '').replace(
+      /,\s*\b([a-z]{1,3})\s+(?=[A-Z(])/g,
+      (_, frag) => (ORPHAN_PREFIX_KEEP.has(frag) ? `, ${frag} ` : ', ')
+    );
+  }
+
+  /** Strip leading orphan on a split segment (post-comma safety net). */
+  _stripLeadingOrphanFragment(line) {
+    return String(line || '').replace(/^([a-z]{1,3})\s+(?=[A-Z(])/i, (m, frag) =>
+      ORPHAN_PREFIX_KEEP.has(frag.toLowerCase()) ? m : ''
+    );
+  }
+
+  /**
+   * Structural OCR cleanup before comma-split: bullets → newline orphans → comma orphans.
+   */
+  _prepareOcrNarrativeForSplit(text) {
+    let s = this._stripOcrListMarkers(text);
+    s = this._normalizeIngredientNewlines(s);
+    s = this._dropOrphanOcrWordFragments(s);
+    return s;
+  }
+
+  /**
+   * Newline handling before comma-splitting.
+   * - Drop whole lines that are 1–3 letter wrap orphans before the next ingredient line.
+   * - Otherwise join with space (e.g. "Ascorbic\\nAcid" → "Ascorbic Acid").
    */
   _normalizeIngredientNewlines(text) {
-    const src = String(text || '');
-    if (!src) return '';
-    let out = '';
-    for (let i = 0; i < src.length; i++) {
-      const c = src[i];
-      if (c === '\r' || c === '\n') {
-        if (c === '\r' && src[i + 1] === '\n') i++;
-        out += ' ';
-      } else {
-        out += c;
-      }
+    const src = String(text || '').replace(/\r\n/g, '\n');
+    if (!src.includes('\n')) {
+      return src.replace(/\s{2,}/g, ' ').trim();
     }
-    return out
+
+    const lines = [];
+    for (const raw of src.split('\n')) {
+      const t = raw.trim();
+      if (t) lines.push(t);
+    }
+
+    const merged = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const next = lines[i + 1];
+      if (
+        this._isOrphanOcrLineFragment(line) &&
+        next &&
+        this._lineLooksLikeIngredientStart(next)
+      ) {
+        continue;
+      }
+      merged.push(line);
+    }
+
+    return merged
+      .join(' ')
       .replace(/\s+,/g, ',')
       .replace(/,\s*,+/g, ', ')
       .replace(/\s{2,}/g, ' ')
@@ -1714,6 +1792,9 @@ class IngredientAnalyzer {
   _fixOCRPremixLine(line) {
     let s = this._collapseSandwichedDuplicatePair(String(line || '').trim());
     if (!s) return s;
+
+    s = this._stripOcrListMarkers(s);
+    s = this._stripLeadingOrphanFragment(s);
 
     // Dropped leading "M" on Minerals (Vision / seam splice)
     s = s.replace(/^\s*rinerals\b/i, 'Minerals');
