@@ -1427,22 +1427,46 @@ class IngredientAnalyzer {
   }
 
   /**
+   * First balanced (…) or […] span in a string (top-level, unified depth).
+   * @returns {{ inner: string, closeIdx: number, openIdx: number, openChar: string, closeChar: string } | null}
+   */
+  _firstBalancedGroupSpan(line) {
+    const s = String(line || '');
+    const openIdx = s.search(/[\(\[]/);
+    if (openIdx === -1) return null;
+    let depth = 0;
+    for (let i = openIdx; i < s.length; i++) {
+      const c = s[i];
+      if (c === '(' || c === '[') depth++;
+      else if (c === ')' || c === ']') {
+        depth = Math.max(0, depth - 1);
+        if (depth === 0) {
+          return {
+            inner: s.slice(openIdx + 1, i),
+            closeIdx: i,
+            openIdx,
+            openChar: s[openIdx],
+            closeChar: c,
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
    * First balanced (... span in a string (top-level).
    * @returns {{ inner: string, closeIdx: number } | null}
    */
   _firstBalancedParenSpan(line) {
-    const open = line.indexOf('(');
-    if (open === -1) return null;
-    let depth = 0;
-    for (let i = open; i < line.length; i++) {
-      const c = line[i];
-      if (c === '(') depth++;
-      else if (c === ')') {
-        depth--;
-        if (depth === 0) return { inner: line.slice(open + 1, i), closeIdx: i };
-      }
-    }
-    return null;
+    const span = this._firstBalancedGroupSpan(line);
+    if (!span) return null;
+    return { inner: span.inner, closeIdx: span.closeIdx };
+  }
+
+  _formatPremixLine(kind, inner, openChar, closeChar, suffix = '') {
+    const label = kind === 'vitamins' ? 'Vitamins' : 'Minerals';
+    return `${label} ${openChar}${inner}${closeChar}${suffix}`;
   }
 
   /** OCR / GA-merge garbage inside premix parentheses (not exact token fixes). */
@@ -1698,9 +1722,8 @@ class IngredientAnalyzer {
   }
 
   /**
-   * Whole OCR line that is only a 1–3 letter lowercase wrap fragment (not dl/d/l).
-   * @param {string} line
-   * @returns {boolean}
+   * Whole OCR line that is only a 1–2 letter lowercase wrap fragment (not dl/d/l).
+   * Three-letter tokens like "oat" in "oat groats" are valid and must not drop.
    */
   _isOrphanOcrLineFragment(line) {
     let t = String(line || '')
@@ -1709,7 +1732,7 @@ class IngredientAnalyzer {
       .trim();
     if (!t) return true;
     if (ORPHAN_PREFIX_KEEP.has(t.toLowerCase())) return false;
-    return /^[a-z]{1,3}$/.test(t);
+    return /^[a-z]{1,2}$/.test(t);
   }
 
   /** Next line after an orphan looks like a real ingredient slot (not another fragment). */
@@ -1723,19 +1746,20 @@ class IngredientAnalyzer {
   }
 
   /**
-   * Drop comma-separated 1–3 letter orphans before a capitalized ingredient
+   * Drop comma-separated 1–2 letter orphans before a capitalized ingredient
    * (e.g. ", pe Green Tea Extract" → ", Green Tea Extract").
+   * Case-sensitive lookahead — all-lowercase OCR must not strip "oat" from "oat groats".
    */
   _dropOrphanOcrWordFragments(text) {
     return String(text || '').replace(
-      /,\s*\b([a-z]{1,3})\s+(?=[A-Z(])/g,
+      /,\s*\b([a-z]{1,2})\s+(?=[A-Z(])/g,
       (_, frag) => (ORPHAN_PREFIX_KEEP.has(frag) ? `, ${frag} ` : ', ')
     );
   }
 
-  /** Strip leading orphan on a split segment (post-comma safety net). */
+  /** Strip leading 1–2 letter orphan on a split segment (case-sensitive; no /i). */
   _stripLeadingOrphanFragment(line) {
-    return String(line || '').replace(/^([a-z]{1,3})\s+(?=[A-Z(])/i, (m, frag) =>
+    return String(line || '').replace(/^([a-z]{1,2})\s+(?=[A-Z(])/, (m, frag) =>
       ORPHAN_PREFIX_KEEP.has(frag.toLowerCase()) ? m : ''
     );
   }
@@ -1802,8 +1826,8 @@ class IngredientAnalyzer {
     s = s.replace(/^\s*winerals\b/i, 'Minerals');
 
     // GA "Moisture" line fused with a vitamin/mineral premix enumerator
-    if (/^\s*moisture\s*\(/i.test(s)) {
-      const span = this._firstBalancedParenSpan(s);
+    if (/^\s*moisture\s*[\(\[]/i.test(s)) {
+      const span = this._firstBalancedGroupSpan(s);
       if (span) {
         const hi = span.inner;
         const vitLike =
@@ -1816,10 +1840,10 @@ class IngredientAnalyzer {
           ) && !vitLike;
         const suffix = s.slice(span.closeIdx + 1);
         if (vitLike) {
-          return `Vitamins (${span.inner})${suffix}`;
+          return this._formatPremixLine('vitamins', span.inner, span.openChar, span.closeChar, suffix);
         }
         if (minLike) {
-          return `Minerals (${span.inner})${suffix}`;
+          return this._formatPremixLine('minerals', span.inner, span.openChar, span.closeChar, suffix);
         }
       }
     }
@@ -1828,11 +1852,11 @@ class IngredientAnalyzer {
   }
 
   /**
-   * When two "Minerals (" or two "Vitamins (" rows exist and one has heavy
+   * When two "Minerals (" / "Minerals [" or Vitamins rows exist and one has heavy
    * GA/OCR noise, keep the cleaner row.
    */
   _dedupeNoisyPremixDuplicates(items) {
-    const headerRe = /^\s*(vitamins?|minerals?)\s*\(/i;
+    const headerRe = /^\s*(vitamins?|minerals?)\s*[\(\[]/i;
 
     const kindOf = line => {
       const m = line.match(headerRe);
@@ -1853,7 +1877,7 @@ class IngredientAnalyzer {
       if (idxs.length < 2) continue;
 
       const scored = idxs.map(idx => {
-        const span = this._firstBalancedParenSpan(items[idx]);
+        const span = this._firstBalancedGroupSpan(items[idx]);
         const inner = span ? span.inner : '';
         return { idx, noise: this._premixInnerNoiseScore(inner), innerLen: inner.length };
       });

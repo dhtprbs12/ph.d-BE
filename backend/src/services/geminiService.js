@@ -579,28 +579,41 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
     };
   }
 
-  /** @returns {number} index of closing ')' that balances openParenIdx, or -1 */
-  _closingParenIndex(haystack, openParenIdx) {
+  /** @returns {number} index of closing bracket/paren that balances openIdx, or -1 */
+  _closingGroupIndex(haystack, openIdx) {
     let depth = 0;
-    for (let i = openParenIdx; i < haystack.length; i++) {
+    for (let i = openIdx; i < haystack.length; i++) {
       const c = haystack[i];
-      if (c === '(') depth++;
-      else if (c === ')') {
-        depth--;
+      if (c === '(' || c === '[') depth++;
+      else if (c === ')' || c === ']') {
+        depth = Math.max(0, depth - 1);
         if (depth === 0) return i;
       }
     }
     return -1;
   }
 
+  /** @returns {number} index of closing ')' that balances openParenIdx, or -1 */
+  _closingParenIndex(haystack, openParenIdx) {
+    if (haystack[openParenIdx] !== '(') return -1;
+    return this._closingGroupIndex(haystack, openParenIdx);
+  }
+
+  /** First top-level ( … ) or [ … ] in a single line, or null. */
+  _firstBalancedGroupSpanInLine(line) {
+    const s = String(line || '');
+    const open = s.search(/[\(\[]/);
+    if (open <= 0) return null;
+    const close = this._closingGroupIndex(s, open);
+    if (close === -1 || close <= open) return null;
+    return { open, close, inner: s.slice(open + 1, close), openChar: s[open], closeChar: s[close] };
+  }
+
   /** First top-level "( … )" in a single line (merge output), or null. */
   _firstBalancedParenSpanInLine(line) {
-    const s = String(line || '');
-    const open = s.indexOf('(');
-    if (open <= 0) return null;
-    const close = this._closingParenIndex(s, open);
-    if (close === -1 || close <= open) return null;
-    return { open, close, inner: s.slice(open + 1, close) };
+    const span = this._firstBalancedGroupSpanInLine(line);
+    if (!span) return null;
+    return { open: span.open, close: span.close, inner: span.inner };
   }
 
   /** Tokens for overlap (letters/digits; min length 2). */
@@ -611,23 +624,23 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
       .filter(w => w.length >= 2);
   }
 
-  /** Index after ")" that precedes openIdx with no "(" or ")" in the gap (start of next surface ingredient). */
+  /** Index after ")" or "]" that precedes openIdx with no group chars in the gap. */
   _gapStartAfterPrevCloseParen(raw, openIdx) {
     for (let i = openIdx - 1; i >= 0; i--) {
-      if (raw[i] !== ')') continue;
+      if (raw[i] !== ')' && raw[i] !== ']') continue;
       const gap = raw.slice(i + 1, openIdx);
-      if (!/[\(\)]/.test(gap)) return i + 1;
+      if (!/[\(\)\[\]]/.test(gap)) return i + 1;
     }
     return -1;
   }
 
-  /** Last comma/semicolon before openIdx at parenthesis depth 0 (ignores commas inside nested "(...)"). */
+  /** Last comma/semicolon before openIdx at group depth 0. */
   _lastTopLevelCommaBefore(raw, openIdx) {
     let depth = 0;
     for (let i = openIdx - 1; i >= 0; i--) {
       const c = raw[i];
-      if (c === ')') depth++;
-      else if (c === '(') depth--;
+      if (c === ')' || c === ']') depth++;
+      else if (c === '(' || c === '[') depth--;
       else if ((c === ',' || c === ';') && depth === 0) return i;
     }
     return -1;
@@ -682,13 +695,13 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
     return Math.max(0, idx);
   }
 
-  /** Enumerate balanced "(…)" spans in Vision haystack with safe header bounds. */
+  /** Enumerate balanced (…)/[…] spans in Vision haystack with safe header bounds. */
   _listHaystackParenSpans(rawS) {
     const raw = String(rawS || '');
     const out = [];
     for (let i = 0; i < raw.length; i++) {
-      if (raw[i] !== '(') continue;
-      const close = this._closingParenIndex(raw, i);
+      if (raw[i] !== '(' && raw[i] !== '[') continue;
+      const close = this._closingGroupIndex(raw, i);
       if (close === -1) continue;
       let start = this._headerStartBeforeParen(raw, i);
       const afterClose = this._gapStartAfterPrevCloseParen(raw, i);
@@ -713,7 +726,7 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
     const spans = this._listHaystackParenSpans(rawS);
     if (!spans.length) return L;
 
-    const spanL = this._firstBalancedParenSpanInLine(L);
+    const spanL = this._firstBalancedGroupSpanInLine(L);
     const innerL = spanL ? spanL.inner : null;
     const toksL = new Set(this._overlapTokens(innerL || L));
     if (toksL.size < 2) return L;
@@ -760,7 +773,9 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
     const nL = L.replace(/\s+/g, ' ').toLowerCase();
     const nB = best.replace(/\s+/g, ' ').toLowerCase();
     if (nB === nL) return L;
-    if (L.includes('(') && best.length < L.length * 0.82) return L;
+    if (L.includes('(') || L.includes('[')) {
+      if (best.length < L.length * 0.82) return L;
+    }
     return best.replace(/\s+/g, ' ').trim();
   }
 
@@ -781,7 +796,7 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
     if (wc > 44) return false;
     const compact = B.replace(/\s+/g, ' ');
     if (/(.{14,42})\1\1/i.test(compact)) return false;
-    const opens = (B.match(/\(/g) || []).length;
+    const opens = (B.match(/[\(\[]/g) || []).length;
     if (opens > 3) return false;
     return true;
   }
@@ -798,8 +813,20 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
     if (rawS.length < 40) return this._reconcileLineByParenInnerOverlap(rawS, trimmed);
 
     let out = trimmed;
-    const open = trimmed.indexOf('(');
-    if (open > 0 && trimmed.lastIndexOf(')') > open) {
+    const openParen = trimmed.indexOf('(');
+    const openBracket = trimmed.indexOf('[');
+    let open = -1;
+    if (openParen > 0 && openBracket > 0) open = Math.min(openParen, openBracket);
+    else if (openParen > 0) open = openParen;
+    else if (openBracket > 0) open = openBracket;
+
+    const closeParen = trimmed.lastIndexOf(')');
+    const closeBracket = trimmed.lastIndexOf(']');
+    const hasClose =
+      (open === openParen && closeParen > open) ||
+      (open === openBracket && closeBracket > open);
+
+    if (open > 0 && hasClose) {
       const words = trimmed
         .slice(0, open)
         .trim()
@@ -810,16 +837,16 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
           const h = words.slice(-take).join(' ');
           if (h.length < 3) continue;
           const esc = h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const re = new RegExp(esc + '\\s*\\(', 'gi');
+          const re = new RegExp(esc + '\\s*[\\(\\[]', 'gi');
           let m;
           while ((m = re.exec(rawS)) !== null) {
             const openIdx = m.index + m[0].length - 1;
-            if (rawS[openIdx] !== '(') continue;
+            if (rawS[openIdx] !== '(' && rawS[openIdx] !== '[') continue;
             let start = this._headerStartBeforeParen(rawS, openIdx);
             const afterClose = this._gapStartAfterPrevCloseParen(rawS, openIdx);
             if (afterClose >= 0) start = Math.max(start, afterClose);
             while (start < rawS.length && /\s/.test(rawS[start])) start++;
-            const closeIdx = this._closingParenIndex(rawS, openIdx);
+            const closeIdx = this._closingGroupIndex(rawS, openIdx);
             if (closeIdx === -1) continue;
             const candidate = rawS
               .slice(start, closeIdx + 1)
