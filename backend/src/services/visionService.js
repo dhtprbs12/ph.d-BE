@@ -99,18 +99,26 @@ class VisionService {
     return lines;
   }
 
+  /**
+   * Reconstruct line text from Vision symbols (not word tokens).
+   * Joining each word with a space turns "beef," into "beef ," and "B-6" into "B - 6".
+   */
   _paragraphToText(paragraph) {
     if (!paragraph?.words?.length) return '';
 
-    const parts = [];
+    let out = '';
     for (const word of paragraph.words) {
-      let w = '';
       for (const symbol of word.symbols || []) {
-        w += symbol.text || '';
+        out += symbol.text || '';
+        const breakType = symbol.property?.detectedBreak?.type;
+        if (breakType === 'SPACE' || breakType === 'SURE_SPACE' || breakType === 'EOL_SURE_SPACE') {
+          out += ' ';
+        } else if (breakType === 'LINE_BREAK') {
+          out += ' ';
+        }
       }
-      if (w) parts.push(w);
     }
-    return parts.join(' ');
+    return out.replace(/\s{2,}/g, ' ').trim();
   }
 
   /** @returns {{ ymin: number, xmin: number, ymax: number, xmax: number } | null} */

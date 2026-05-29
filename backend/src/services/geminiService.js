@@ -121,18 +121,35 @@ class GeminiService {
     const full = String(ocrFullText || '').trim();
     if (!full || imageType === 'front_label') return '';
 
-    if (Array.isArray(visionLines) && visionLines.length >= 2) {
-      const yOrdered = ingredientAnalyzer.buildIngredientNarrativeFromVisionLines(visionLines);
-      if (yOrdered.length >= 20) {
-        return yOrdered;
-      }
-      console.log(
-        `⚠️ [Ingredients] Y-sort unavailable or weak (${visionLines.length} lines) — falling back to text slice`
-      );
-    }
-
     const hasHeader = ingredientAnalyzer.rawTextHasIngredientSectionHeader(full);
     const sliced = ingredientAnalyzer.sliceIngredientNarrativeFromRaw(full);
+
+    let yOrdered = '';
+    if (Array.isArray(visionLines) && visionLines.length >= 2) {
+      yOrdered = ingredientAnalyzer.buildIngredientNarrativeFromVisionLines(visionLines);
+    }
+
+    const scoreSliced = ingredientAnalyzer._scoreIngredientNarrativeSlice(sliced);
+    const scoreY = ingredientAnalyzer._scoreIngredientNarrativeSlice(yOrdered);
+
+    if (yOrdered.length >= 20 && scoreY > scoreSliced) {
+      console.log(
+        `📐 [Ingredients] Using Y-sorted narrative (score ${scoreY} > text slice ${scoreSliced})`
+      );
+      return yOrdered;
+    }
+
+    if (yOrdered.length >= 20 && sliced.length >= 20) {
+      console.log(
+        `🔧 [Ingredients] Using text slice over Y-sort (score ${scoreSliced} >= ${scoreY})`
+      );
+    } else if (yOrdered.length >= 20 && sliced.length < 20) {
+      return yOrdered;
+    } else if (yOrdered.length >= 20) {
+      console.log(
+        `⚠️ [Ingredients] Y-sort weak vs slice (${visionLines?.length || 0} lines) — text slice`
+      );
+    }
 
     if (hasHeader && sliced.length >= 20) return sliced;
 

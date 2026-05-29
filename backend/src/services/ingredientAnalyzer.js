@@ -1276,11 +1276,86 @@ class IngredientAnalyzer {
     return n;
   }
 
+  /** Collapse Vision word-token spacing artifacts before store/parse. */
+  normalizeOcrIngredientSpacing(text) {
+    let s = String(text || '');
+    s = s.replace(/\s+,/g, ',');
+    s = s.replace(/,\s+/g, ', ');
+    s = s.replace(/\s+\]/g, ']');
+    s = s.replace(/\[\s+/g, '[');
+    s = s.replace(/(\w)\s+-\s+(\w)/g, '$1-$2');
+    s = s.replace(/\s{2,}/g, ' ');
+    return s.trim();
+  }
+
   _scoreIngredientNarrativeSlice(slice) {
     const s = String(slice || '').trim();
     if (!s) return -1;
     const commas = this._countTopLevelCommas(s);
-    return commas * 10 + Math.min(Math.floor(s.length / 50), 24);
+    let score = commas * 10 + Math.min(Math.floor(s.length / 50), 24);
+
+    const spacedCommas = (s.match(/\s,\s/g) || []).length;
+    score -= spacedCommas * 8;
+
+    if (
+      /\bpreserved with mixed tocopherols\b/i.test(s) &&
+      /\b(?:riboflavin|pyridoxine hydrochloride|menadione|folic acid|calcium pantothenate)\b/i.test(
+        s.slice(s.search(/\bpreserved with mixed tocopherols\b/i))
+      )
+    ) {
+      score -= 50;
+    }
+    if (/tocopherols\s*\.\s*A\d{4,}/i.test(s) && /\b(?:riboflavin|Vitamin\s+B)\b/i.test(s)) {
+      score -= 40;
+    }
+
+    return score;
+  }
+
+  /**
+   * Vision often closes VITAMINS ] early; remaining vitamins sit after tocopherols / batch codes.
+   * @param {string} text
+   * @returns {string}
+   */
+  _repairOrphanVitaminsAfterPremixClose(text) {
+    const s = String(text || '');
+    const vitaminsMatch = /\bVITAMINS\s*\[/i.exec(s);
+    if (!vitaminsMatch) return s;
+
+    const preservedIdx = s.search(/\bpreserved with mixed tocopherols\b/i);
+    if (preservedIdx < 0) return s;
+
+    const afterPreserved = s.slice(preservedIdx);
+    const orphanRel = afterPreserved.search(
+      /(?:\.\s*[A-Z]?\d{4,}\s*)?(?:\(\s*)?(?:Vitamin\s+[A-Z]|riboflavin|menadione|pyridoxine\s+hydrochloride)/i
+    );
+    if (orphanRel < 0) return s;
+
+    const orphanStart = preservedIdx + orphanRel;
+    let orphans = s.slice(orphanStart).trim();
+    orphans = orphans.replace(/^\.\s*[A-Z]?\d{4,}\s*/, '').trim();
+    if (!orphans) return s;
+
+    const main = s.slice(0, orphanStart).trim();
+
+    let depth = 0;
+    let closeIdx = -1;
+    for (let i = vitaminsMatch.index; i < preservedIdx; i++) {
+      const ch = s[i];
+      if (ch === '[') depth++;
+      else if (ch === ']') {
+        depth--;
+        if (depth === 0) {
+          closeIdx = i;
+          break;
+        }
+      }
+    }
+    if (closeIdx < 0) return s;
+
+    const before = main.slice(0, closeIdx).trimEnd();
+    const after = main.slice(closeIdx);
+    return `${before}, ${orphans}${after}`;
   }
 
   _applyNarrativeTailCuts(cleanedText) {
@@ -1364,13 +1439,18 @@ class IngredientAnalyzer {
       }
     }
 
+    best = this.normalizeOcrIngredientSpacing(
+      this._repairOrphanVitaminsAfterPremixClose(best.trim())
+    );
+    bestScore = this._scoreIngredientNarrativeSlice(best);
+
     if (bestScore >= 0 && (headerStarts.length > 0 || bestScore > 0)) {
       console.log(
         `🔧 [Ingredients] Narrative slice: ${bestLabel}, commas=${this._countTopLevelCommas(best)}, len=${best.length}, score=${bestScore}`
       );
     }
 
-    return best.trim();
+    return best;
   }
 
   /**
@@ -1550,6 +1630,9 @@ class IngredientAnalyzer {
         ''
       );
       joined = this._applyNarrativeTailCuts(joined.trim());
+      joined = this.normalizeOcrIngredientSpacing(
+        this._repairOrphanVitaminsAfterPremixClose(joined)
+      );
       if (!joined) continue;
 
       const score = this._scoreIngredientNarrativeSlice(joined);
