@@ -1303,21 +1303,60 @@ class IngredientAnalyzer {
   }
 
   /**
-   * Index of first "Chicken. turkey."-style token; skips promo/GA before the list.
+   * Protein-forward stems only (avoids promo "Fresh or Raw…" and mid-list "oat/pea/salt" false starts).
+   */
+  _ingredientListStartStemPattern() {
+    return (
+      'deboned|chicken|turkey|beef|bison|lamb|salmon|duck|pork|herring|mackerel|flounder|eggs?|' +
+      'whole\\s+(?:herring|mackerel|oats?|flaxseed|egg|sardine)'
+    );
+  }
+
+  /**
+   * "whole" + line break + "pumpkin" OCR reads as "whole. pumpkin" — not list start.
+   */
+  _isFalseWholeWrapPeriodMatch(matchedText) {
+    const t = String(matchedText || '');
+    if (!/\bwhole\b/i.test(t)) return false;
+    const afterDot = t.split(/\.\s+/)[1] || '';
+    return /^(?:pumpkin|butternut|squash|collard|apples?|pears?|cranberr|blueberr|kelp|grain)/i.test(
+      afterDot.trim()
+    );
+  }
+
+  /**
+   * First "Chicken, turkey" or "Chicken. turkey" token; skips promo/GA before the list.
    * @returns {number} start index, or -1
    */
-  _findPeriodDelimitedListStart(text) {
+  _findIngredientListStart(text) {
     const src = String(text || '');
-    const re =
-      /\b(?:deboned|chicken|turkey|beef|bison|lamb|salmon|duck|pork|herring|mackerel|flounder|eggs?|whole|dried|fresh|oat|pea|potato|sweet\s+potato|natural|vitamin\s+[a-z0-9]|niacin|taurine|salt|water)\b[\w\s\-]*\.\s+(?:[\(\[]?[a-z]|[A-Z][a-z])/i;
-    const m = re.exec(src);
-    return m ? m.index : -1;
+    const stem = this._ingredientListStartStemPattern();
+    const nextWord = '(?:[\\(\\[]?[a-z]|[A-Z][a-z])';
+    const patterns = [
+      new RegExp(`\\b(?:${stem})\\b[\\w\\s\\-]*,\\s+${nextWord}`, 'i'),
+      new RegExp(`\\b(?:${stem})\\b[\\w\\s\\-]*\\.\\s+${nextWord}`, 'i'),
+    ];
+
+    let best = -1;
+    for (const re of patterns) {
+      const m = re.exec(src);
+      if (!m) continue;
+      if (re.source.includes('\\.\\s+') && this._isFalseWholeWrapPeriodMatch(m[0])) continue;
+      if (best === -1 || m.index < best) best = m.index;
+    }
+    return best;
+  }
+
+  /** @deprecated alias */
+  _findPeriodDelimitedListStart(text) {
+    return this._findIngredientListStart(text);
   }
 
   _trimLeadingIngredientPreamble(text) {
-    const src = String(text || '');
-    const start = this._findPeriodDelimitedListStart(src);
-    if (start > 0 && start < src.length * 0.85) {
+    const src = String(text || '').trim();
+    const start = this._findIngredientListStart(src);
+    if (start <= 0) return src;
+    if (start < src.length * 0.85) {
       return src.slice(start).trim();
     }
     return src;
@@ -1334,7 +1373,7 @@ class IngredientAnalyzer {
     const periodsBefore = this._countTopLevelIngredientPeriods(src.slice(0, gaStart));
     if (periodsBefore >= 4) return src;
 
-    const afterGaIdx = this._findPeriodDelimitedListStart(src.slice(gaStart));
+    const afterGaIdx = this._findIngredientListStart(src.slice(gaStart));
     if (afterGaIdx < 0) return src;
 
     const resumeAt = gaStart + afterGaIdx;
@@ -1681,10 +1720,10 @@ class IngredientAnalyzer {
     return weakCut;
   }
 
-  /** Skip Vit., U.S., decimals — not end-of-ingredient-list periods. */
+  /** Skip Vit., dl., U.S., decimals — not end-of-ingredient-list periods. */
   _isLikelyAbbreviationPeriod(src, dotIdx) {
     const window = src.slice(Math.max(0, dotIdx - 8), dotIdx + 1);
-    if (/\b(?:Vit|Fig|No|St|Mt|Dr|vs|etc|U\.S|U\.K|E\.U)\.$/i.test(window)) return true;
+    if (/\b(?:Vit|Fig|No|St|Mt|Dr|vs|etc|dl|U\.S|U\.K|E\.U)\.$/i.test(window)) return true;
     if (/\b[A-Z]\.$/.test(window)) return true;
     if (/\d\.$/.test(window)) return true;
     return false;
@@ -1739,8 +1778,14 @@ class IngredientAnalyzer {
         depth = Math.max(0, depth - 1);
         out += ch;
       } else if (ch === '.' && depth === 0 && src[i + 1] === ' ') {
-        out += ', ';
-        i++;
+        const pre = src.slice(Math.max(0, i - 3), i);
+        if (/\bdl$/i.test(pre)) {
+          out += '. ';
+          i++;
+        } else {
+          out += ', ';
+          i++;
+        }
       } else {
         out += ch;
       }
