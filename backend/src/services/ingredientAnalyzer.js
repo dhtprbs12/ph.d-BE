@@ -1276,6 +1276,115 @@ class IngredientAnalyzer {
     return n;
   }
 
+  /** Top-level ". " / ".\n" separators (e.g. Orijen), paren/bracket aware. */
+  _countTopLevelIngredientPeriods(text) {
+    let depth = 0;
+    let n = 0;
+    const src = String(text || '');
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
+      else if (depth === 0 && ch === '.') {
+        const next = src[i + 1];
+        if (next !== ' ' && next !== '\n' && next !== '\r') continue;
+        if (this._isLikelyAbbreviationPeriod(src, i)) continue;
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /** Period-delimited list (more ". " than commas) — Orijen, some EU labels. */
+  _isPeriodDelimitedIngredientNarrative(text) {
+    const commas = this._countTopLevelCommas(text);
+    const periods = this._countTopLevelIngredientPeriods(text);
+    return periods >= 3 && periods > commas;
+  }
+
+  /**
+   * Index of first "Chicken. turkey."-style token; skips promo/GA before the list.
+   * @returns {number} start index, or -1
+   */
+  _findPeriodDelimitedListStart(text) {
+    const src = String(text || '');
+    const re =
+      /\b(?:deboned|chicken|turkey|beef|bison|lamb|salmon|duck|pork|herring|mackerel|flounder|eggs?|whole|dried|fresh|oat|pea|potato|sweet\s+potato|natural|vitamin\s+[a-z0-9]|niacin|taurine|salt|water)\b[\w\s\-]*\.\s+(?:[\(\[]?[a-z]|[A-Z][a-z])/i;
+    const m = re.exec(src);
+    return m ? m.index : -1;
+  }
+
+  _trimLeadingIngredientPreamble(text) {
+    const src = String(text || '');
+    const start = this._findPeriodDelimitedListStart(src);
+    if (start > 0 && start < src.length * 0.85) {
+      return src.slice(start).trim();
+    }
+    return src;
+  }
+
+  /**
+   * 2-column OCR: "Chicken.\\nGUARANTEED ANALYSIS\\n…\\nturkey." — drop GA block, keep list before + after.
+   */
+  _rejoinPeriodListAcrossGaBleed(text) {
+    const src = String(text || '');
+    const gaStart = src.search(/\bguaranteed\s+analysis\b/i);
+    if (gaStart < 0) return src;
+
+    const periodsBefore = this._countTopLevelIngredientPeriods(src.slice(0, gaStart));
+    if (periodsBefore >= 4) return src;
+
+    const afterGaIdx = this._findPeriodDelimitedListStart(src.slice(gaStart));
+    if (afterGaIdx < 0) return src;
+
+    const resumeAt = gaStart + afterGaIdx;
+    if (resumeAt <= gaStart) return src;
+
+    const head = src.slice(0, gaStart).trim();
+    const tail = src.slice(resumeAt).trim();
+    if (!head) return tail;
+    if (!tail) return head;
+    return `${head} ${tail}`;
+  }
+
+  /**
+   * GA tail only after enough period-separated ingredients (avoids 2-column OCR bleed).
+   * @returns {number} cut index, or -1
+   */
+  _findGaTailIndexForPeriodList(text) {
+    const src = String(text || '');
+    const gaRe =
+      /\b(?:crude\s+protein|crude\s+fat|crude\s+fiber|analytical\s+constituents|typical\s+analysis|nutritional\s+levels\s+established|not recognized as an essential|contains a source of live)\b/i;
+    const guarRe = /(?:^|[\.\s\n])guaranteed\s+analysis\b/i;
+
+    let depth = 0;
+    let periods = 0;
+    const minPeriods = 4;
+
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
+      else if (depth === 0 && ch === '.') {
+        const next = src[i + 1];
+        if (
+          (next === ' ' || next === '\n' || next === '\r') &&
+          !this._isLikelyAbbreviationPeriod(src, i)
+        ) {
+          periods++;
+        }
+      }
+      if (periods >= minPeriods) {
+        const tail = src.slice(i);
+        const ga = tail.search(gaRe);
+        if (ga >= 0) return i + ga;
+        const guar = tail.search(guarRe);
+        if (guar >= 0) return i + guar;
+      }
+    }
+    return -1;
+  }
+
   /** Collapse Vision word-token spacing artifacts before store/parse. */
   normalizeOcrIngredientSpacing(text) {
     let s = String(text || '');
@@ -1292,7 +1401,9 @@ class IngredientAnalyzer {
     const s = String(slice || '').trim();
     if (!s) return -1;
     const commas = this._countTopLevelCommas(s);
-    let score = commas * 10 + Math.min(Math.floor(s.length / 50), 24);
+    const periods = this._countTopLevelIngredientPeriods(s);
+    let score =
+      commas * 10 + periods * 8 + Math.min(Math.floor(s.length / 50), 24);
 
     const spacedCommas = (s.match(/\s,\s/g) || []).length;
     score -= spacedCommas * 8;
@@ -1366,25 +1477,42 @@ class IngredientAnalyzer {
     const humanTailCutPattern =
       /\b(?:nutrition\s+facts|serving\s+size|calories\s+per\s+serving|amount\s*\/\s*serving|%\s*daily\s+value|daily\s+value|shake\s+well|refrigerate\s+after|dist\.?\s*&\s*sold|distributed\s+exclusively\s+by|distributed\s+by|sku\s*#|certified\s+organic\s+by|about\s+\d+\s+servings\s+per\s+container|www\.\w)\b/i;
 
-    let disclaimerStart = cleanedText.search(tailCutPattern);
-    const gaCut = cleanedText.search(gaTailPattern);
-    const humanCut = cleanedText.search(humanTailCutPattern);
+    let text = this._rejoinPeriodListAcrossGaBleed(cleanedText);
+    text = this._trimLeadingIngredientPreamble(text);
+    const isPeriodList = this._isPeriodDelimitedIngredientNarrative(text);
+
+    let disclaimerStart = text.search(tailCutPattern);
+    if (isPeriodList && disclaimerStart >= 0) {
+      const periodsBeforeCut = this._countTopLevelIngredientPeriods(
+        text.slice(0, disclaimerStart)
+      );
+      if (periodsBeforeCut < 4) disclaimerStart = -1;
+    }
+
+    let gaCut = -1;
+    if (isPeriodList) {
+      gaCut = this._findGaTailIndexForPeriodList(text);
+      if (gaCut < 0) gaCut = text.search(gaTailPattern);
+    } else {
+      gaCut = text.search(gaTailPattern);
+    }
+    const humanCut = text.search(humanTailCutPattern);
     for (const cut of [gaCut, humanCut]) {
       if (cut >= 0) {
         disclaimerStart = disclaimerStart === -1 ? cut : Math.min(disclaimerStart, cut);
       }
     }
 
-    const periodCut = this._findIngredientListPeriodEndIndex(cleanedText);
+    const periodCut = this._findIngredientListPeriodEndIndex(text);
     if (periodCut >= 0) {
       disclaimerStart =
         disclaimerStart === -1 ? periodCut : Math.min(disclaimerStart, periodCut);
     }
 
     if (disclaimerStart > 0) {
-      return cleanedText.slice(0, disclaimerStart).trim();
+      return text.slice(0, disclaimerStart).trim();
     }
-    return cleanedText.trim();
+    return text.trim();
   }
 
   /**
@@ -1446,7 +1574,7 @@ class IngredientAnalyzer {
 
     if (bestScore >= 0 && (headerStarts.length > 0 || bestScore > 0)) {
       console.log(
-        `🔧 [Ingredients] Narrative slice: ${bestLabel}, commas=${this._countTopLevelCommas(best)}, len=${best.length}, score=${bestScore}`
+        `🔧 [Ingredients] Narrative slice: ${bestLabel}, commas=${this._countTopLevelCommas(best)}, periods=${this._countTopLevelIngredientPeriods(best)}, len=${best.length}, score=${bestScore}`
       );
     }
 
@@ -1508,8 +1636,10 @@ class IngredientAnalyzer {
     const tailAfterPeriod =
       /^\s*(?:\n|\r|$|[\r\n\s]*(?:guaranteed|crude\s+protein|crude\s+fat|crude\s+fiber|feeding|manufactured|made\s+in|produced\s+in|processed\s+in|packaged\s+in|distributed|typical\s+analysis|analytical\s+constituents|nutrition\s+facts|this\s+product|store\s+in|best\s+before|net\s+wt|www\.))/i;
 
+    const isPeriodList = this._isPeriodDelimitedIngredientNarrative(src);
     let depth = 0;
     let topLevelCommas = 0;
+    let topLevelPeriods = 0;
     let weakCut = -1;
 
     for (let i = 0; i < src.length; i++) {
@@ -1524,7 +1654,20 @@ class IngredientAnalyzer {
         if (this._isLikelyAbbreviationPeriod(src, i)) continue;
 
         const after = src.slice(i + 1);
-        const hasListShape = topLevelCommas >= 1;
+        const hasListShape = topLevelCommas >= 1 || topLevelPeriods >= 1;
+
+        if (isPeriodList) {
+          topLevelPeriods++;
+          if (
+            /^\s+[a-z][a-z\s\-]{2,}/.test(after) &&
+            !/^\s*(?:guaranteed|crude\s|feeding|manufactured|made\s+in|produced\s+in)/i.test(after)
+          ) {
+            continue;
+          }
+          if (tailAfterPeriod.test(after) && topLevelPeriods < 4) {
+            continue;
+          }
+        }
 
         if (tailAfterPeriod.test(after)) {
           return i;
