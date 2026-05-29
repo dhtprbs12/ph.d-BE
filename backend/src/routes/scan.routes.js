@@ -27,6 +27,92 @@ function getRecommendationFromGrade(grade) {
   return recommendations[grade] || 'unknown';
 }
 
+const VALID_HISTORY_RECS = new Set([
+  'highly_recommended',
+  'recommended',
+  'acceptable',
+  'caution',
+  'not_recommended',
+]);
+
+/** Map analysis recommendation to scan_history ENUM (avoids silent INSERT failures). */
+function toHistoryRecommendation(grade, rec) {
+  if (rec && VALID_HISTORY_RECS.has(rec)) return rec;
+  const fromGrade = getRecommendationFromGrade(grade);
+  return fromGrade === 'unknown' ? 'acceptable' : fromGrade;
+}
+
+/**
+ * Insert scan_history with success/failure logging.
+ * @param {object} entry
+ */
+async function saveScanHistoryEntry(entry) {
+  const {
+    scanId,
+    deviceId,
+    petName,
+    petType,
+    productId = null,
+    scanType,
+    finalScore,
+    grade,
+    recommendation,
+    ocrExtractedText = null,
+    rawTextInput = null,
+    analysisJson,
+  } = entry;
+
+  const rec = toHistoryRecommendation(grade, recommendation);
+  const deviceLabel = deviceId || 'null';
+  const productLabel = productId || '—';
+
+  try {
+    if (scanType === 'manual_input') {
+      await query(
+        `INSERT INTO scan_history 
+         (id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, raw_text_input, analysis_json)
+         VALUES (?, ?, ?, ?, NULL, 'manual_input', ?, ?, ?, ?, ?)`,
+        [
+          scanId,
+          deviceId || null,
+          petName,
+          petType,
+          finalScore,
+          grade,
+          rec,
+          rawTextInput,
+          analysisJson,
+        ]
+      );
+    } else {
+      await query(
+        `INSERT INTO scan_history (id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          scanId,
+          deviceId || null,
+          petName,
+          petType,
+          productId,
+          scanType,
+          finalScore,
+          grade,
+          rec,
+          ocrExtractedText,
+          analysisJson,
+        ]
+      );
+    }
+    console.log(
+      `📜 [scan_history] OK id=${scanId} type=${scanType} product=${productLabel} device=${deviceLabel} grade=${grade} score=${finalScore} rec=${rec}`
+    );
+  } catch (err) {
+    console.error(
+      `❌ [scan_history] FAIL id=${scanId} type=${scanType} product=${productLabel} device=${deviceLabel} grade=${grade} rec=${rec} rawRec=${recommendation || '—'} — ${err.message}`
+    );
+  }
+}
+
 /** Analysis ingredient list from OCR raw text only (ignores vision JSON ingredientsList). */
 function ingredientsListFromOcrText(rawText) {
   return ingredientAnalyzer.parseIngredientText(String(rawText || '').trim());
@@ -880,14 +966,19 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
       aiGenerated: true
     };
     
-    // Save to scan history
-    try {
-      await query(
-        `INSERT INTO scan_history (id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
-         VALUES (?, ?, ?, ?, ?, 'label_photo', ?, ?, ?, ?, ?)`,
-        [scanId, deviceId || null, pet.name, pet.pet_type, product?.id || null, analysis.finalScore, analysis.grade, analysis.recommendation || getRecommendationFromGrade(analysis.grade), extracted.rawIngredientsText, JSON.stringify(analysis)]
-      );
-    } catch (err) {}
+    await saveScanHistoryEntry({
+      scanId,
+      deviceId,
+      petName: pet.name,
+      petType: pet.pet_type,
+      productId: product?.id || null,
+      scanType: 'label_photo',
+      finalScore: analysis.finalScore,
+      grade: analysis.grade,
+      recommendation: analysis.recommendation,
+      ocrExtractedText: extracted.rawIngredientsText,
+      analysisJson: JSON.stringify(analysis),
+    });
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`✅ [BG] Complete in ${duration}s`);
@@ -2170,19 +2261,20 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
       aiGenerated: true
     };
 
-    // Save scan history (optional - for analytics)
     const scanId = uuidv4();
-    try {
-    await query(
-      `INSERT INTO scan_history 
-         (id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
-         VALUES (?, ?, ?, ?, ?, 'label_photo', ?, ?, ?, ?, ?)`,
-        [scanId, deviceId || null, pet.name, pet.pet_type, product?.id || null, analysis.finalScore, analysis.grade, analysis.recommendation || getRecommendationFromGrade(analysis.grade), extracted.rawIngredientsText || product?.raw_ingredients_text, JSON.stringify(analysis)]
-    );
-    } catch (historyError) {
-      console.error('Failed to save scan history:', historyError.message);
-      // Don't fail the request if history save fails
-    }
+    await saveScanHistoryEntry({
+      scanId,
+      deviceId,
+      petName: pet.name,
+      petType: pet.pet_type,
+      productId: product?.id || null,
+      scanType: 'label_photo',
+      finalScore: analysis.finalScore,
+      grade: analysis.grade,
+      recommendation: analysis.recommendation,
+      ocrExtractedText: extracted.rawIngredientsText || product?.raw_ingredients_text,
+      analysisJson: JSON.stringify(analysis),
+    });
 
     const response = {
       scanId,
@@ -2964,16 +3056,18 @@ router.post('/manual', async (req, res, next) => {
 
     // Save scan history
     const scanId = uuidv4();
-    try {
-    await query(
-      `INSERT INTO scan_history 
-         (id, device_id, pet_name, pet_type, scan_type, final_score, grade, recommendation, raw_text_input, analysis_json)
-         VALUES (?, ?, ?, ?, 'manual_input', ?, ?, ?, ?, ?)`,
-        [scanId, deviceId || null, pet.name, pet.pet_type, analysis.finalScore, analysis.grade, analysis.recommendation || getRecommendationFromGrade(analysis.grade), ingredientsText, JSON.stringify(analysis)]
-    );
-    } catch (historyError) {
-      console.error('Failed to save scan history:', historyError.message);
-    }
+    await saveScanHistoryEntry({
+      scanId,
+      deviceId,
+      petName: pet.name,
+      petType: pet.pet_type,
+      scanType: 'manual_input',
+      finalScore: analysis.finalScore,
+      grade: analysis.grade,
+      recommendation: analysis.recommendation,
+      rawTextInput: ingredientsText,
+      analysisJson: JSON.stringify(analysis),
+    });
 
     // Ensure all required fields are present
     const response = {

@@ -1474,6 +1474,106 @@ class IngredientAnalyzer {
     return this._findAllIngredientHeaderStarts(src).length > 0;
   }
 
+  /** Net unclosed `[` depth in a string (for OCR-broken premix lines). */
+  _squareBracketDepth(text) {
+    let depth = 0;
+    for (const ch of String(text || '')) {
+      if (ch === '[') depth++;
+      else if (ch === ']') depth = Math.max(0, depth - 1);
+    }
+    return depth;
+  }
+
+  /** Join wrapped lines inside `[...]` so inner commas stay in one segment. */
+  _collapseNewlinesInsideSquareBrackets(text) {
+    let out = '';
+    let sq = 0;
+    const src = String(text || '').replace(/\r\n/g, '\n');
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '[') sq++;
+      else if (ch === ']') sq = Math.max(0, sq - 1);
+      if ((ch === '\n' || ch === '\r') && sq > 0) {
+        if (out.length > 0 && out[out.length - 1] !== ' ') out += ' ';
+        continue;
+      }
+      out += ch;
+    }
+    return out.replace(/\s{2,}/g, ' ').trim();
+  }
+
+  /** Only convert ". " → ", " outside of (...) and [...] groups. */
+  _replacePeriodSpaceOutsideGroups(text) {
+    let out = '';
+    let depth = 0;
+    const src = String(text || '');
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (ch === '(' || ch === '[') {
+        depth++;
+        out += ch;
+      } else if (ch === ')' || ch === ']') {
+        depth = Math.max(0, depth - 1);
+        out += ch;
+      } else if (ch === '.' && depth === 0 && src[i + 1] === ' ') {
+        out += ', ';
+        i++;
+      } else {
+        out += ch;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * OCR sometimes splits "MINERALS" and "[zinc, ...]" or breaks `]` across segments.
+   * Glue label + bracket block (and unclosed `[` runs) into one ingredient row.
+   */
+  _coalesceSquareBracketIngredientSegments(segments) {
+    if (!Array.isArray(segments) || segments.length === 0) return segments;
+
+    const premixLabelOnly = /^(?:MINERALS?|VITAMINS?)\s*$/i;
+    const out = [];
+
+    for (let i = 0; i < segments.length; i++) {
+      let seg = String(segments[i] || '').trim();
+      if (!seg) continue;
+
+      while (i + 1 < segments.length) {
+        const next = String(segments[i + 1] || '').trim();
+        if (!next) {
+          i++;
+          continue;
+        }
+
+        const mergeLabelThenBracket =
+          premixLabelOnly.test(seg) && next.startsWith('[');
+        const mergeUnclosedBracket = this._squareBracketDepth(seg) > 0;
+        const mergeLabelOpenBracket =
+          /(?:MINERALS?|VITAMINS?)\s*\[/.test(seg) && this._squareBracketDepth(seg) > 0;
+
+        if (mergeLabelThenBracket || mergeUnclosedBracket || mergeLabelOpenBracket) {
+          seg = `${seg}, ${next}`.replace(/\s+,/g, ',').replace(/,\s*,+/g, ', ');
+          i++;
+          continue;
+        }
+        break;
+      }
+
+      out.push(seg);
+    }
+
+    return out;
+  }
+
+  /** Newline cleanup + bracket-safe period fix before top-level comma split. */
+  _prepareNarrativeForCommaSplit(text) {
+    let s = this._prepareOcrNarrativeForSplit(text);
+    s = this._collapseNewlinesInsideSquareBrackets(s);
+    s = this._replacePeriodSpaceOutsideGroups(s);
+    return s;
+  }
+
   /**
    * Split ingredient narrative on top-level commas/semicolons only, respecting
    * nested (), []. Used by parseIngredientText and by reconcileExtractedListWithRaw.
@@ -1540,11 +1640,10 @@ class IngredientAnalyzer {
     let cleanedText = this.sliceIngredientNarrativeFromRaw(rawText);
     if (!cleanedText) return [];
 
-    // Newlines outside/inside parens: join with space (OCR line-wrap fidelity).
-    // Sub-lists inside "(…)" rely on commas already printed on the label.
-    cleanedText = this._prepareOcrNarrativeForSplit(cleanedText).replace(/\.\s/g, ', ');
+    cleanedText = this._prepareNarrativeForCommaSplit(cleanedText);
 
-    const ingredients = this._splitTopLevelIngredientSegments(cleanedText, 2400);
+    let ingredients = this._splitTopLevelIngredientSegments(cleanedText, 2400);
+    ingredients = this._coalesceSquareBracketIngredientSegments(ingredients);
     const filtered = ingredients.filter(i => this._keepSplitIngredientLine(i));
     return this.postProcessExtractedIngredientList(filtered);
   }
@@ -1618,8 +1717,9 @@ class IngredientAnalyzer {
     const narr = this.sliceIngredientNarrativeFromRaw(raw);
     if (narr.length < 40) return [];
 
-    let body = this._prepareOcrNarrativeForSplit(narr).replace(/\.\s/g, ', ');
+    let body = this._prepareNarrativeForCommaSplit(narr);
     let R = this._splitTopLevelIngredientSegments(body, maxSegment);
+    R = this._coalesceSquareBracketIngredientSegments(R);
 
     R = R.filter(seg => this._keepSplitIngredientLine(seg));
     if (!R.length) return [];
