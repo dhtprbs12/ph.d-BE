@@ -83,11 +83,8 @@ class GeminiService {
    * Cloud Vision document OCR + Gemini metadata (no Gemini ingredient rewriting).
    */
   async _extractFromImageHybrid(imageBuffer, mimeType) {
-    const { text: ocrFullText, lines: visionLines } =
-      await visionService.detectDocumentLayout(imageBuffer);
-    console.log(
-      `👁️ [Vision OCR] ${ocrFullText.length} chars, ${visionLines.length} layout lines`
-    );
+    const ocrFullText = await visionService.detectDocumentText(imageBuffer);
+    console.log(`👁️ [Vision OCR] ${ocrFullText.length} chars`);
 
     const metadata = await this._extractLabelMetadataFromImage(
       imageBuffer,
@@ -97,8 +94,7 @@ class GeminiService {
 
     const rawIngredientsText = this._buildRawIngredientsFromOcr(
       ocrFullText,
-      metadata.imageType,
-      visionLines
+      metadata.imageType
     );
     const ingredientsList =
       rawIngredientsText.length > 0
@@ -117,39 +113,12 @@ class GeminiService {
   /**
    * Slice Vision OCR to the ingredient declaration; never use Gemini for this text.
    */
-  _buildRawIngredientsFromOcr(ocrFullText, imageType, visionLines = null) {
+  _buildRawIngredientsFromOcr(ocrFullText, imageType) {
     const full = String(ocrFullText || '').trim();
     if (!full || imageType === 'front_label') return '';
 
     const hasHeader = ingredientAnalyzer.rawTextHasIngredientSectionHeader(full);
     const sliced = ingredientAnalyzer.sliceIngredientNarrativeFromRaw(full);
-
-    let yOrdered = '';
-    if (Array.isArray(visionLines) && visionLines.length >= 2) {
-      yOrdered = ingredientAnalyzer.buildIngredientNarrativeFromVisionLines(visionLines);
-    }
-
-    const scoreSliced = ingredientAnalyzer._scoreIngredientNarrativeSlice(sliced);
-    const scoreY = ingredientAnalyzer._scoreIngredientNarrativeSlice(yOrdered);
-
-    if (yOrdered.length >= 20 && scoreY > scoreSliced) {
-      console.log(
-        `📐 [Ingredients] Using Y-sorted narrative (score ${scoreY} > text slice ${scoreSliced})`
-      );
-      return yOrdered;
-    }
-
-    if (yOrdered.length >= 20 && sliced.length >= 20) {
-      console.log(
-        `🔧 [Ingredients] Using text slice over Y-sort (score ${scoreSliced} >= ${scoreY})`
-      );
-    } else if (yOrdered.length >= 20 && sliced.length < 20) {
-      return yOrdered;
-    } else if (yOrdered.length >= 20) {
-      console.log(
-        `⚠️ [Ingredients] Y-sort weak vs slice (${visionLines?.length || 0} lines) — text slice`
-      );
-    }
 
     if (hasHeader && sliced.length >= 20) return sliced;
 
