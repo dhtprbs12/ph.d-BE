@@ -643,6 +643,124 @@ class ProductService {
     const rows = await query('SELECT * FROM products WHERE barcode = ? LIMIT 1', [barcode]);
     return rows[0] || null;
   }
+
+  // ─── Product Name Normalization ─────────────────────────────────────
+
+  static PRODUCT_NAME_FILLER_PATTERNS = [
+    /\b(premium|natural|holistic|wholesome|complete|balanced|nourishing|nutritious)\b/gi,
+    /\b(recipe|formula|food|meal|dinner|entrée|entree|feast|medley|platter|stew)\b/gi,
+    /\b(for dogs?|for cats?|for puppies|for kittens|for seniors?|canine|feline)\b/gi,
+    /\b(dog food|cat food|puppy food|kitten food)\b/gi,
+    /\b(adult|puppy|kitten|senior|all life stages?|all breeds?)\b/gi,
+    /\b(grain[- ]?free|gluten[- ]?free|limited ingredient)\b/gi,
+    /\bwith\b/gi,
+    /\b(new|improved|original)\b/gi,
+  ];
+
+  normalizeProductName(rawName) {
+    if (!rawName) return null;
+
+    let name = String(rawName).trim();
+
+    for (const pattern of ProductService.PRODUCT_NAME_FILLER_PATTERNS) {
+      name = name.replace(pattern, ' ');
+    }
+
+    // Replace "&" variants
+    name = name.replace(/\bAND\b/gi, '&');
+
+    // Collapse whitespace and trim
+    name = name.replace(/\s+/g, ' ').trim();
+
+    // Remove leading/trailing punctuation or connectors
+    name = name.replace(/^[&,\-–—\s]+/, '').replace(/[&,\-–—\s]+$/, '');
+
+    // Title Case
+    name = name
+      .split(' ')
+      .map(w => {
+        if (w === '&') return '&';
+        if (w.length <= 2 && w === w.toUpperCase()) return w; // e.g. "DL"
+        return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+      })
+      .join(' ');
+
+    return name || null;
+  }
+
+  // ─── Find by Brand + Name (exact / fuzzy) ──────────────────────────
+
+  static FUZZY_MATCH_THRESHOLD = 0.65;
+
+  /**
+   * Search for a product by brand and product name.
+   * Returns { product, matchType } where matchType is 'exact' | 'fuzzy' | null.
+   */
+  async findByBrandAndName(brand, productName) {
+    if (!brand && !productName) return { product: null, matchType: null };
+
+    const normBrand = this.normalizeForMatch(brand);
+    const normName = this.normalizeForMatch(productName);
+
+    // 1) Exact match: brand AND name both match exactly (normalized)
+    if (normBrand && normName) {
+      const exactRows = await query(
+        `SELECT * FROM products WHERE 1=1 LIMIT 200`
+      );
+      const exact = exactRows.find(r =>
+        this.normalizeForMatch(r.brand) === normBrand &&
+        this.normalizeForMatch(r.name) === normName
+      );
+      if (exact) return { product: exact, matchType: 'exact' };
+    }
+
+    // 2) Fuzzy match: brand exact + name Jaccard above threshold
+    if (normBrand) {
+      const brandRows = await query(
+        `SELECT * FROM products WHERE brand IS NOT NULL LIMIT 500`
+      );
+      const brandMatches = brandRows.filter(r =>
+        this.normalizeForMatch(r.brand) === normBrand
+      );
+      if (brandMatches.length > 0 && normName) {
+        let bestRow = null;
+        let bestScore = 0;
+        for (const r of brandMatches) {
+          const score = this._jaccardTokenSimilarity(normName, this.normalizeForMatch(r.name));
+          if (score > bestScore) {
+            bestScore = score;
+            bestRow = r;
+          }
+        }
+        if (bestRow && bestScore >= ProductService.FUZZY_MATCH_THRESHOLD) {
+          return { product: bestRow, matchType: 'fuzzy' };
+        }
+      }
+    }
+
+    // 3) Broader fuzzy: Jaccard on combined "brand + name" string
+    if (normBrand || normName) {
+      const combined = `${normBrand} ${normName}`.trim();
+      const allRows = await query(
+        `SELECT * FROM products WHERE brand IS NOT NULL OR name IS NOT NULL LIMIT 500`
+      );
+      let bestRow = null;
+      let bestScore = 0;
+      for (const r of allRows) {
+        const dbCombined = `${this.normalizeForMatch(r.brand)} ${this.normalizeForMatch(r.name)}`.trim();
+        const score = this._jaccardTokenSimilarity(combined, dbCombined);
+        if (score > bestScore) {
+          bestScore = score;
+          bestRow = r;
+        }
+      }
+      if (bestRow && bestScore >= ProductService.FUZZY_MATCH_THRESHOLD) {
+        return { product: bestRow, matchType: 'fuzzy' };
+      }
+    }
+
+    return { product: null, matchType: null };
+  }
 }
 
 module.exports = new ProductService();

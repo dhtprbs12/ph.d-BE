@@ -9,10 +9,13 @@ CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(36) PRIMARY KEY,
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
+    nickname VARCHAR(30) UNIQUE,
+    pin_hash VARCHAR(255),
     name VARCHAR(100),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_email (email)
+    INDEX idx_email (email),
+    INDEX idx_nickname (nickname)
 );
 
 -- =============================================
@@ -107,6 +110,7 @@ CREATE TABLE IF NOT EXISTS product_ingredients (
 CREATE TABLE IF NOT EXISTS scan_history (
     id VARCHAR(36) PRIMARY KEY,
     device_id VARCHAR(100),  -- Optional device identifier (no user accounts)
+    user_id VARCHAR(36),
     pet_name VARCHAR(100),   -- Store pet info directly (pets are local on device)
     pet_type ENUM('dog', 'cat'),
     product_id VARCHAR(36),
@@ -124,6 +128,7 @@ CREATE TABLE IF NOT EXISTS scan_history (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL,
     INDEX idx_device_scans (device_id, created_at DESC),
+    INDEX idx_user_scans (user_id, created_at DESC),
     INDEX idx_product_scans (product_id)
 );
 

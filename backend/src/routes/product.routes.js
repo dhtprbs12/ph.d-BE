@@ -805,16 +805,18 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
       }
     }
 
+    const userId = req.user?.id || null;
     const deviceId = req.get('x-device-id') || req.query.deviceId || null;
     const recForHistory = toHistoryRecommendation(analysis.grade, analysis.recommendation);
-    if (deviceId) {
+    if (userId || deviceId) {
       const scanId = uuidv4();
       try {
         await query(
-          `INSERT INTO scan_history (id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
-           VALUES (?, ?, ?, ?, ?, 'product_search', ?, ?, ?, NULL, ?)`,
+          `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
+           VALUES (?, ?, ?, ?, ?, ?, 'product_search', ?, ?, ?, NULL, ?)`,
           [
             scanId,
+            userId,
             deviceId,
             pet.name,
             pet.pet_type,
@@ -830,7 +832,7 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
         console.error('[ANALYZE] Failed to save scan history:', historyErr.message);
       }
     } else {
-      console.warn('[ANALYZE] No x-device-id — scan history not saved');
+      console.warn('[ANALYZE] No user or device — scan history not saved');
     }
 
     res.json({
@@ -1219,11 +1221,25 @@ router.delete('/:id', async (req, res, next) => {
       }
     }
 
+    // Delete scan_history referencing this product
+    let scanHistoryDeleted = 0;
+    try {
+      const shResult = await query(
+        'DELETE FROM scan_history WHERE product_id = ?',
+        [id]
+      );
+      scanHistoryDeleted = shResult?.affectedRows ?? 0;
+    } catch (err) {
+      console.warn('[DELETE product] scan_history cleanup failed:', err.message);
+    }
+
     await query('DELETE FROM products WHERE id = ?', [id]);
+
+    result.scanHistoryRowsDeleted = scanHistoryDeleted;
 
     console.log(
       `🗑️  [DELETE product] ${product.brand || '?'} / ${product.name} (id=${id}) ` +
-      `→ purged + ${result.reviewCacheRowsDeleted} review_cache row(s)`
+      `→ purged + ${result.reviewCacheRowsDeleted} review_cache + ${scanHistoryDeleted} scan_history row(s)`
     );
 
     res.json({ success: true, deleted: result });

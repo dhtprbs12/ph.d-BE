@@ -14,6 +14,7 @@ const {
 } = require('../utils/cacheHelpers');
 const imageService = require('../services/imageService');
 const imagePreprocess = require('../services/imagePreprocessService');
+const { optionalAuth } = require('../middleware/auth');
 
 // Helper: Get recommendation from grade if AI didn't provide one
 function getRecommendationFromGrade(grade) {
@@ -49,6 +50,7 @@ function toHistoryRecommendation(grade, rec) {
 async function saveScanHistoryEntry(entry) {
   const {
     scanId,
+    userId = null,
     deviceId,
     petName,
     petType,
@@ -70,10 +72,11 @@ async function saveScanHistoryEntry(entry) {
     if (scanType === 'manual_input') {
       await query(
         `INSERT INTO scan_history 
-         (id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, raw_text_input, analysis_json)
-         VALUES (?, ?, ?, ?, NULL, 'manual_input', ?, ?, ?, ?, ?)`,
+         (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, raw_text_input, analysis_json)
+         VALUES (?, ?, ?, ?, ?, NULL, 'manual_input', ?, ?, ?, ?, ?)`,
         [
           scanId,
+          userId,
           deviceId || null,
           petName,
           petType,
@@ -86,10 +89,11 @@ async function saveScanHistoryEntry(entry) {
       );
     } else {
       await query(
-        `INSERT INTO scan_history (id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           scanId,
+          userId,
           deviceId || null,
           petName,
           petType,
@@ -104,11 +108,11 @@ async function saveScanHistoryEntry(entry) {
       );
     }
     console.log(
-      `📜 [scan_history] OK id=${scanId} type=${scanType} product=${productLabel} device=${deviceLabel} grade=${grade} score=${finalScore} rec=${rec}`
+      `📜 [scan_history] OK id=${scanId} type=${scanType} product=${productLabel} user=${userId || deviceLabel} grade=${grade} score=${finalScore} rec=${rec}`
     );
   } catch (err) {
     console.error(
-      `❌ [scan_history] FAIL id=${scanId} type=${scanType} product=${productLabel} device=${deviceLabel} grade=${grade} rec=${rec} rawRec=${recommendation || '—'} — ${err.message}`
+      `❌ [scan_history] FAIL id=${scanId} type=${scanType} product=${productLabel} user=${userId || deviceLabel} grade=${grade} rec=${rec} rawRec=${recommendation || '—'} — ${err.message}`
     );
   }
 }
@@ -271,22 +275,22 @@ function getUserBadge(scanCount) {
   }
 }
 
-router.get('/user-stats', async (req, res, next) => {
+router.get('/user-stats', optionalAuth, async (req, res, next) => {
   try {
-    const deviceId = req.headers['x-device-id'] || req.query.deviceId;
+    const userId = req.user?.id || null;
     
-    if (!deviceId) {
+    if (!userId) {
       return res.json({
         scanCount: 0,
         badge: getUserBadge(0),
-        message: 'No device ID provided'
+        message: 'Not authenticated'
       });
     }
     
     // Get user's scan count
     const [countResult] = await query(
-      'SELECT COUNT(*) as count FROM scan_history WHERE device_id = ?',
-      [deviceId]
+      'SELECT COUNT(*) as count FROM scan_history WHERE user_id = ?',
+      [userId]
     );
     
     const scanCount = countResult?.count || 0;
@@ -320,7 +324,7 @@ router.get('/user-stats', async (req, res, next) => {
 // ============================================
 // BACKGROUND ANALYSIS PROCESSOR
 // ============================================
-async function processAnalysisInBackground(scanId, ingredientsList, pet, extracted, product, deviceId) {
+async function processAnalysisInBackground(scanId, ingredientsList, pet, extracted, product, deviceId, userId) {
   const startTime = Date.now();
   
   try {
@@ -968,6 +972,7 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     
     await saveScanHistoryEntry({
       scanId,
+      userId,
       deviceId,
       petName: pet.name,
       petType: pet.pet_type,
@@ -1091,12 +1096,45 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       });
     }
 
+    // Normalize product name (strip filler words)
+    const normalizedName = productService.normalizeProductName(extracted.productName);
+
+    // ─── DB Lookup: exact or fuzzy match ───
+    const { product: matchedProduct, matchType } = await productService.findByBrandAndName(
+      extracted.brand,
+      normalizedName || extracted.productName
+    );
+
+    if (matchedProduct && (matchType === 'exact' || matchType === 'fuzzy')) {
+      console.log(`✅ [FRONT] DB match found (${matchType}): "${matchedProduct.brand} ${matchedProduct.name}" (id=${matchedProduct.id})`);
+      return res.json({
+        success: true,
+        matchType,
+        product: {
+          id: matchedProduct.id,
+          name: matchedProduct.name,
+          brand: matchedProduct.brand,
+          imageUrl: matchedProduct.image_url,
+          productType: matchedProduct.product_type,
+          targetPetType: matchedProduct.target_pet_type,
+        },
+        captured: {
+          productName: normalizedName || extracted.productName,
+          brand: extracted.brand,
+          targetPet: extracted.targetPet,
+          productType: extracted.productType,
+          packageShape: extracted.packageShape,
+        },
+        nextStep: 'Product found in database. You can view analysis directly.'
+      });
+    }
+
     // Generate pending scan ID
     const pendingScanId = uuidv4();
     
     // Store front label data
     pendingFrontLabels.set(pendingScanId, {
-      productName: extracted.productName,
+      productName: normalizedName || extracted.productName,
       brand: extracted.brand,
       targetPet: extracted.targetPet,
       productType: extracted.productType,
@@ -1320,13 +1358,14 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
 
     res.json({
       success: true,
+      matchType: null,
       pendingScanId,
       captured: {
-        productName: extracted.productName,
+        productName: normalizedName || extracted.productName,
         brand: extracted.brand,
         targetPet: extracted.targetPet,
         productType: extracted.productType,
-        packageShape: extracted.packageShape, // hint for the back-label capture UI
+        packageShape: extracted.packageShape,
       },
       candidates,
       nextStep: candidates.length > 0 
@@ -1344,10 +1383,11 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
  * POST /api/scan/back/:pendingScanId
  * Step 2: Scan back label (ingredients) and combine with front label data
  */
-router.post('/back/:pendingScanId', upload.single('image'), async (req, res, next) => {
+router.post('/back/:pendingScanId', optionalAuth, upload.single('image'), async (req, res, next) => {
   try {
     const { pendingScanId } = req.params;
     const { petName, petType, petBreed, petAgeMonths, petWeightKg, petAllergies, petHealthConditions, deviceId } = req.body;
+    const userId = req.user?.id || null;
 
     // Validate pending scan exists
     const frontData = pendingFrontLabels.get(pendingScanId);
@@ -1495,9 +1535,13 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
     }
 
     // Start background analysis
-    processAnalysisInBackground(scanId, ingredientsList, pet, mergedExtracted, product, deviceId);
+    processAnalysisInBackground(scanId, ingredientsList, pet, mergedExtracted, product, deviceId, userId);
 
     // Return immediately with scanId for polling
+    const flatIngredients = ingredientAnalyzer.parseIngredientTextFlat(
+      mergedExtracted.rawIngredientsText || ingredientsList.join(', ')
+    );
+
     res.json({
       scanId,
       status: 'processing',
@@ -1510,6 +1554,7 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
         ingredientCount: ingredientsList.length,
         confidence: mergedExtracted.confidence || 0.95
       },
+      ingredientsForEditor: flatIngredients,
       product: product ? {
         id: product.id,
         name: product.name,
@@ -1528,12 +1573,152 @@ router.post('/back/:pendingScanId', upload.single('image'), async (req, res, nex
 });
 
 /**
+ * POST /api/scan/confirm-ingredients
+ * User has reviewed & edited the OCR-extracted ingredients in the editor.
+ * Accepts the final ingredient list and triggers analysis.
+ */
+router.post('/confirm-ingredients', optionalAuth, async (req, res, next) => {
+  try {
+    const {
+      pendingScanId,
+      ingredients,
+      petName, petType, petBreed, petAgeMonths, petWeightKg,
+      petAllergies, petHealthConditions, deviceId
+    } = req.body;
+    const userId = req.user?.id || null;
+
+    if (!ingredients || !Array.isArray(ingredients) || ingredients.length === 0) {
+      return res.status(400).json({ error: 'ingredients array is required and must not be empty' });
+    }
+    if (!petType || !['dog', 'cat'].includes(petType)) {
+      return res.status(400).json({ error: 'petType is required (dog or cat)' });
+    }
+
+    // Retrieve front label data if available
+    let frontData = null;
+    if (pendingScanId) {
+      frontData = pendingFrontLabels.get(pendingScanId);
+      pendingFrontLabels.delete(pendingScanId);
+    }
+
+    const pet = {
+      id: deviceId || 'local',
+      name: petName || 'Pet',
+      pet_type: petType,
+      breed: petBreed || null,
+      age_months: petAgeMonths ? parseInt(petAgeMonths) : null,
+      weight_kg: petWeightKg ? parseFloat(petWeightKg) : null,
+      healthConditions: []
+    };
+
+    if (petHealthConditions) {
+      try {
+        pet.healthConditions = typeof petHealthConditions === 'string'
+          ? JSON.parse(petHealthConditions)
+          : petHealthConditions;
+      } catch (e) {
+        pet.healthConditions = [];
+      }
+    }
+    if (petAllergies) {
+      try {
+        const allergies = typeof petAllergies === 'string' ? JSON.parse(petAllergies) : petAllergies;
+        allergies.forEach(a => {
+          pet.healthConditions.push({ condition_type: `allergy_${a}`, severity: 'moderate' });
+        });
+      } catch (e) {}
+    }
+
+    const ingredientsList = ingredients.map(s => String(s).trim()).filter(Boolean);
+    const rawText = ingredientsList.join(', ');
+
+    const productName = frontData?.productName || req.body.productName || 'Unknown Product';
+    const brand = frontData?.brand || req.body.brand || null;
+    const productType = frontData?.productType || req.body.productType || 'dry_food';
+    const targetPet = frontData?.targetPet || petType;
+    const texture = frontData?.texture || null;
+    const lifeStage = frontData?.lifeStage || 'all';
+
+    const extracted = {
+      productName,
+      brand,
+      targetPet,
+      productType,
+      rawIngredientsText: rawText,
+      ingredientsList,
+      confidence: 1.0,
+      imageType: 'confirmed_editor'
+    };
+
+    // Find or create product
+    const ingredientHash = productService.generateIngredientHash(ingredientsList);
+    let product = await productService.findByIngredientHash(ingredientHash, brand, productName);
+
+    if (!product) {
+      product = await productService.createFromScan({
+        name: productName,
+        brand,
+        productType,
+        texture,
+        targetPetType: targetPet,
+        lifeStage,
+        rawIngredientsText: rawText,
+        ingredientsList,
+        imageUrl: frontData?.imageUrl || null
+      });
+    }
+
+    const scanId = uuidv4();
+    analysisStore.set(scanId, {
+      status: 'processing',
+      progress: 'Analyzing confirmed ingredients...',
+      extracted,
+      product: { id: product.id, name: product.name, brand: product.brand, image_url: product.image_url },
+      pet,
+      startTime: Date.now()
+    });
+
+    await query('UPDATE products SET scan_count = scan_count + 1 WHERE id = ?', [product.id]);
+
+    console.log(`✅ [CONFIRM] Confirmed ${ingredientsList.length} ingredients for "${brand || ''} ${productName}" → analysis started`);
+
+    processAnalysisInBackground(scanId, ingredientsList, pet, extracted, product, deviceId || 'unknown', userId);
+
+    res.json({
+      scanId,
+      status: 'processing',
+      scanType: 'confirmed_ingredients',
+      extracted: {
+        productName,
+        brand,
+        targetPet,
+        ingredientCount: ingredientsList.length,
+        confidence: 1.0
+      },
+      product: {
+        id: product.id,
+        name: product.name,
+        brand: product.brand,
+        image_url: product.image_url,
+      },
+      pollUrl: `/api/scan/${scanId}/result`,
+      message: 'Analysis started with confirmed ingredients.'
+    });
+
+  } catch (error) {
+    console.error('[CONFIRM] Error:', error);
+    next(error);
+  }
+});
+
+/**
  * POST /api/scan/quick-analyze
  * Skip back label scan — analyze a known product from the DB for a specific pet
  */
-router.post('/quick-analyze', async (req, res, next) => {
+router.post('/quick-analyze', optionalAuth, async (req, res, next) => {
   try {
     const { productId, petName, petType, petBreed, petAgeMonths, petWeightKg, petAllergies, petHealthConditions, deviceId } = req.body;
+    const userId = req.user?.id || null;
 
     if (!productId) {
       return res.status(400).json({ error: 'productId is required' });
@@ -1596,7 +1781,7 @@ router.post('/quick-analyze', async (req, res, next) => {
     console.log(`⚡ [QUICK] Starting analysis for "${product.brand || ''} ${product.name}" (${ingredientsList.length} ingredients) for ${pet.name}`);
 
     // Trigger background analysis (same as back label flow)
-    processAnalysisInBackground(scanId, ingredientsList, pet, extracted, product, deviceId || 'unknown');
+    processAnalysisInBackground(scanId, ingredientsList, pet, extracted, product, deviceId || 'unknown', userId);
 
     res.json({
       scanId,
@@ -1662,10 +1847,11 @@ router.get('/pending/:pendingScanId', async (req, res) => {
  * Smart scan - handles both front label (product name) and back label (ingredients)
  * Pet info is sent directly from device (no server-side pet storage)
  */
-router.post('/label', upload.single('image'), async (req, res, next) => {
+router.post('/label', optionalAuth, upload.single('image'), async (req, res, next) => {
   try {
     // Pet info comes directly from the device
     const { petName, petType, petBreed, petAgeMonths, petWeightKg, petAllergies, petHealthConditions, deviceId } = req.body;
+    const userId = req.user?.id || null;
 
     if (!req.file) {
       return res.status(400).json({ error: 'Image is required' });
@@ -1895,7 +2081,7 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
       });
       
       // Start background processing (don't await!)
-      processAnalysisInBackground(scanId, ingredientsList, pet, extracted, product, deviceId);
+      processAnalysisInBackground(scanId, ingredientsList, pet, extracted, product, deviceId, userId);
       
       // Return immediately with initial data
       return res.json({
@@ -2264,6 +2450,7 @@ router.post('/label', upload.single('image'), async (req, res, next) => {
     const scanId = uuidv4();
     await saveScanHistoryEntry({
       scanId,
+      userId,
       deviceId,
       petName: pet.name,
       petType: pet.pet_type,
@@ -2425,13 +2612,14 @@ router.get('/:scanId/result', async (req, res, next) => {
  * Take a photo of food and check if it's safe for your pet
  * Uses per-single-condition caching (same pattern as Label Scan)
  */
-router.post('/food-check', upload.single('image'), async (req, res, next) => {
+router.post('/food-check', optionalAuth, upload.single('image'), async (req, res, next) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No image provided' });
     }
 
     const { petName, petType, petHealthConditions, deviceId } = req.body;
+    const userId = req.user?.id || null;
 
     if (!petType || !['dog', 'cat'].includes(petType)) {
       return res.status(400).json({ error: 'petType is required (dog or cat)' });
@@ -2642,9 +2830,10 @@ router.post('/food-check', upload.single('image'), async (req, res, next) => {
  * POST /api/scan/manual
  * Manually input ingredients text and analyze
  */
-router.post('/manual', async (req, res, next) => {
+router.post('/manual', optionalAuth, async (req, res, next) => {
   try {
     const { ingredientsText, productName, petName, petType, petAllergies, petHealthConditions, deviceId } = req.body;
+    const userId = req.user?.id || null;
 
     if (!ingredientsText) {
       return res.status(400).json({ error: 'ingredientsText is required' });
@@ -3058,6 +3247,7 @@ router.post('/manual', async (req, res, next) => {
     const scanId = uuidv4();
     await saveScanHistoryEntry({
       scanId,
+      userId,
       deviceId,
       petName: pet.name,
       petType: pet.pet_type,
@@ -3109,12 +3299,13 @@ router.post('/manual', async (req, res, next) => {
  * GET /api/scan/history
  * Get device's scan history
  */
-router.get('/history', async (req, res, next) => {
+router.get('/history', optionalAuth, async (req, res, next) => {
   try {
-    const { deviceId, limit = 20, offset = 0 } = req.query;
+    const { limit = 20, offset = 0 } = req.query;
+    const userId = req.user?.id || null;
 
-    if (!deviceId) {
-      return res.status(400).json({ error: 'deviceId is required' });
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
     }
 
     const { petName, petType } = req.query;
@@ -3123,9 +3314,9 @@ router.get('/history', async (req, res, next) => {
       SELECT sh.*, p.name as product_name, p.brand as product_brand, p.image_url as product_image
       FROM scan_history sh
       LEFT JOIN products p ON sh.product_id = p.id
-      WHERE sh.device_id = ?
+      WHERE sh.user_id = ?
     `;
-    const params = [deviceId];
+    const params = [userId];
 
     if (petName) {
       sql += ' AND sh.pet_name = ?';
@@ -3152,12 +3343,12 @@ router.get('/history', async (req, res, next) => {
  * GET /api/scan/:id
  * Get specific scan details
  */
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', optionalAuth, async (req, res, next) => {
   try {
-    const { deviceId } = req.query;
+    const userId = req.user?.id || null;
     
-    if (!deviceId) {
-      return res.status(400).json({ error: 'deviceId is required' });
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
     }
 
     const [scan] = await query(
@@ -3165,8 +3356,8 @@ router.get('/:id', async (req, res, next) => {
               p.image_url as product_image, p.product_type
        FROM scan_history sh
        LEFT JOIN products p ON sh.product_id = p.id
-       WHERE sh.id = ? AND sh.device_id = ?`,
-      [req.params.id, deviceId]
+       WHERE sh.id = ? AND sh.user_id = ?`,
+      [req.params.id, userId]
     );
 
     if (!scan) {

@@ -1917,6 +1917,52 @@ class IngredientAnalyzer {
   }
 
   /**
+   * Parse ingredients with bracket flattening for the editor UI.
+   * MINERALS [...] and VITAMINS [...] blocks are split into individual items.
+   * @param {string} rawText
+   * @returns {string[]}
+   */
+  parseIngredientTextFlat(rawText) {
+    const ingredients = this.parseIngredientText(rawText);
+    return this._flattenBracketedIngredients(ingredients);
+  }
+
+  /**
+   * Flatten MINERALS/VITAMINS bracket groups into individual items.
+   * e.g. "VITAMINS [Vitamin A, Vitamin D3]" → ["Vitamin A", "Vitamin D3"]
+   * Other ingredients pass through unchanged.
+   */
+  _flattenBracketedIngredients(ingredients) {
+    const result = [];
+    const bracketPattern = /^(vitamins?|minerals?)\s*[\[\(]/i;
+
+    for (const ing of ingredients) {
+      if (!bracketPattern.test(ing.trim())) {
+        result.push(ing);
+        continue;
+      }
+
+      const span = this._firstBalancedGroupSpan(ing.trim());
+      if (!span || !span.inner) {
+        result.push(ing);
+        continue;
+      }
+
+      const components = span.inner
+        .split(/,/)
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      if (components.length <= 1) {
+        result.push(ing);
+      } else {
+        result.push(...components);
+      }
+    }
+    return result;
+  }
+
+  /**
    * First balanced (…) or […] span in a string (top-level, unified depth).
    * @returns {{ inner: string, closeIdx: number, openIdx: number, openChar: string, closeChar: string } | null}
    */

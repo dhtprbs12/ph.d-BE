@@ -169,7 +169,22 @@ Rules:
 - mixed: both front marketing and ingredients visible
 - packageShape: round = can/cylinder, pouch = soft bag, flat = default box/bag panel
 - Read guaranteedAnalysis numbers from the label or OCR when visible; null if not shown
-- Do not invent product names; use null when unreadable`;
+- Do not invent product names; use null when unreadable
+
+productName rules (IMPORTANT):
+- Return the SHORTEST name that distinguishes this SKU from other products of the same brand.
+- INCLUDE: product line name, flavor/protein source, size variant (e.g. "Large Breed", "Small Breed")
+- EXCLUDE: marketing adjectives and info already captured in other fields:
+  "Recipe", "Formula", "With", "For Dogs", "For Cats", "Premium", "Natural",
+  "Complete", "Balanced", "Grain-Free" (use productType/texture instead),
+  life stage words like "Adult", "Puppy", "Kitten", "Senior" (use lifeStage instead),
+  pet type words like "Dog Food", "Cat Food" (use targetPet instead)
+- Use Title Case. Replace "AND"/"&" with "&".
+- Examples:
+  "BACKCOUNTRY Heartlands Recipe With Beef And Bison" → "Backcountry Heartlands Beef & Bison"
+  "Complete Health Natural Grain Free Adult Deboned Chicken & Oatmeal" → "Complete Health Deboned Chicken & Oatmeal"
+  "Amazing Grains Original Recipe For Dogs" → "Amazing Grains Original"
+  "CORE Grain Free Ocean Whitefish Salmon & Herring Recipe" → "Core Ocean Whitefish Salmon & Herring"`;
 
     const result = await this.model.generateContent({
       contents: [
