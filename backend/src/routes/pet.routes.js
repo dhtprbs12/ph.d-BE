@@ -279,5 +279,36 @@ router.delete('/:id/conditions/:conditionId', async (req, res, next) => {
   }
 });
 
+/**
+ * POST /api/pets/:id/photo
+ * Upload pet photo to R2
+ */
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const ImageService = require('../services/imageService');
+const imageService = new ImageService();
+
+router.post('/:id/photo', upload.single('photo'), async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No photo file provided' });
+    }
+
+    const pets = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    if (pets.length === 0) {
+      return res.status(404).json({ error: 'Pet not found' });
+    }
+
+    const key = `pets/${req.params.id}.jpg`;
+    const photoUrl = await imageService.uploadToR2(req.file.buffer, key, req.file.mimetype);
+
+    await query('UPDATE pets SET photo_url = ? WHERE id = ?', [photoUrl, req.params.id]);
+
+    res.json({ photo_url: photoUrl });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
 

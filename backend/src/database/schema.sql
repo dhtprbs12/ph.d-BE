@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS pets (
     sex ENUM('male', 'female', 'neutered_male', 'spayed_female'),
     activity_level ENUM('low', 'moderate', 'high') DEFAULT 'moderate',
     is_primary BOOLEAN DEFAULT FALSE,
+    photo_url VARCHAR(512),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
