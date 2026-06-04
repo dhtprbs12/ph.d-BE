@@ -280,7 +280,7 @@ router.get('/:id', optionalAuth, async (req, res, next) => {
  * Analyze product for a specific pet with AI-enhanced holistic review
  * Uses PER-CONDITION caching: checks each individual condition and takes WORST score
  */
-router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
+router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
   try {
     console.log('🔍 [ANALYZE] Product ID:', req.params.id);
     
@@ -315,12 +315,21 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
     }
     console.log('✅ [ANALYZE] Found product:', product.name);
 
-    // Parse ingredients
-    const ingredientsList = ingredientAnalyzer.parseIngredientText(product.raw_ingredients_text);
+    // Parse ingredients — if the product was created via user-confirmed scan,
+    // raw_ingredients_text is already clean comma-separated; use simple split
+    // to preserve the exact order/count the user confirmed.
+    const rawText = product.raw_ingredients_text || '';
+    const isUserConfirmed = product.source === 'user_scan';
+    let ingredientsList;
+    if (isUserConfirmed) {
+      ingredientsList = rawText.split(',').map(s => s.trim()).filter(Boolean);
+    } else {
+      ingredientsList = ingredientAnalyzer.parseIngredientText(rawText);
+    }
     if (!ingredientsList || ingredientsList.length === 0) {
       return res.status(400).json({ error: 'Product has no ingredients to analyze' });
     }
-    console.log(`📝 [ANALYZE] ${ingredientsList.length} ingredients found`);
+    console.log(`📝 [ANALYZE] ${ingredientsList.length} ingredients found (${isUserConfirmed ? 'user-confirmed' : 'parsed'})`);
 
     // Use DB-stored hash if available, otherwise generate
     const ingredientHash = product.ingredient_hash || productService.generateIngredientHash(ingredientsList);
@@ -809,25 +818,26 @@ router.get('/:id/analyze', optionalAuth, async (req, res, next) => {
     const deviceId = req.get('x-device-id') || req.query.deviceId || null;
     const recForHistory = toHistoryRecommendation(analysis.grade, analysis.recommendation);
     if (userId || deviceId) {
-      const scanId = uuidv4();
       try {
-        await query(
-          `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
-           VALUES (?, ?, ?, ?, ?, ?, 'product_search', ?, ?, ?, NULL, ?)`,
-          [
-            scanId,
-            userId,
-            deviceId,
-            pet.name,
-            pet.pet_type,
-            product.id,
-            analysis.finalScore,
-            analysis.grade,
-            recForHistory,
-            JSON.stringify({ ...analysis, aiInsights }),
-          ]
-        );
-        console.log('📜 [ANALYZE] Scan history saved:', scanId);
+        // Upsert: same user + same product → update
+        const existing = userId && product.id
+          ? await query('SELECT id FROM scan_history WHERE user_id = ? AND product_id = ? LIMIT 1', [userId, product.id])
+          : [];
+        if (existing.length > 0) {
+          await query(
+            `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, analysis_json = ?, pet_name = ?, pet_type = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,
+            [analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights }), pet.name, pet.pet_type, existing[0].id]
+          );
+          console.log('📜 [ANALYZE] Scan history updated:', existing[0].id);
+        } else {
+          const scanId = uuidv4();
+          await query(
+            `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
+             VALUES (?, ?, ?, ?, ?, ?, 'product_search', ?, ?, ?, NULL, ?)`,
+            [scanId, userId, deviceId, pet.name, pet.pet_type, product.id, analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights })]
+          );
+          console.log('📜 [ANALYZE] Scan history saved:', scanId);
+        }
       } catch (historyErr) {
         console.error('[ANALYZE] Failed to save scan history:', historyErr.message);
       }

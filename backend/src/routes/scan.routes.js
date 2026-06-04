@@ -87,24 +87,30 @@ async function saveScanHistoryEntry(entry) {
           analysisJson,
         ]
       );
+    } else if (userId && productId) {
+      // Upsert: same user + same product → update existing row
+      const existing = await query(
+        `SELECT id FROM scan_history WHERE user_id = ? AND product_id = ? LIMIT 1`,
+        [userId, productId]
+      );
+      if (existing.length > 0) {
+        await query(
+          `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, ocr_extracted_text = ?, analysis_json = ?, scan_type = ?, pet_name = ?, pet_type = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,
+          [finalScore, grade, rec, ocrExtractedText, analysisJson, scanType, petName, petType, existing[0].id]
+        );
+        console.log(`📜 [scan_history] UPDATED existing id=${existing[0].id} for product=${productLabel}`);
+      } else {
+        await query(
+          `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [scanId, userId, deviceId || null, petName, petType, productId, scanType, finalScore, grade, rec, ocrExtractedText, analysisJson]
+        );
+      }
     } else {
       await query(
         `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          scanId,
-          userId,
-          deviceId || null,
-          petName,
-          petType,
-          productId,
-          scanType,
-          finalScore,
-          grade,
-          rec,
-          ocrExtractedText,
-          analysisJson,
-        ]
+        [scanId, userId, deviceId || null, petName, petType, productId, scanType, finalScore, grade, rec, ocrExtractedText, analysisJson]
       );
     }
     console.log(
@@ -1729,7 +1735,11 @@ router.post('/quick-analyze', optionalAuth, async (req, res, next) => {
       return res.status(404).json({ error: 'Product not found or has no ingredient data' });
     }
 
-    const ingredientsList = ingredientAnalyzer.parseIngredientText(product.raw_ingredients_text);
+    const rawText = product.raw_ingredients_text;
+    const isUserConfirmed = product.source === 'user_scan';
+    const ingredientsList = isUserConfirmed
+      ? rawText.split(',').map(s => s.trim()).filter(Boolean)
+      : ingredientAnalyzer.parseIngredientText(rawText);
     if (ingredientsList.length === 0) {
       return res.status(422).json({ error: 'Could not parse ingredients for this product' });
     }

@@ -477,7 +477,7 @@ class ProductService {
     }
 
     let allergenFilter = '';
-    const params = [productId, product.product_type, petType];
+    const params = [productId, product.product_type, petType, productId, productId];
 
     for (const allergen of allergens) {
       allergenFilter += ` AND LOWER(p.raw_ingredients_text) NOT LIKE ?`;
@@ -501,6 +501,7 @@ class ProductService {
         AND (p.target_pet_type = ? OR p.target_pet_type = 'both')
         AND p.raw_ingredients_text IS NOT NULL
         AND p.raw_ingredients_text != ''
+        AND NOT (p.name = (SELECT name FROM products WHERE id = ?) AND p.brand <=> (SELECT brand FROM products WHERE id = ?))
         ${allergenFilter}
       LIMIT ?
     `;

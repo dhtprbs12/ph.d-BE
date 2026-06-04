@@ -45,11 +45,13 @@ const optionalAuth = async (req, res, next) => {
       const users = await query('SELECT id, email, name FROM users WHERE id = ?', [decoded.userId]);
       if (users.length > 0) {
         req.user = users[0];
+      } else {
+        console.warn(`[optionalAuth] Token valid but user not found in DB: userId=${decoded.userId}`);
       }
     }
     next();
   } catch (error) {
-    // Silently continue without auth for optional routes
+    console.warn(`[optionalAuth] Token verification failed: ${error.name} — ${error.message}`);
     next();
   }
 };
