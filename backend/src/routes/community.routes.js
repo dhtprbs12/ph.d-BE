@@ -24,20 +24,20 @@ router.get('/trending', async (req, res, next) => {
 
     const rows = await query(`
       SELECT 
-        p.id,
+        MAX(p.id) as id,
         p.name,
         p.brand,
-        p.product_type,
-        p.image_url,
-        p.target_pet_type,
-        COALESCE(p.base_dog_score, p.base_cat_score) as score,
+        MAX(p.product_type) as product_type,
+        MAX(p.image_url) as image_url,
+        MAX(p.target_pet_type) as target_pet_type,
+        MAX(COALESCE(p.base_dog_score, p.base_cat_score)) as score,
         COUNT(sh.id) as weekly_scans
       FROM scan_history sh
       JOIN products p ON sh.product_id = p.id
       WHERE sh.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
         ${productTypeFilter}
         ${petTypeFilter}
-      GROUP BY p.id
+      GROUP BY p.name, p.brand
       HAVING weekly_scans >= 1
       ORDER BY weekly_scans DESC
       LIMIT 10

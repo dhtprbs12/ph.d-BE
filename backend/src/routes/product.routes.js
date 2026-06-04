@@ -862,6 +862,105 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
 });
 
 /**
+ * GET /api/products/:id/cached-review
+ * Lightweight endpoint for Community tab — NO AI calls, NO re-analysis.
+ * Reads from product_review_cache + per-ingredient cache + rule-based condition warnings.
+ */
+router.get('/:id/cached-review', optionalAuth, async (req, res, next) => {
+  try {
+    const productId = req.params.id;
+    const { petType = 'dog', petName = 'Pet', healthConditions } = req.query;
+    const parsedConditions = safeJsonParse(healthConditions, []);
+
+    const product = await productService.findById(productId);
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    // Parse ingredients (simple comma split for user-confirmed products)
+    const rawText = product.raw_ingredients_text || '';
+    const ingredientsList = product.source === 'user_scan'
+      ? rawText.split(',').map(s => s.trim()).filter(Boolean)
+      : ingredientAnalyzer.parseIngredientText(rawText);
+
+    if (ingredientsList.length === 0) {
+      return res.status(400).json({ error: 'Product has no ingredients' });
+    }
+
+    // Read holistic review from cache
+    const ingredientHash = product.ingredient_hash || productService.generateIngredientHash(ingredientsList);
+    const isTreat = product.product_type === 'treats' || product.product_type === 'supplement' || ingredientsList.length <= 6;
+    const productTypeLabel = isTreat ? 'treats' : 'food';
+    const conditionHash = getSingleConditionHash('healthy', productTypeLabel);
+
+    const cached = await query(
+      `SELECT * FROM product_review_cache WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
+      [ingredientHash, conditionHash, petType]
+    );
+
+    if (cached.length === 0) {
+      return res.status(404).json({ error: 'No cached review found — product needs initial scan first' });
+    }
+
+    const review = cached[0];
+
+    // Per-ingredient risk levels from ai_assessment_cache (no AI calls)
+    const ingredientDetails = await Promise.all(
+      ingredientsList.map(async (name, i) => {
+        const normalized = ingredientAnalyzer.normalizeIngredientName(name);
+        try {
+          const rows = await query(
+            `SELECT risk_score, explanation, benefit FROM ai_assessment_cache WHERE normalized_name = ? AND pet_type = ? AND conditions_hash LIKE 'healthy_%' LIMIT 1`,
+            [normalized, petType]
+          );
+          if (rows.length > 0) {
+            const riskScore = rows[0].risk_score || 0;
+            let riskLevel = 'safe';
+            if (riskScore > 30) riskLevel = 'danger';
+            else if (riskScore > 15) riskLevel = 'high';
+            else if (riskScore > 0) riskLevel = 'moderate';
+            else if (riskScore > -10) riskLevel = 'low';
+            return { name, position: i + 1, riskLevel, riskScore, explanation: rows[0].explanation || '', benefit: rows[0].benefit || '' };
+          }
+        } catch (e) {}
+        return { name, position: i + 1, riskLevel: 'safe', riskScore: 0, explanation: '', benefit: '' };
+      })
+    );
+
+    // Condition warnings (rule-based, no AI)
+    const pet = { id: 'community', name: petName, pet_type: petType, healthConditions: parsedConditions };
+    const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, parsedConditions);
+
+    res.json({
+      product: {
+        id: product.id,
+        name: product.name,
+        brand: product.brand,
+        image_url: product.image_url,
+        product_type: product.product_type,
+      },
+      analysis: {
+        finalScore: review.final_score,
+        grade: review.grade,
+        recommendation: review.recommendation || 'acceptable',
+        summary: review.ai_summary || '',
+        ingredients: ingredientDetails,
+      },
+      aiInsights: {
+        topBenefits: safeJsonParse(review.positives, []),
+        topConcerns: safeJsonParse(review.key_issues, []),
+        conditionWarnings,
+        aiGenerated: false,
+      },
+      pet: { id: 'community', name: petName, petType },
+    });
+  } catch (error) {
+    console.error('[CACHED-REVIEW] Error:', error.message);
+    next(error);
+  }
+});
+
+/**
  * POST /api/products/:id/alternatives
  * Get safer alternative products with personalized scores
  * Uses cache + AI fallback (same pattern as analyze endpoint)
