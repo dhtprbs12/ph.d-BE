@@ -349,8 +349,10 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     // Pet-specific concerns are handled via rule-based warnings (no AI needed)
     const healthConditions = pet.healthConditions || [];
     const hasConditions = healthConditions.length > 0;
-    const productType = extracted.productType || product?.product_type || 
+    const rawProductType = extracted.productType || product?.product_type || 
       (ingredientsList.length <= 6 ? 'treats' : 'food');
+    const isTreatProduct = rawProductType === 'treats' || rawProductType === 'supplement' || ingredientsList.length <= 6;
+    const productType = isTreatProduct ? 'treats' : 'food';
     
     // Always evaluate as "healthy" — one universal score per product
     const conditionsToEvaluate = ['healthy'];
@@ -2128,8 +2130,10 @@ router.post('/label', optionalAuth, upload.single('image'), async (req, res, nex
     // UNIVERSAL SCORING — always score as "healthy" baseline
     const healthConditions = pet.healthConditions || [];
     const hasConditions = healthConditions.length > 0;
-    const productType = extracted.productType || product?.product_type || 
+    const rawProductType2 = extracted.productType || product?.product_type || 
       (ingredientsList.length <= 6 ? 'treats' : 'food');
+    const isTreatProduct2 = rawProductType2 === 'treats' || rawProductType2 === 'supplement' || ingredientsList.length <= 6;
+    const productType = isTreatProduct2 ? 'treats' : 'food';
     
     // Always evaluate as "healthy" — universal score
     const conditionsToEvaluateSync = ['healthy'];
