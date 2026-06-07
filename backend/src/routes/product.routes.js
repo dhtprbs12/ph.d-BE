@@ -904,31 +904,42 @@ router.get('/:id/cached-review', optionalAuth, async (req, res, next) => {
 
     const review = cached[0];
 
-    // Per-ingredient risk levels from ai_assessment_cache (no AI calls)
+    // Rule-based ingredient analysis (fast, no AI)
+    const pet = { id: 'community', name: petName, pet_type: petType, healthConditions: parsedConditions };
+    const ruleBasedAnalysis = await ingredientAnalyzer.analyzeIngredients(ingredientsList, pet);
+    const ruleBasedIngredients = ruleBasedAnalysis.ingredients || [];
+
+    // Enrich with AI descriptions from cache (no AI calls)
     const ingredientDetails = await Promise.all(
-      ingredientsList.map(async (name, i) => {
-        const normalized = ingredientAnalyzer.normalizeIngredientName(name);
+      ruleBasedIngredients.map(async (ing) => {
+        const normalized = ing.normalizedName || ingredientAnalyzer.normalizeIngredientName(ing.name);
+        let explanation = ing.explanation || '';
+        let benefit = ing.positiveBenefit || '';
         try {
           const rows = await query(
             `SELECT risk_score, explanation, benefit FROM ai_assessment_cache WHERE normalized_name = ? AND pet_type = ? AND conditions_hash LIKE 'healthy_%' LIMIT 1`,
             [normalized, petType]
           );
           if (rows.length > 0) {
-            const riskScore = rows[0].risk_score || 0;
-            let riskLevel = 'safe';
-            if (riskScore > 30) riskLevel = 'danger';
-            else if (riskScore > 15) riskLevel = 'high';
-            else if (riskScore > 0) riskLevel = 'moderate';
-            else if (riskScore > -10) riskLevel = 'low';
-            return { name, position: i + 1, riskLevel, riskScore, explanation: rows[0].explanation || '', benefit: rows[0].benefit || '' };
+            if (rows[0].explanation) explanation = rows[0].explanation;
+            if (rows[0].benefit) benefit = rows[0].benefit;
           }
         } catch (e) {}
-        return { name, position: i + 1, riskLevel: 'safe', riskScore: 0, explanation: '', benefit: '' };
+        return {
+          name: ing.name,
+          position: ing.position,
+          riskLevel: ing.riskLevel || 'safe',
+          adjustedRiskScore: ing.adjustedRiskScore || 0,
+          isToxic: ing.isToxic || false,
+          isAllergenMatch: ing.isAllergenMatch || false,
+          isHealthConcern: ing.isHealthConcern || false,
+          explanation,
+          positiveBenefit: benefit,
+        };
       })
     );
 
     // Condition warnings (rule-based, no AI)
-    const pet = { id: 'community', name: petName, pet_type: petType, healthConditions: parsedConditions };
     const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, parsedConditions);
 
     res.json({
