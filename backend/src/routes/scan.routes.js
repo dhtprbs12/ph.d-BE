@@ -1482,77 +1482,31 @@ router.post('/back/:pendingScanId', optionalAuth, upload.single('image'), async 
     const existingLocalImage = frontData.imageUrl || null; // Already in our DB (local path)
     const externalImageUrl = frontData.externalImageUrl || null; // From Google (needs download)
 
-    // Clean up pending front label
-    pendingFrontLabels.delete(pendingScanId);
+    // Don't delete front label data yet — confirm-ingredients will need it
+    // pendingFrontLabels.delete(pendingScanId); — moved to confirm-ingredients
 
-    // Generate scan ID for async processing
-    const scanId = uuidv4();
-
-    // Initialize analysis store
-    analysisStore.set(scanId, {
-      status: 'pending',
-      createdAt: Date.now(),
-      extracted: mergedExtracted,
-      ingredientCount: ingredientsList.length
-    });
-
-    // Find or create product
-    // Match on ingredient hash + brand + name to avoid merging different SKUs
-    // that happen to share an identical ingredient list (same OEM, etc.)
-    const ingredientHash = productService.generateIngredientHash(ingredientsList);
-    let product = await productService.findByIngredientHash(
-      ingredientHash,
-      mergedExtracted.brand,
-      mergedExtracted.productName
-    );
-    
-    if (!product) {
-      product = await productService.createFromScan({
-        name: mergedExtracted.productName || 'Unknown Product',
-        brand: mergedExtracted.brand,
-        productType: mergedExtracted.productType || 'dry_food',
-        texture: mergedExtracted.texture,
-        targetPetType: mergedExtracted.targetPet || petType,
-        lifeStage: mergedExtracted.lifeStage || 'all',
-        rawIngredientsText: mergedExtracted.rawIngredientsText || ingredientsList.join(', '),
-        ingredientsList,
-        imageUrl: existingLocalImage || null // Only set if we already had a local image
-      });
-    }
-
-    // Download and save product image if needed (non-blocking)
-    if (!product.image_url) {
-      if (existingLocalImage) {
-        // Already have a local image from a previous scan of this product
-        await query('UPDATE products SET image_url = ? WHERE id = ?', [existingLocalImage, product.id]);
-        product.image_url = existingLocalImage;
-        console.log(`⚡ [BACK] Reused existing local image: ${existingLocalImage}`);
-      } else if (externalImageUrl) {
-        // Download from Google and save locally (non-blocking)
-        imageService.downloadAndSave(externalImageUrl, product.id)
-          .then(async (localUrl) => {
-            if (localUrl) {
-              await imageService.updateProductImageUrl(product.id, localUrl);
-              console.log(`🖼️ [BACK] Downloaded & saved image: ${localUrl}`);
-            }
-          })
-          .catch(err => console.log('⚠️ [BACK] Image download failed:', err.message));
-      }
-    } else {
-      console.log(`⚡ [BACK] Product already has image: ${product.image_url}`);
-    }
-
-    // Start background analysis
-    processAnalysisInBackground(scanId, ingredientsList, pet, mergedExtracted, product, deviceId, userId);
-
-    // Return immediately with scanId for polling
+    // OCR-only: return ingredients for user review/editing.
+    // Product creation and analysis happen in POST /confirm-ingredients
+    // after the user confirms/edits the ingredient list.
     const flatIngredients = ingredientAnalyzer.parseIngredientTextFlat(
       mergedExtracted.rawIngredientsText || ingredientsList.join(', ')
     );
 
+    // Store front data back so confirm-ingredients can access it
+    pendingFrontLabels.set(pendingScanId, {
+      ...frontData,
+      productName: mergedExtracted.productName,
+      brand: mergedExtracted.brand,
+      targetPet: mergedExtracted.targetPet,
+      productType: mergedExtracted.productType,
+      texture: mergedExtracted.texture,
+      lifeStage: mergedExtracted.lifeStage,
+      imageUrl: existingLocalImage || frontData?.imageUrl || null,
+      externalImageUrl: externalImageUrl || frontData?.externalImageUrl || null,
+    });
+
     res.json({
-      scanId,
-      status: 'processing',
+      status: 'ingredients_extracted',
       scanType: 'two_step_scan',
       extracted: {
         imageType: 'merged',
@@ -1563,15 +1517,7 @@ router.post('/back/:pendingScanId', optionalAuth, upload.single('image'), async 
         confidence: mergedExtracted.confidence || 0.95
       },
       ingredientsForEditor: flatIngredients,
-      product: product ? {
-        id: product.id,
-        name: product.name,
-        brand: product.brand,
-        image_url: product.image_url,
-        isNew: !product.scan_count || product.scan_count === 0
-      } : null,
-      pollUrl: `/api/scan/${scanId}/result`,
-      message: 'Analysis started. Poll for results.'
+      message: 'Ingredients extracted. Please review and confirm.'
     });
 
   } catch (error) {
@@ -1674,6 +1620,23 @@ router.post('/confirm-ingredients', optionalAuth, async (req, res, next) => {
         ingredientsList,
         imageUrl: frontData?.imageUrl || null
       });
+    }
+
+    // Handle product image (non-blocking)
+    if (!product.image_url && frontData) {
+      if (frontData.imageUrl) {
+        await query('UPDATE products SET image_url = ? WHERE id = ?', [frontData.imageUrl, product.id]);
+        product.image_url = frontData.imageUrl;
+      } else if (frontData.externalImageUrl) {
+        imageService.downloadAndSave(frontData.externalImageUrl, product.id)
+          .then(async (localUrl) => {
+            if (localUrl) {
+              await imageService.updateProductImageUrl(product.id, localUrl);
+              console.log(`🖼️ [CONFIRM] Downloaded & saved image: ${localUrl}`);
+            }
+          })
+          .catch(err => console.log('⚠️ [CONFIRM] Image download failed:', err.message));
+      }
     }
 
     const scanId = uuidv4();
