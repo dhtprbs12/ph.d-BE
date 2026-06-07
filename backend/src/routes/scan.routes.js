@@ -3341,12 +3341,15 @@ router.get('/:id', optionalAuth, async (req, res, next) => {
       return res.status(404).json({ error: 'Scan not found' });
     }
 
-    // Parse stored analysis JSON
-    try {
-      scan.analysis = JSON.parse(scan.analysis_json || '{}');
-    } catch {
+    // Parse stored analysis JSON (mysql2 may auto-parse JSON columns)
+    if (scan.analysis_json) {
+      scan.analysis = typeof scan.analysis_json === 'string'
+        ? JSON.parse(scan.analysis_json)
+        : scan.analysis_json;
+    } else {
       scan.analysis = {};
     }
+    delete scan.analysis_json;
 
     res.json({ scan });
   } catch (error) {
