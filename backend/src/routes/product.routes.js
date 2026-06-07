@@ -869,7 +869,7 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
 router.get('/:id/cached-review', optionalAuth, async (req, res, next) => {
   try {
     const productId = req.params.id;
-    const { petType = 'dog', petName = 'Pet', healthConditions } = req.query;
+    const { petName = 'Pet', healthConditions } = req.query;
     const parsedConditions = safeJsonParse(healthConditions, []);
 
     const product = await productService.findById(productId);
@@ -877,69 +877,26 @@ router.get('/:id/cached-review', optionalAuth, async (req, res, next) => {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    // Parse ingredients (simple comma split for user-confirmed products)
+    // Find the most recent scan_history entry for this product (any user)
+    const [scanRow] = await query(
+      `SELECT analysis_json, pet_name, pet_type FROM scan_history WHERE product_id = ? ORDER BY created_at DESC LIMIT 1`,
+      [productId]
+    );
+
+    if (!scanRow || !scanRow.analysis_json) {
+      return res.status(404).json({ error: 'No analysis found — product needs initial scan first' });
+    }
+
+    // mysql2 may auto-parse JSON columns
+    const analysis = typeof scanRow.analysis_json === 'string'
+      ? JSON.parse(scanRow.analysis_json)
+      : scanRow.analysis_json;
+
+    // Generate condition warnings for the viewing user's pet (rule-based, fast)
     const rawText = product.raw_ingredients_text || '';
     const ingredientsList = product.source === 'user_scan'
       ? rawText.split(',').map(s => s.trim()).filter(Boolean)
       : ingredientAnalyzer.parseIngredientText(rawText);
-
-    if (ingredientsList.length === 0) {
-      return res.status(400).json({ error: 'Product has no ingredients' });
-    }
-
-    // Read holistic review from cache
-    const ingredientHash = product.ingredient_hash || productService.generateIngredientHash(ingredientsList);
-    const isTreat = product.product_type === 'treats' || product.product_type === 'supplement' || ingredientsList.length <= 6;
-    const productTypeLabel = isTreat ? 'treats' : 'food';
-    const conditionHash = getSingleConditionHash('healthy', productTypeLabel);
-
-    const cached = await query(
-      `SELECT * FROM product_review_cache WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
-      [ingredientHash, conditionHash, petType]
-    );
-
-    if (cached.length === 0) {
-      return res.status(404).json({ error: 'No cached review found — product needs initial scan first' });
-    }
-
-    const review = cached[0];
-
-    // Rule-based ingredient analysis (fast, no AI)
-    const pet = { id: 'community', name: petName, pet_type: petType, healthConditions: parsedConditions };
-    const ruleBasedAnalysis = await ingredientAnalyzer.analyzeIngredients(ingredientsList, pet);
-    const ruleBasedIngredients = ruleBasedAnalysis.ingredients || [];
-
-    // Enrich with AI descriptions from cache (no AI calls)
-    const ingredientDetails = await Promise.all(
-      ruleBasedIngredients.map(async (ing) => {
-        const normalized = ing.normalizedName || ingredientAnalyzer.normalizeIngredientName(ing.name);
-        let explanation = ing.explanation || '';
-        let benefit = ing.positiveBenefit || '';
-        try {
-          const rows = await query(
-            `SELECT risk_score, explanation, benefit FROM ai_assessment_cache WHERE normalized_name = ? AND pet_type = ? AND conditions_hash LIKE 'healthy_%' LIMIT 1`,
-            [normalized, petType]
-          );
-          if (rows.length > 0) {
-            if (rows[0].explanation) explanation = rows[0].explanation;
-            if (rows[0].benefit) benefit = rows[0].benefit;
-          }
-        } catch (e) {}
-        return {
-          name: ing.name,
-          position: ing.position,
-          riskLevel: ing.riskLevel || 'safe',
-          adjustedRiskScore: ing.adjustedRiskScore || 0,
-          isToxic: ing.isToxic || false,
-          isAllergenMatch: ing.isAllergenMatch || false,
-          isHealthConcern: ing.isHealthConcern || false,
-          explanation,
-          positiveBenefit: benefit,
-        };
-      })
-    );
-
-    // Condition warnings (rule-based, no AI)
     const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, parsedConditions);
 
     res.json({
@@ -950,20 +907,14 @@ router.get('/:id/cached-review', optionalAuth, async (req, res, next) => {
         image_url: product.image_url,
         product_type: product.product_type,
       },
-      analysis: {
-        finalScore: review.final_score,
-        grade: review.grade,
-        recommendation: review.recommendation || 'acceptable',
-        summary: review.ai_summary || '',
-        ingredients: ingredientDetails,
-      },
+      analysis,
       aiInsights: {
-        topBenefits: safeJsonParse(review.positives, []),
-        topConcerns: safeJsonParse(review.key_issues, []),
+        topBenefits: analysis.positives || [],
+        topConcerns: analysis.keyIssues || [],
         conditionWarnings,
-        aiGenerated: false,
+        aiGenerated: true,
       },
-      pet: { id: 'community', name: petName, petType },
+      pet: { id: 'community', name: petName, petType: scanRow.pet_type || 'dog' },
     });
   } catch (error) {
     console.error('[CACHED-REVIEW] Error:', error.message);
