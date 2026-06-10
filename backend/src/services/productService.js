@@ -693,74 +693,74 @@ class ProductService {
 
   static FUZZY_MATCH_THRESHOLD = 0.65;
 
+  static LIFE_STAGE_TOKENS = new Set(['puppy', 'kitten', 'adult', 'senior', 'junior', 'mature']);
+
+  _normalizeLifeStage(val) {
+    if (!val) return null;
+    const lower = String(val).toLowerCase().trim();
+    if (lower === 'all' || lower === '') return null;
+    return lower;
+  }
+
+  _lifeStagesCompatible(scannedLifeStage, dbLifeStage) {
+    const a = this._normalizeLifeStage(scannedLifeStage);
+    const b = this._normalizeLifeStage(dbLifeStage);
+    if (!a || !b) return false; // null on either side → not a confident match
+    return a === b;
+  }
+
   /**
-   * Search for a product by brand and product name.
-   * Returns { product, matchType } where matchType is 'exact' | 'fuzzy' | null.
+   * Search for a product by brand and product name with life stage awareness.
+   * Always returns candidates (never auto-matches). The caller decides how to present them.
+   * @returns {{ candidates: Array<{product, score}> }}
    */
-  async findByBrandAndName(brand, productName) {
-    if (!brand && !productName) return { product: null, matchType: null };
+  async findByBrandAndName(brand, productName, lifeStage = null) {
+    if (!brand && !productName) return { candidates: [] };
 
     const normBrand = this.normalizeForMatch(brand);
     const normName = this.normalizeForMatch(productName);
 
-    // 1) Exact match: brand AND name both match exactly (normalized)
-    if (normBrand && normName) {
-      const exactRows = await query(
-        `SELECT * FROM products WHERE 1=1 LIMIT 200`
-      );
-      const exact = exactRows.find(r =>
-        this.normalizeForMatch(r.brand) === normBrand &&
-        this.normalizeForMatch(r.name) === normName
-      );
-      if (exact) return { product: exact, matchType: 'exact' };
-    }
+    const allRows = await query(
+      `SELECT * FROM products WHERE brand IS NOT NULL OR name IS NOT NULL LIMIT 500`
+    );
 
-    // 2) Fuzzy match: brand exact + name Jaccard above threshold
-    if (normBrand) {
-      const brandRows = await query(
-        `SELECT * FROM products WHERE brand IS NOT NULL LIMIT 500`
-      );
-      const brandMatches = brandRows.filter(r =>
-        this.normalizeForMatch(r.brand) === normBrand
-      );
-      if (brandMatches.length > 0 && normName) {
-        let bestRow = null;
-        let bestScore = 0;
-        for (const r of brandMatches) {
-          const score = this._jaccardTokenSimilarity(normName, this.normalizeForMatch(r.name));
-          if (score > bestScore) {
-            bestScore = score;
-            bestRow = r;
-          }
-        }
-        if (bestRow && bestScore >= ProductService.FUZZY_MATCH_THRESHOLD) {
-          return { product: bestRow, matchType: 'fuzzy' };
+    const scored = [];
+
+    for (const r of allRows) {
+      const dbBrand = this.normalizeForMatch(r.brand);
+      const dbName = this.normalizeForMatch(r.name);
+
+      let nameScore = 0;
+
+      // Brand must match (exact normalized) for any candidate to qualify
+      if (normBrand && dbBrand !== normBrand) continue;
+      if (!normBrand && !dbBrand) continue;
+
+      // Name similarity
+      if (normName && dbName) {
+        if (dbName === normName) {
+          nameScore = 1.0;
+        } else {
+          nameScore = this._jaccardTokenSimilarity(normName, dbName);
         }
       }
+
+      if (nameScore < this.constructor.FUZZY_MATCH_THRESHOLD) continue;
+
+      // Life stage filter: both must have a value and they must match
+      if (lifeStage) {
+        if (!this._lifeStagesCompatible(lifeStage, r.target_life_stage)) continue;
+      } else {
+        // Scanned life stage is null → only match if DB also has no specific life stage
+        const dbLs = this._normalizeLifeStage(r.target_life_stage);
+        if (dbLs) continue;
+      }
+
+      scored.push({ product: r, score: nameScore });
     }
 
-    // 3) Broader fuzzy: Jaccard on combined "brand + name" string
-    if (normBrand || normName) {
-      const combined = `${normBrand} ${normName}`.trim();
-      const allRows = await query(
-        `SELECT * FROM products WHERE brand IS NOT NULL OR name IS NOT NULL LIMIT 500`
-      );
-      let bestRow = null;
-      let bestScore = 0;
-      for (const r of allRows) {
-        const dbCombined = `${this.normalizeForMatch(r.brand)} ${this.normalizeForMatch(r.name)}`.trim();
-        const score = this._jaccardTokenSimilarity(combined, dbCombined);
-        if (score > bestScore) {
-          bestScore = score;
-          bestRow = r;
-        }
-      }
-      if (bestRow && bestScore >= ProductService.FUZZY_MATCH_THRESHOLD) {
-        return { product: bestRow, matchType: 'fuzzy' };
-      }
-    }
-
-    return { product: null, matchType: null };
+    scored.sort((a, b) => b.score - a.score);
+    return { candidates: scored.slice(0, 5) };
   }
 }
 

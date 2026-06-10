@@ -1107,34 +1107,15 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     // Normalize product name (strip filler words)
     const normalizedName = productService.normalizeProductName(extracted.productName);
 
-    // ─── DB Lookup: exact or fuzzy match ───
-    const { product: matchedProduct, matchType } = await productService.findByBrandAndName(
+    // ─── DB Lookup: life-stage-aware candidate search ───
+    const { candidates: dbCandidates } = await productService.findByBrandAndName(
       extracted.brand,
-      normalizedName || extracted.productName
+      normalizedName || extracted.productName,
+      extracted.lifeStage || null
     );
 
-    if (matchedProduct && (matchType === 'exact' || matchType === 'fuzzy')) {
-      console.log(`✅ [FRONT] DB match found (${matchType}): "${matchedProduct.brand} ${matchedProduct.name}" (id=${matchedProduct.id})`);
-      return res.json({
-        success: true,
-        matchType,
-        product: {
-          id: matchedProduct.id,
-          name: matchedProduct.name,
-          brand: matchedProduct.brand,
-          imageUrl: matchedProduct.image_url,
-          productType: matchedProduct.product_type,
-          targetPetType: matchedProduct.target_pet_type,
-        },
-        captured: {
-          productName: normalizedName || extracted.productName,
-          brand: extracted.brand,
-          targetPet: extracted.targetPet,
-          productType: extracted.productType,
-          packageShape: extracted.packageShape,
-        },
-        nextStep: 'Product found in database. You can view analysis directly.'
-      });
+    if (dbCandidates.length > 0) {
+      console.log(`✅ [FRONT] DB candidates found: ${dbCandidates.length} (top: "${dbCandidates[0].product.brand} ${dbCandidates[0].product.name}")`);
     }
 
     // Generate pending scan ID
@@ -1238,7 +1219,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
           // so that any token match brings the row into the pool.
           const joiner = hasBrand ? ' AND ' : ' OR ';
           candidateRows = await query(
-            `SELECT id, name, brand, image_url, product_type, target_pet_type, scan_count
+            `SELECT id, name, brand, image_url, product_type, target_pet_type, target_life_stage, scan_count
              FROM products
              WHERE (${where.join(joiner)})
                AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''
@@ -1292,6 +1273,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
           imageUrl: r.image_url,
           productType: r.product_type,
           targetPetType: r.target_pet_type,
+          lifeStage: r.target_life_stage || null,
         }));
 
         console.log(
@@ -1302,6 +1284,25 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       } catch (err) {
         console.log('⚠️ [FRONT] Candidate search failed:', err.message);
       }
+    }
+
+    // Merge dbCandidates (life-stage-aware) with token-based candidates.
+    // dbCandidates come first (higher confidence), then token-based that aren't duplicates.
+    if (dbCandidates.length > 0) {
+      const dbIds = new Set(dbCandidates.map(c => c.product.id));
+      const tokenOnly = candidates.filter(c => !dbIds.has(c.id));
+      candidates = [
+        ...dbCandidates.map(c => ({
+          id: c.product.id,
+          name: c.product.name,
+          brand: c.product.brand,
+          imageUrl: c.product.image_url,
+          productType: c.product.product_type,
+          targetPetType: c.product.target_pet_type,
+          lifeStage: c.product.target_life_stage || null,
+        })),
+        ...tokenOnly,
+      ].slice(0, 5);
     }
 
     // Background: get product image (non-blocking)
@@ -1366,7 +1367,6 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
 
     res.json({
       success: true,
-      matchType: null,
       pendingScanId,
       captured: {
         productName: normalizedName || extracted.productName,
