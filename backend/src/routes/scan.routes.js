@@ -3288,7 +3288,7 @@ router.get('/history', optionalAuth, async (req, res, next) => {
     const { petName, petType } = req.query;
     
     let sql = `
-      SELECT sh.*, p.name as product_name, p.brand as product_brand, p.image_url as product_image
+      SELECT sh.*, p.name as product_name, p.brand as product_brand, p.image_url as product_image, p.target_life_stage as product_life_stage
       FROM scan_history sh
       LEFT JOIN products p ON sh.product_id = p.id
       WHERE sh.user_id = ?
