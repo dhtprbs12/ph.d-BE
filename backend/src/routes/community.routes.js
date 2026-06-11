@@ -195,4 +195,50 @@ router.get('/my-saved', authenticateToken, async (req, res, next) => {
   }
 });
 
+// GET /api/community/recent-activity
+// Returns recent anonymized scan activity for social proof on home screen
+router.get('/recent-activity', async (req, res, next) => {
+  try {
+    const rows = await query(`
+      SELECT 
+        p.name as product_name,
+        p.brand as product_brand,
+        sh.grade,
+        sh.final_score,
+        sh.pet_type,
+        sh.created_at
+      FROM scan_history sh
+      JOIN products p ON sh.product_id = p.id
+      WHERE sh.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+        AND p.name IS NOT NULL
+      ORDER BY sh.created_at DESC
+      LIMIT 20
+    `);
+
+    const activity = rows.map(r => ({
+      productName: r.product_name,
+      brand: r.product_brand,
+      grade: r.grade,
+      score: r.final_score,
+      petType: r.pet_type,
+      timeAgo: getTimeAgo(r.created_at),
+    }));
+
+    res.json({ activity });
+  } catch (error) {
+    next(error);
+  }
+});
+
+function getTimeAgo(date) {
+  const now = Date.now();
+  const then = new Date(date).getTime();
+  const diffMin = Math.floor((now - then) / 60000);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
+}
+
 module.exports = router;
