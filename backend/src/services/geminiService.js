@@ -173,14 +173,21 @@ Rules:
 
 productName rules (IMPORTANT):
 - Return the SHORTEST name that distinguishes this SKU from other products of the same brand.
-- INCLUDE: product line name, flavor/protein source, size variant (e.g. "Large Breed", "Small Breed")
-- EXCLUDE: marketing adjectives and info already captured in other fields:
-  "Recipe", "Formula", "With", "For Dogs", "For Cats", "Premium", "Natural",
-  "Complete", "Balanced", "Grain-Free" (use productType/texture instead),
-  life stage words like "Adult", "Puppy", "Kitten", "Senior" (use lifeStage instead),
-  pet type words like "Dog Food", "Cat Food" (use targetPet instead)
+- INCLUDE: product line name (even if it contains adjective-like words), flavor/protein source, size variant (e.g. "Large Breed", "Small Breed")
+- ONLY remove words from this EXACT exclude list (nothing else):
+  "Recipe", "Formula", "With", "Made With", "For Dogs", "For Cats",
+  "Premium", "Natural", "Delicious", "Nutritious", "Healthy",
+  "High Protein", "Real", "Grain-Free", "Grain Inclusive",
+  "All Breeds", "Balanced"
+- Also exclude (captured in other fields):
+  Life stage words: "Adult", "Puppy", "Kitten", "Senior" → lifeStage field
+  Pet type words: "Dog Food", "Cat Food" → targetPet field
+- Do NOT remove words that are part of the product LINE/SERIES name.
+  If unsure whether a word is filler vs. line name, KEEP IT.
 - Use Title Case. Replace "AND"/"&" with "&".
 - Examples:
+  "ACANA Wholesome Grains Red Meat & Grains Recipe" → "Wholesome Grains Red Meat"
+  ("Wholesome Grains" is the series name — keep it)
   "BACKCOUNTRY Heartlands Recipe With Beef And Bison" → "Backcountry Heartlands Beef & Bison"
   "Complete Health Natural Grain Free Adult Deboned Chicken & Oatmeal" → "Complete Health Deboned Chicken & Oatmeal"
   "Amazing Grains Original Recipe For Dogs" → "Amazing Grains Original"

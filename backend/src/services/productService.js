@@ -648,14 +648,14 @@ class ProductService {
   // ─── Product Name Normalization ─────────────────────────────────────
 
   static PRODUCT_NAME_FILLER_PATTERNS = [
-    /\b(premium|natural|holistic|wholesome|complete|balanced|nourishing|nutritious)\b/gi,
+    /\b(premium|natural|delicious|nutritious|healthy|nourishing|high protein|real)\b/gi,
     /\b(recipe|formula|food|meal|dinner|entrée|entree|feast|medley|platter|stew)\b/gi,
     /\b(for dogs?|for cats?|for puppies|for kittens|for seniors?|canine|feline)\b/gi,
     /\b(dog food|cat food|puppy food|kitten food)\b/gi,
     /\b(adult|puppy|kitten|senior|all life stages?|all breeds?)\b/gi,
-    /\b(grain[- ]?free|gluten[- ]?free|limited ingredient)\b/gi,
-    /\bwith\b/gi,
-    /\b(new|improved|original)\b/gi,
+    /\b(grain[- ]?free|grain inclusive|gluten[- ]?free)\b/gi,
+    /\b(with|made with)\b/gi,
+    /\b(new|improved)\b/gi,
   ];
 
   normalizeProductName(rawName) {
