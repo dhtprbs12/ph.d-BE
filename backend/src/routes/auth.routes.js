@@ -225,7 +225,7 @@ router.post('/register-nickname', [
     const token = jwt.sign(
       { userId },
       process.env.JWT_SECRET,
-      { expiresIn: '365d' }
+      { expiresIn: process.env.JWT_EXPIRES_IN || '365d' }
     );
 
     console.log(`📱 New nickname user: ${nickname} (id=${userId})`);
@@ -288,7 +288,7 @@ router.post('/login-nickname', [
     const token = jwt.sign(
       { userId: user.id },
       process.env.JWT_SECRET,
-      { expiresIn: '365d' }
+      { expiresIn: process.env.JWT_EXPIRES_IN || '365d' }
     );
 
     console.log(`🔑 Nickname login: ${user.nickname} (id=${user.id})`);
