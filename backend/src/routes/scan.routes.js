@@ -14,7 +14,7 @@ const {
 } = require('../utils/cacheHelpers');
 const imageService = require('../services/imageService');
 const imagePreprocess = require('../services/imagePreprocessService');
-const { optionalAuth } = require('../middleware/auth');
+const { authenticateToken } = require('../middleware/auth');
 
 // Helper: Get recommendation from grade if AI didn't provide one
 function getRecommendationFromGrade(grade) {
@@ -281,7 +281,7 @@ function getUserBadge(scanCount) {
   }
 }
 
-router.get('/user-stats', optionalAuth, async (req, res, next) => {
+router.get('/user-stats', authenticateToken, async (req, res, next) => {
   try {
     const userId = req.user?.id || null;
     
@@ -1391,7 +1391,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
  * POST /api/scan/back/:pendingScanId
  * Step 2: Scan back label (ingredients) and combine with front label data
  */
-router.post('/back/:pendingScanId', optionalAuth, upload.single('image'), async (req, res, next) => {
+router.post('/back/:pendingScanId', authenticateToken, upload.single('image'), async (req, res, next) => {
   try {
     const { pendingScanId } = req.params;
     const { petName, petType, petBreed, petAgeMonths, petWeightKg, petAllergies, petHealthConditions, deviceId } = req.body;
@@ -1531,7 +1531,7 @@ router.post('/back/:pendingScanId', optionalAuth, upload.single('image'), async 
  * User has reviewed & edited the OCR-extracted ingredients in the editor.
  * Accepts the final ingredient list and triggers analysis.
  */
-router.post('/confirm-ingredients', optionalAuth, async (req, res, next) => {
+router.post('/confirm-ingredients', authenticateToken, async (req, res, next) => {
   try {
     const {
       pendingScanId,
@@ -1686,7 +1686,7 @@ router.post('/confirm-ingredients', optionalAuth, async (req, res, next) => {
  * POST /api/scan/quick-analyze
  * Skip back label scan — analyze a known product from the DB for a specific pet
  */
-router.post('/quick-analyze', optionalAuth, async (req, res, next) => {
+router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
   try {
     const { productId, petName, petType, petBreed, petAgeMonths, petWeightKg, petAllergies, petHealthConditions, deviceId } = req.body;
     const userId = req.user?.id || null;
@@ -1822,7 +1822,7 @@ router.get('/pending/:pendingScanId', async (req, res) => {
  * Smart scan - handles both front label (product name) and back label (ingredients)
  * Pet info is sent directly from device (no server-side pet storage)
  */
-router.post('/label', optionalAuth, upload.single('image'), async (req, res, next) => {
+router.post('/label', authenticateToken, upload.single('image'), async (req, res, next) => {
   try {
     // Pet info comes directly from the device
     const { petName, petType, petBreed, petAgeMonths, petWeightKg, petAllergies, petHealthConditions, deviceId } = req.body;
@@ -2589,7 +2589,7 @@ router.get('/:scanId/result', async (req, res, next) => {
  * Take a photo of food and check if it's safe for your pet
  * Uses per-single-condition caching (same pattern as Label Scan)
  */
-router.post('/food-check', optionalAuth, upload.single('image'), async (req, res, next) => {
+router.post('/food-check', authenticateToken, upload.single('image'), async (req, res, next) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No image provided' });
@@ -2807,7 +2807,7 @@ router.post('/food-check', optionalAuth, upload.single('image'), async (req, res
  * POST /api/scan/manual
  * Manually input ingredients text and analyze
  */
-router.post('/manual', optionalAuth, async (req, res, next) => {
+router.post('/manual', authenticateToken, async (req, res, next) => {
   try {
     const { ingredientsText, productName, petName, petType, petAllergies, petHealthConditions, deviceId } = req.body;
     const userId = req.user?.id || null;
@@ -3276,7 +3276,7 @@ router.post('/manual', optionalAuth, async (req, res, next) => {
  * GET /api/scan/history
  * Get device's scan history
  */
-router.get('/history', optionalAuth, async (req, res, next) => {
+router.get('/history', authenticateToken, async (req, res, next) => {
   try {
     const { limit = 20, offset = 0 } = req.query;
     const userId = req.user?.id || null;
@@ -3320,7 +3320,7 @@ router.get('/history', optionalAuth, async (req, res, next) => {
  * GET /api/scan/:id
  * Get specific scan details
  */
-router.get('/:id', optionalAuth, async (req, res, next) => {
+router.get('/:id', authenticateToken, async (req, res, next) => {
   try {
     const userId = req.user?.id || null;
     
