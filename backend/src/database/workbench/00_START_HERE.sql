@@ -1,0 +1,26 @@
+-- =============================================================================
+-- PHD / petfood-analyzer — MySQL Workbench migrations
+-- =============================================================================
+--
+-- HOW TO RUN
+--   1. Workbench에서 Railway(또는 로컬) DB에 연결
+--   2. 왼쪽에서 해당 스키마(데이터베이스) 더블클릭 → default schema 로 선택
+--   3. 아래 파일을 **번호 순서대로** 각각 열고 Execute (⚡) 실행
+--
+-- ORDER (이미 적용된 파일은 스킵해도 됨 — idempotent)
+--   01_helpers.sql              ← 프로시저 1회 (다른 파일이 사용)
+--   02_food_check_cache.sql
+--   03_scan_history_product_search.sql
+--   04_saved_products.sql
+--   05_products_match_columns.sql   ← line_name, match_key, barcode 등
+--   06_split_puppy_kitten_life_stage.sql  ← puppy / kitten 분리
+--
+-- ONLY NEED MATCH COLUMNS?
+--   → 01_helpers.sql 실행 후 05_products_match_columns.sql 만 실행
+--
+-- VERIFY AFTER 05:
+--   DESCRIBE products;
+--   SHOW INDEX FROM products WHERE Key_name LIKE 'idx_products_%';
+-- =============================================================================
+
+SELECT 'Open 01_helpers.sql next' AS next_step;

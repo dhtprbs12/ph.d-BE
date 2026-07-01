@@ -4,6 +4,34 @@ const { query } = require('../database/connection');
 const { v4: uuidv4 } = require('uuid');
 const visionService = require('./visionService');
 const ingredientAnalyzer = require('./ingredientAnalyzer');
+const { resolveLifeStage, ALLOWED_BREED_SIZES } = require('./productMatchKey');
+
+function coerceStringList(value) {
+  if (value == null || value === '') return null;
+  if (Array.isArray(value)) {
+    const list = value.map((v) => String(v).trim()).filter(Boolean);
+    return list.length ? list : null;
+  }
+  if (typeof value === 'string') {
+    const list = value.split(/[,+]/).map((s) => s.trim()).filter(Boolean);
+    return list.length ? list : null;
+  }
+  return null;
+}
+
+function normalizeExtractedSlots(parsed = {}) {
+  const targetPet = parsed.targetPet || null;
+  let breedSize = String(parsed.breedSize || 'all').toLowerCase().trim();
+  if (!ALLOWED_BREED_SIZES.has(breedSize)) breedSize = 'all';
+
+  return {
+    lineName: parsed.lineName || null,
+    primaryProteins: coerceStringList(parsed.primaryProteins),
+    breedSize,
+    dietTags: coerceStringList(parsed.dietTags),
+    lifeStage: parsed.lifeStage ? resolveLifeStage(parsed.lifeStage, targetPet) : null,
+  };
+}
 
 /**
  * GEMINI AI SERVICE
@@ -156,7 +184,11 @@ Return JSON only:
   "productType": "dry_food" | "wet_food" | "treats" | "supplement" | "other" | null,
   "texture": "dry" | "wet" | "semi_moist" | "freeze_dried" | null,
   "targetPet": "dog" | "cat" | "both" | null,
-  "lifeStage": "puppy_kitten" | "adult" | "senior" | "all" | null,
+  "lifeStage": "puppy" | "kitten" | "adult" | "senior" | "all" | null,
+  "lineName": "string or null",
+  "primaryProteins": ["chicken"] or null,
+  "breedSize": "all" | "large_breed" | "small_breed" | null,
+  "dietTags": ["grain_free"] or null,
   "packageShape": "flat" | "round" | "pouch" | null,
   "guaranteedAnalysis": { "protein": number or null, "fat": number or null, "fiber": number or null, "moisture": number or null },
   "confidence": number between 0 and 1,
@@ -171,6 +203,13 @@ Rules:
 - Read guaranteedAnalysis numbers from the label or OCR when visible; null if not shown
 - Do not invent product names; use null when unreadable
 
+Product identity slots (for DB matching — separate from productName):
+- lineName: product LINE / SERIES only (e.g. "Select", "Core", "Wholesome Grains", "Complete Health"). NOT flavor words.
+- primaryProteins: main animal protein sources as lowercase tokens (e.g. ["chicken"], ["lamb","salmon"]). From flavor text on label.
+- breedSize: "large_breed" | "small_breed" | "all" — only when label says Large Breed / Small Breed / similar.
+- dietTags: optional tags like ["grain_free"], ["limited_ingredient"] when clearly stated on label.
+- lifeStage: "Puppy" → "puppy", "Kitten" → "kitten", "Senior" / "7+" → "senior", "Adult" → "adult" (never combine puppy+kitten)
+
 productName rules (IMPORTANT):
 - Return the SHORTEST name that distinguishes this SKU from other products of the same brand.
 - INCLUDE: product line name (even if it contains adjective-like words), flavor/protein source, size variant (e.g. "Large Breed", "Small Breed")
@@ -180,7 +219,7 @@ productName rules (IMPORTANT):
   "High Protein", "Real", "Grain-Free", "Grain Inclusive",
   "All Breeds", "Balanced"
 - Also exclude (captured in other fields):
-  Life stage words: "Adult", "Puppy", "Kitten", "Senior" → lifeStage field
+  Life stage words: "Puppy" → "puppy", "Kitten" → "kitten" (never combine; use targetPet if only one species is shown)
   Pet type words: "Dog Food", "Cat Food" → targetPet field
 - Do NOT remove words that are part of the product LINE/SERIES name.
   If unsure whether a word is filler vs. line name, KEEP IT.
@@ -191,7 +230,8 @@ productName rules (IMPORTANT):
   "BACKCOUNTRY Heartlands Recipe With Beef And Bison" → "Backcountry Heartlands Beef & Bison"
   "Complete Health Natural Grain Free Adult Deboned Chicken & Oatmeal" → "Complete Health Deboned Chicken & Oatmeal"
   "Amazing Grains Original Recipe For Dogs" → "Amazing Grains Original"
-  "CORE Grain Free Ocean Whitefish Salmon & Herring Recipe" → "Core Ocean Whitefish Salmon & Herring"`;
+  "CORE Grain Free Ocean Whitefish Salmon & Herring Recipe" → "Core Ocean Whitefish Salmon & Herring"
+  "Bil-Jac Select Chicken Formula Senior 7+" → lineName "Select", primaryProteins ["chicken"], lifeStage "senior"`;
 
     const result = await this.model.generateContent({
       contents: [
@@ -212,13 +252,14 @@ productName rules (IMPORTANT):
 
     const parsed = this.parseGeminiResponse(result.response.text());
     const allowedShapes = new Set(['flat', 'round', 'pouch']);
+    const slots = normalizeExtractedSlots(parsed);
     return {
       imageType: parsed.imageType || null,
       productType: parsed.productType || null,
       productName: parsed.productName || null,
       brand: parsed.brand || null,
       targetPet: parsed.targetPet || null,
-      lifeStage: parsed.lifeStage || null,
+      ...slots,
       packageShape: allowedShapes.has(parsed.packageShape) ? parsed.packageShape : null,
       guaranteedAnalysis: parsed.guaranteedAnalysis || {},
       confidence: parsed.confidence ?? 0.5,
@@ -249,7 +290,11 @@ Return your response in this exact JSON format:
   "productType": "dry_food" | "wet_food" | "treats" | "supplement" | "other" | null,
   "texture": "dry" | "wet" | "semi_moist" | "freeze_dried" | null,
   "targetPet": "dog" | "cat" | "both" | null,
-  "lifeStage": "puppy_kitten" | "adult" | "senior" | "all" | null,
+  "lifeStage": "puppy" | "kitten" | "adult" | "senior" | "all" | null,
+  "lineName": "string or null",
+  "primaryProteins": ["chicken"] or null,
+  "breedSize": "all" | "large_breed" | "small_breed" | null,
+  "dietTags": ["grain_free"] or null,
   "packageShape": "flat" | "round" | "pouch" | null,
   "ingredientsList": ["ingredient1", "ingredient2", ...],
   "rawIngredientsText": "ingredient paragraph copied as printed on the label (see PRINT-FIDELITY); null if not visible",
@@ -937,6 +982,7 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
         const packageShape = allowedShapes.has(parsed.packageShape)
           ? parsed.packageShape
           : null;
+        const slots = normalizeExtractedSlots(parsed);
 
         return {
           imageType: parsed.imageType || null,  // front_label, ingredients_label, mixed
@@ -944,7 +990,7 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
           productName: parsed.productName || null,
           brand: parsed.brand || null,
           targetPet: parsed.targetPet || null,
-          lifeStage: parsed.lifeStage || null,
+          ...slots,
           packageShape,
           ingredientsList: ingredientsList,
           rawIngredientsText: parsed.rawIngredientsText || '',
@@ -964,6 +1010,10 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
       productName: null,
       brand: null,
       targetPet: null,
+      lineName: null,
+      primaryProteins: null,
+      breedSize: 'all',
+      dietTags: null,
       lifeStage: null,
       packageShape: null,
       ingredientsList: [],

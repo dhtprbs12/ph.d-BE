@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 const ingredientAnalyzer = require('./ingredientAnalyzer');
 const ingredientMatch = require('./ingredientMatch');
+const productMatchKey = require('./productMatchKey');
 
 class ProductService {
   /**
@@ -391,20 +392,38 @@ class ProductService {
     const ingredientHash = productData.ingredientsList 
       ? this.generateIngredientHash(productData.ingredientsList)
       : null;
+
+    const matchFields = productMatchKey.buildProductMatchFields({
+      brand: productData.brand,
+      lineName: productData.lineName,
+      lifeStage: productData.lifeStage,
+      targetPetType: productData.targetPetType,
+      primaryProteins: productData.primaryProteins,
+      breedSize: productData.breedSize,
+      dietTags: productData.dietTags,
+    });
     
     await query(
       `INSERT INTO products 
-       (id, name, brand, product_type, texture, target_pet_type, target_life_stage, 
+       (id, name, brand, barcode, brand_norm, line_name, primary_proteins, breed_size, diet_tags, match_key,
+        product_type, texture, target_pet_type, target_life_stage, 
         raw_ingredients_text, ingredient_hash, image_url, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user_scan')`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user_scan')`,
       [
         id,
-        productData.name || 'Unknown Product',
+        productData.name || productData.displayName || 'Unknown Product',
         productData.brand || null,
+        productData.barcode || null,
+        matchFields.brand_norm,
+        matchFields.line_name,
+        matchFields.primary_proteins,
+        matchFields.breed_size,
+        matchFields.diet_tags,
+        matchFields.match_key,
         productData.productType || 'dry_food',
         productData.texture || null,
         productData.targetPetType || 'both',
-        productData.lifeStage || 'all',
+        productData.lifeStage || matchFields.target_life_stage || 'all',
         productData.rawIngredientsText || null,
         ingredientHash,
         productData.imageUrl || null
@@ -603,8 +622,9 @@ class ProductService {
     }
 
     let petAgeGroup = 'adult';
-    if (pet.age_months != null && pet.age_months < 12) petAgeGroup = 'puppy_kitten';
-    else if (pet.age_months != null && pet.age_months < 24) petAgeGroup = 'young';
+    if (pet.age_months != null && pet.age_months < 12) {
+      petAgeGroup = pet.pet_type === 'cat' ? 'kitten' : 'puppy';
+    } else if (pet.age_months != null && pet.age_months < 24) petAgeGroup = 'young';
     else if (pet.age_months != null && pet.age_months > 84) petAgeGroup = 'senior';
 
     const conditions = await query(
@@ -643,6 +663,98 @@ class ProductService {
     if (!barcode) return null;
     const rows = await query('SELECT * FROM products WHERE barcode = ? LIMIT 1', [barcode]);
     return rows[0] || null;
+  }
+
+  /**
+   * Exact lookup by canonical match_key (brand|line|stage|proteins|breed|diet|).
+   */
+  async findByMatchKey(matchKey) {
+    if (!matchKey) return null;
+    const rows = await query('SELECT * FROM products WHERE match_key = ? LIMIT 1', [matchKey]);
+    return rows[0] || null;
+  }
+
+  /**
+   * Build match_key from slots and look up product.
+   */
+  async findByMatchSlots(slots) {
+    const matchKey = productMatchKey.buildMatchKey(slots);
+    return this.findByMatchKey(matchKey);
+  }
+
+  /** DB-ready match column values from scan/import slots. */
+  buildProductMatchFields(slots) {
+    return productMatchKey.buildProductMatchFields(slots);
+  }
+
+  buildMatchKey(slots) {
+    return productMatchKey.buildMatchKey(slots);
+  }
+
+  /**
+   * Tiered lookup: exact match_key first, then fuzzy brand+name.
+   * @returns {{ slots: object, displayName: string|null, candidates: Array<{product, score, matchType?}> }}
+   */
+  async lookupBySlotsOrFuzzy(extracted, normalizedName = null) {
+    const slots = productMatchKey.buildSlotsFromExtracted(extracted);
+    const displayName =
+      productMatchKey.buildDisplayName(slots) ||
+      normalizedName ||
+      extracted.productName ||
+      null;
+
+    if (productMatchKey.hasMinimumMatchSlots(slots)) {
+      const exact = await this.findByMatchSlots(slots);
+      if (exact) {
+        console.log(
+          `✅ [MATCH] Exact match_key hit: "${exact.brand} ${exact.name}" (${exact.match_key})`
+        );
+        return {
+          slots,
+          displayName,
+          candidates: [{ product: exact, score: 1.0, matchType: 'exact' }],
+        };
+      }
+    }
+
+    const lifeStageFilter =
+      slots.lifeStage && slots.lifeStage !== 'all' ? slots.lifeStage : null;
+
+    const { candidates } = await this.findByBrandAndName(
+      slots.brand || extracted.brand,
+      displayName,
+      lifeStageFilter,
+      slots.targetPetType || extracted.targetPet || null
+    );
+
+    return { slots, displayName, candidates };
+  }
+
+  /**
+   * Find existing product: match_key → ingredient hash.
+   */
+  async findProductForConfirm({ slots, ingredientsList, brand, displayName }) {
+    if (productMatchKey.hasMinimumMatchSlots(slots)) {
+      const byKey = await this.findByMatchSlots(slots);
+      if (byKey) return byKey;
+    }
+
+    if (ingredientsList?.length) {
+      const ingredientHash = this.generateIngredientHash(ingredientsList);
+      const byHash = await this.findByIngredientHash(ingredientHash, brand, displayName);
+      if (byHash) return byHash;
+    }
+
+    return null;
+  }
+
+  buildDisplayNameFromExtracted(extracted) {
+    const slots = productMatchKey.buildSlotsFromExtracted(extracted);
+    return productMatchKey.buildDisplayName(slots);
+  }
+
+  buildSlotsFromExtracted(extracted) {
+    return productMatchKey.buildSlotsFromExtracted(extracted);
   }
 
   // ─── Product Name Normalization ─────────────────────────────────────
@@ -695,17 +807,17 @@ class ProductService {
 
   static LIFE_STAGE_TOKENS = new Set(['puppy', 'kitten', 'adult', 'senior', 'junior', 'mature']);
 
-  _normalizeLifeStage(val) {
+  _normalizeLifeStage(val, petType = null) {
     if (!val) return null;
-    const lower = String(val).toLowerCase().trim();
-    if (lower === 'all' || lower === '') return null;
-    return lower;
+    const resolved = productMatchKey.resolveLifeStage(val, petType);
+    if (resolved === 'all' || resolved === '') return null;
+    return resolved;
   }
 
-  _lifeStagesCompatible(scannedLifeStage, dbLifeStage) {
-    const a = this._normalizeLifeStage(scannedLifeStage);
-    const b = this._normalizeLifeStage(dbLifeStage);
-    if (!a || !b) return false; // null on either side → not a confident match
+  _lifeStagesCompatible(scannedLifeStage, dbLifeStage, petType = null) {
+    const a = this._normalizeLifeStage(scannedLifeStage, petType);
+    const b = this._normalizeLifeStage(dbLifeStage, petType);
+    if (!a || !b) return false;
     return a === b;
   }
 
@@ -714,7 +826,7 @@ class ProductService {
    * Always returns candidates (never auto-matches). The caller decides how to present them.
    * @returns {{ candidates: Array<{product, score}> }}
    */
-  async findByBrandAndName(brand, productName, lifeStage = null) {
+  async findByBrandAndName(brand, productName, lifeStage = null, targetPet = null) {
     if (!brand && !productName) return { candidates: [] };
 
     const normBrand = this.normalizeForMatch(brand);
@@ -749,10 +861,11 @@ class ProductService {
 
       // Life stage filter: both must have a value and they must match
       if (lifeStage) {
-        if (!this._lifeStagesCompatible(lifeStage, r.target_life_stage)) continue;
+        const petType = targetPet || r.target_pet_type || null;
+        if (!this._lifeStagesCompatible(lifeStage, r.target_life_stage, petType)) continue;
       } else {
-        // Scanned life stage is null → only match if DB also has no specific life stage
-        const dbLs = this._normalizeLifeStage(r.target_life_stage);
+        const petType = targetPet || r.target_pet_type || null;
+        const dbLs = this._normalizeLifeStage(r.target_life_stage, petType);
         if (dbLs) continue;
       }
 

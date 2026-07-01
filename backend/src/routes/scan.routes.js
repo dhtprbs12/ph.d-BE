@@ -14,6 +14,7 @@ const {
 } = require('../utils/cacheHelpers');
 const imageService = require('../services/imageService');
 const imagePreprocess = require('../services/imagePreprocessService');
+const productMatchKey = require('../services/productMatchKey');
 const { authenticateToken } = require('../middleware/auth');
 
 // Helper: Get recommendation from grade if AI didn't provide one
@@ -1104,38 +1105,50 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       });
     }
 
-    // Normalize product name (strip filler words)
+    // Normalize product name (strip filler words) — fallback when slots incomplete
     const normalizedName = productService.normalizeProductName(extracted.productName);
 
-    // ─── DB Lookup: life-stage-aware candidate search ───
-    const { candidates: dbCandidates } = await productService.findByBrandAndName(
-      extracted.brand,
-      normalizedName || extracted.productName,
-      extracted.lifeStage || null
-    );
+    // ─── DB Lookup: exact match_key first, then fuzzy brand+name ───
+    const { slots, displayName, candidates: dbCandidates } =
+      await productService.lookupBySlotsOrFuzzy(extracted, normalizedName);
 
     if (dbCandidates.length > 0) {
-      console.log(`✅ [FRONT] DB candidates found: ${dbCandidates.length} (top: "${dbCandidates[0].product.brand} ${dbCandidates[0].product.name}")`);
+      const top = dbCandidates[0];
+      const matchLabel = top.matchType === 'exact' ? 'exact' : 'fuzzy';
+      console.log(
+        `✅ [FRONT] DB candidates (${matchLabel}): ${dbCandidates.length} ` +
+        `(top: "${top.product.brand} ${top.product.name}")`
+      );
     }
+
+    const resolvedProductName = displayName || normalizedName || extracted.productName;
 
     // Generate pending scan ID
     const pendingScanId = uuidv4();
     
     // Store front label data
     pendingFrontLabels.set(pendingScanId, {
-      productName: normalizedName || extracted.productName,
+      productName: resolvedProductName,
+      displayName: displayName || resolvedProductName,
       brand: extracted.brand,
       targetPet: extracted.targetPet,
       productType: extracted.productType,
       texture: extracted.texture,
-      lifeStage: extracted.lifeStage,
+      lifeStage: slots.lifeStage !== 'all' ? slots.lifeStage : extracted.lifeStage,
+      lineName: slots.lineName,
+      primaryProteins: slots.primaryProteins,
+      breedSize: slots.breedSize,
+      dietTags: slots.dietTags,
       packageShape: extracted.packageShape, // drives the back-label capture mode
       imageType: extracted.imageType,
       imageUrl: null, // Will be filled by background search
       createdAt: Date.now()
     });
 
-    console.log(`✅ [FRONT] Captured: "${extracted.brand || ''} ${extracted.productName || ''}" (pendingId: ${pendingScanId})`);
+    console.log(
+      `✅ [FRONT] Captured: "${extracted.brand || ''} ${resolvedProductName}" ` +
+      `(line="${slots.lineName || '-'}", pendingId: ${pendingScanId})`
+    );
 
     // ============================================================
     // CANDIDATE SEARCH — brand-as-hard-filter + token-exact match.
@@ -1168,7 +1181,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     if (extracted.productName || extracted.brand) {
       try {
         const brandTerm = (extracted.brand || '').trim();
-        const nameTerm = (extracted.productName || '').trim();
+        const nameTerm = (resolvedProductName || extracted.productName || '').trim();
         const productType = (extracted.productType || '').trim();
         const targetPet = (extracted.targetPet || '').trim();
 
@@ -1369,11 +1382,14 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       success: true,
       pendingScanId,
       captured: {
-        productName: normalizedName || extracted.productName,
+        productName: resolvedProductName,
+        displayName: displayName || resolvedProductName,
         brand: extracted.brand,
         targetPet: extracted.targetPet,
         productType: extracted.productType,
         packageShape: extracted.packageShape,
+        lineName: slots.lineName,
+        lifeStage: slots.lifeStage !== 'all' ? slots.lifeStage : extracted.lifeStage,
       },
       candidates,
       nextStep: candidates.length > 0 
@@ -1465,15 +1481,20 @@ router.post('/back/:pendingScanId', authenticateToken, upload.single('image'), a
     const weakList = weakIngredientListResponse(res, ingredientsList, productTypeForValidation);
     if (weakList) return weakList;
 
-    // Merge front label data with back label data
+    // Merge front label data with back label data (front slots take priority)
     const mergedExtracted = {
       ...extracted,
       productName: frontData.productName || extracted.productName,
+      displayName: frontData.displayName || frontData.productName || extracted.productName,
       brand: frontData.brand || extracted.brand,
       targetPet: frontData.targetPet || extracted.targetPet,
       productType: frontData.productType || extracted.productType,
       texture: frontData.texture || extracted.texture,
-      lifeStage: frontData.lifeStage || extracted.lifeStage
+      lifeStage: frontData.lifeStage || extracted.lifeStage,
+      lineName: frontData.lineName || extracted.lineName,
+      primaryProteins: frontData.primaryProteins || extracted.primaryProteins,
+      breedSize: frontData.breedSize || extracted.breedSize,
+      dietTags: frontData.dietTags || extracted.dietTags,
     };
 
     console.log(`✅ [BACK] Merged: "${mergedExtracted.brand || ''} ${mergedExtracted.productName || ''}" with ${ingredientsList.length} ingredients`);
@@ -1496,11 +1517,16 @@ router.post('/back/:pendingScanId', authenticateToken, upload.single('image'), a
     pendingFrontLabels.set(pendingScanId, {
       ...frontData,
       productName: mergedExtracted.productName,
+      displayName: mergedExtracted.displayName,
       brand: mergedExtracted.brand,
       targetPet: mergedExtracted.targetPet,
       productType: mergedExtracted.productType,
       texture: mergedExtracted.texture,
       lifeStage: mergedExtracted.lifeStage,
+      lineName: mergedExtracted.lineName,
+      primaryProteins: mergedExtracted.primaryProteins,
+      breedSize: mergedExtracted.breedSize,
+      dietTags: mergedExtracted.dietTags,
       imageUrl: existingLocalImage || frontData?.imageUrl || null,
       externalImageUrl: externalImageUrl || frontData?.externalImageUrl || null,
     });
@@ -1587,14 +1613,29 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
     const rawText = ingredientsList.join(', ');
 
     const productName = frontData?.productName || req.body.productName || 'Unknown Product';
+    const displayName =
+      frontData?.displayName ||
+      productMatchKey.buildDisplayName(productMatchKey.buildSlotsFromExtracted(frontData || {})) ||
+      productName;
     const brand = frontData?.brand || req.body.brand || null;
     const productType = frontData?.productType || req.body.productType || 'dry_food';
     const targetPet = frontData?.targetPet || petType;
     const texture = frontData?.texture || null;
     const lifeStage = frontData?.lifeStage || 'all';
 
+    const slots = productMatchKey.buildSlotsFromExtracted({
+      brand,
+      targetPet,
+      lifeStage,
+      lineName: frontData?.lineName,
+      primaryProteins: frontData?.primaryProteins,
+      breedSize: frontData?.breedSize,
+      dietTags: frontData?.dietTags,
+      productName: frontData?.productName || productName,
+    });
+
     const extracted = {
-      productName,
+      productName: displayName,
       brand,
       targetPet,
       productType,
@@ -1604,18 +1645,27 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
       imageType: 'confirmed_editor'
     };
 
-    // Find or create product
-    const ingredientHash = productService.generateIngredientHash(ingredientsList);
-    let product = await productService.findByIngredientHash(ingredientHash, brand, productName);
+    // Find or create product (match_key → ingredient hash → create)
+    let product = await productService.findProductForConfirm({
+      slots,
+      ingredientsList,
+      brand,
+      displayName,
+    });
 
     if (!product) {
       product = await productService.createFromScan({
-        name: productName,
+        name: displayName,
+        displayName,
         brand,
+        lineName: slots.lineName,
+        primaryProteins: slots.primaryProteins,
+        breedSize: slots.breedSize,
+        dietTags: slots.dietTags,
         productType,
         texture,
         targetPetType: targetPet,
-        lifeStage,
+        lifeStage: slots.lifeStage !== 'all' ? slots.lifeStage : lifeStage,
         rawIngredientsText: rawText,
         ingredientsList,
         imageUrl: frontData?.imageUrl || null
@@ -2024,18 +2074,34 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
         product = existingProduct;
         // Increment scan count for existing product
         await query('UPDATE products SET scan_count = scan_count + 1 WHERE id = ?', [product.id]);
-      } else if (extracted.productName) {
-        // Create new product from scan (only if we have a name)
-        product = await productService.createFromScan({
-          name: extracted.productName,
-          brand: extracted.brand,
-          productType: extracted.productType || 'dry_food',
-          texture: extracted.texture || null,  // AI-inferred texture
-          targetPetType: extracted.targetPet || 'both',
-          lifeStage: extracted.lifeStage,
-          rawIngredientsText: extracted.rawIngredientsText,
-          ingredientsList: ingredientsList  // Pass for hash generation
-        });
+      } else if (extracted.productName || extracted.brand) {
+        const slots = productMatchKey.buildSlotsFromExtracted(extracted);
+        const displayName =
+          productMatchKey.buildDisplayName(slots) || extracted.productName || 'Unknown Product';
+
+        const byKey = productMatchKey.hasMinimumMatchSlots(slots)
+          ? await productService.findByMatchSlots(slots)
+          : null;
+        if (byKey) {
+          product = byKey;
+          await query('UPDATE products SET scan_count = scan_count + 1 WHERE id = ?', [product.id]);
+        } else {
+          product = await productService.createFromScan({
+            name: displayName,
+            displayName,
+            brand: extracted.brand,
+            lineName: slots.lineName,
+            primaryProteins: slots.primaryProteins,
+            breedSize: slots.breedSize,
+            dietTags: slots.dietTags,
+            productType: extracted.productType || 'dry_food',
+            texture: extracted.texture || null,
+            targetPetType: extracted.targetPet || 'both',
+            lifeStage: slots.lifeStage !== 'all' ? slots.lifeStage : extracted.lifeStage,
+            rawIngredientsText: extracted.rawIngredientsText,
+            ingredientsList: ingredientsList
+          });
+        }
       }
     }
 

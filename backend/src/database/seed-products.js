@@ -138,7 +138,7 @@ const dogProducts = [
     name: 'Science Diet Puppy Chicken & Brown Rice',
     brand: "Hill's",
     product_type: 'dry_food',
-    target_life_stage: 'puppy_kitten',
+    target_life_stage: 'puppy',
     raw_ingredients_text: 'Chicken, Whole Grain Wheat, Cracked Pearled Barley, Chicken Meal, Whole Grain Corn, Chicken Fat, Soybean Meal, Dried Beet Pulp, Fish Oil, Lactic Acid, Pork Liver Flavor, Flaxseed, Iodized Salt, Potassium Chloride, Calcium Carbonate, Choline Chloride, DL-Methionine, L-Lysine, Vitamin E, Taurine, Vitamin A, Vitamin D3, Zinc, Iron, Mixed Tocopherols'
   },
   {
@@ -282,7 +282,7 @@ const dogProducts = [
     name: 'Soft Puppy Bites Lamb & Salmon',
     brand: 'Wellness',
     product_type: 'treats',
-    target_life_stage: 'puppy_kitten',
+    target_life_stage: 'puppy',
     raw_ingredients_text: 'Lamb, Salmon, Chickpeas, Potatoes, Pea Protein, Chicken Fat, Dried Ground Potatoes, Flaxseed, Natural Flavor, Mixed Tocopherols, Rosemary Extract, Vitamin E, Zinc'
   },
   {
@@ -377,7 +377,7 @@ const dogProducts = [
     name: 'Pro Plan Focus Puppy Chicken & Rice',
     brand: 'Purina',
     product_type: 'dry_food',
-    target_life_stage: 'puppy_kitten',
+    target_life_stage: 'puppy',
     raw_ingredients_text: 'Chicken, Rice, Poultry By-Product Meal, Corn Gluten Meal, Whole Grain Corn, Oat Meal, Fish Meal, Animal Fat, Fish Oil, Calcium Carbonate, Phosphoric Acid, Animal Digest, Salt, Dried Egg Product, Potassium Chloride, L-Lysine, Vitamin A, Vitamin E, Vitamin D-3, Zinc, DHA'
   },
 ];
@@ -482,7 +482,7 @@ const catProducts = [
     name: 'Science Diet Kitten Chicken Recipe',
     brand: "Hill's",
     product_type: 'dry_food',
-    target_life_stage: 'puppy_kitten',
+    target_life_stage: 'kitten',
     raw_ingredients_text: 'Chicken, Whole Grain Wheat, Chicken Meal, Corn Gluten Meal, Chicken Fat, Whole Grain Corn, Pork Liver Flavor, Soybean Oil, Fish Oil, Lactic Acid, Dried Beet Pulp, Potassium Chloride, Iodized Salt, Choline Chloride, Taurine, DL-Methionine, Vitamin E, Vitamin A, Vitamin D3, Zinc, Iron, Mixed Tocopherols, DHA'
   },
   {
@@ -610,7 +610,7 @@ const catProducts = [
     name: 'Tastefuls Kitten Chicken Entrée',
     brand: 'Blue Buffalo',
     product_type: 'wet_food',
-    target_life_stage: 'puppy_kitten',
+    target_life_stage: 'kitten',
     raw_ingredients_text: 'Chicken, Chicken Broth, Chicken Liver, Fish Oil, Flaxseed, Pea Protein, Guar Gum, Potassium Chloride, Salt, Carrageenan, Cassia Gum, Taurine, DHA, Cranberries, Vitamin E, Vitamin A, Zinc, Iron'
   },
   {

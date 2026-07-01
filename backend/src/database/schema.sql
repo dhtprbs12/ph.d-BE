@@ -69,10 +69,17 @@ CREATE TABLE IF NOT EXISTS products (
     id VARCHAR(36) PRIMARY KEY,
     name VARCHAR(300) NOT NULL,
     brand VARCHAR(200),
+    barcode VARCHAR(20) NULL,
+    brand_norm VARCHAR(200) NULL,
+    line_name VARCHAR(100) NULL,
+    primary_proteins VARCHAR(200) NULL,
+    breed_size ENUM('all', 'large_breed', 'small_breed') NOT NULL DEFAULT 'all',
+    diet_tags VARCHAR(200) NULL,
+    match_key VARCHAR(255) NULL,
     product_type ENUM('dry_food', 'wet_food', 'treats', 'supplement', 'other') DEFAULT 'dry_food',
     texture ENUM('dry', 'wet', 'semi_moist', 'freeze_dried') DEFAULT NULL,
     target_pet_type ENUM('dog', 'cat', 'both') NOT NULL,
-    target_life_stage ENUM('puppy_kitten', 'adult', 'senior', 'all') DEFAULT 'all',
+    target_life_stage ENUM('puppy', 'kitten', 'adult', 'senior', 'all') DEFAULT 'all',
     image_url VARCHAR(500),
     -- Raw data
     raw_ingredients_text TEXT,
@@ -89,6 +96,10 @@ CREATE TABLE IF NOT EXISTS products (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_ingredient_hash (ingredient_hash),
     INDEX idx_target_pet (target_pet_type),
+    UNIQUE INDEX idx_products_barcode (barcode),
+    UNIQUE INDEX idx_products_match_key (match_key),
+    INDEX idx_products_brand_norm (brand_norm),
+    INDEX idx_products_line_name (line_name),
     FULLTEXT INDEX ft_product_search (name, brand)
 );
 
@@ -163,7 +174,7 @@ CREATE TABLE IF NOT EXISTS product_reviews (
     pet_type ENUM('dog', 'cat') NOT NULL,
     pet_breed VARCHAR(100),
     pet_size ENUM('tiny', 'small', 'medium', 'large', 'giant'),
-    pet_age_group ENUM('puppy_kitten', 'young', 'adult', 'senior'),
+    pet_age_group ENUM('puppy', 'kitten', 'young', 'adult', 'senior'),
     has_allergies BOOLEAN DEFAULT FALSE,
     has_health_conditions BOOLEAN DEFAULT FALSE,
     -- Engagement
