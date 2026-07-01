@@ -213,6 +213,16 @@ function hasMinimumMatchSlots(slots = {}) {
   return !!normalizeBrand(slots.brand) && !!normalizeLineName(slots.lineName);
 }
 
+/** Required front-label fields before proceeding to back scan. */
+function getMissingRequiredFrontFields(extracted = {}) {
+  const missing = [];
+  if (!String(extracted.brand || '').trim()) missing.push('brand');
+  if (!String(extracted.lineName || '').trim()) missing.push('lineName');
+  const pet = String(extracted.targetPet || extracted.targetPetType || '').trim().toLowerCase();
+  if (!pet || !['dog', 'cat', 'both'].includes(pet)) missing.push('targetPet');
+  return missing;
+}
+
 function buildProductMatchFields(slots = {}) {
   const brandNorm = normalizeBrand(slots.brand) || null;
   const lineName = normalizeLineName(slots.lineName) || null;
@@ -255,6 +265,7 @@ module.exports = {
   buildDisplayName,
   buildSlotsFromExtracted,
   hasMinimumMatchSlots,
+  getMissingRequiredFrontFields,
   serializePrimaryProteins,
   serializeDietTags,
   buildProductMatchFields,

@@ -1105,6 +1105,15 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       });
     }
 
+    const missingRequired = productMatchKey.getMissingRequiredFrontFields(extracted);
+    if (missingRequired.length > 0) {
+      return res.status(422).json({
+        error: 'incomplete_front_scan',
+        message: 'Please scan the front label again.',
+        missingFields: missingRequired,
+      });
+    }
+
     // Normalize product name (strip filler words) — fallback when slots incomplete
     const normalizedName = productService.normalizeProductName(extracted.productName);
 
@@ -1122,6 +1131,8 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     }
 
     const resolvedProductName = displayName || normalizedName || extracted.productName;
+
+    const exactCandidate = dbCandidates.find((c) => c.matchType === 'exact') ?? null;
 
     // Generate pending scan ID
     const pendingScanId = uuidv4();
@@ -1141,7 +1152,8 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       dietTags: slots.dietTags,
       packageShape: extracted.packageShape, // drives the back-label capture mode
       imageType: extracted.imageType,
-      imageUrl: null, // Will be filled by background search
+      imageUrl: exactCandidate?.product?.image_url || null,
+      matchedProductId: exactCandidate?.product?.id || null,
       createdAt: Date.now()
     });
 
@@ -1149,6 +1161,66 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       `✅ [FRONT] Captured: "${extracted.brand || ''} ${resolvedProductName}" ` +
       `(line="${slots.lineName || '-'}", pendingId: ${pendingScanId})`
     );
+
+    const mapProductResponse = (p) => ({
+      id: p.id,
+      name: p.name,
+      brand: p.brand,
+      imageUrl: p.image_url,
+      productType: p.product_type,
+      targetPetType: p.target_pet_type,
+    });
+
+    if (exactCandidate) {
+      console.log(
+        `⚡ [FRONT] Exact match_key — auto analyze "${exactCandidate.product.brand} ${exactCandidate.product.name}"`
+      );
+
+      if (extracted.productName || extracted.brand) {
+        (async () => {
+          try {
+            const imgBrand = (extracted.brand || '').trim();
+            const imgName = (resolvedProductName || extracted.productName || '').trim();
+            const imgType = (extracted.productType || '').trim();
+            if (!exactCandidate.product.image_url && (imgBrand || imgName)) {
+              const pending = pendingFrontLabels.get(pendingScanId);
+              if (!pending) return;
+              if (exactCandidate.product.image_url) {
+                pending.imageUrl = exactCandidate.product.image_url;
+              } else {
+                const searchName = [imgName, imgType ? imgType.replace(/_/g, ' ') : '']
+                  .filter(Boolean).join(' ');
+                const externalUrl = await imageService.searchProductImage(searchName, imgBrand);
+                if (externalUrl && pendingFrontLabels.has(pendingScanId)) {
+                  pendingFrontLabels.get(pendingScanId).externalImageUrl = externalUrl;
+                }
+              }
+            }
+          } catch (err) {
+            console.log('⚠️ [FRONT] Image lookup failed:', err.message);
+          }
+        })();
+      }
+
+      return res.json({
+        success: true,
+        pendingScanId,
+        matchType: 'exact',
+        product: mapProductResponse(exactCandidate.product),
+        captured: {
+          productName: resolvedProductName,
+          displayName: displayName || resolvedProductName,
+          brand: extracted.brand,
+          targetPet: extracted.targetPet,
+          productType: extracted.productType,
+          packageShape: extracted.packageShape,
+          lineName: slots.lineName,
+          lifeStage: slots.lifeStage !== 'all' ? slots.lifeStage : extracted.lifeStage,
+        },
+        candidates: [],
+        nextStep: 'Product matched. Running analysis.',
+      });
+    }
 
     // ============================================================
     // CANDIDATE SEARCH — brand-as-hard-filter + token-exact match.
@@ -1381,6 +1453,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     res.json({
       success: true,
       pendingScanId,
+      matchType: dbCandidates.length > 0 ? 'fuzzy' : null,
       captured: {
         productName: resolvedProductName,
         displayName: displayName || resolvedProductName,
