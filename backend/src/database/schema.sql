@@ -141,7 +141,8 @@ CREATE TABLE IF NOT EXISTS scan_history (
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL,
     INDEX idx_device_scans (device_id, created_at DESC),
     INDEX idx_user_scans (user_id, created_at DESC),
-    INDEX idx_product_scans (product_id)
+    INDEX idx_product_scans (product_id),
+    UNIQUE KEY idx_scan_history_user_product_pet (user_id, product_id, pet_name, pet_type)
 );
 
 -- Detailed ingredient analysis per scan

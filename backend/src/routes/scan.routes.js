@@ -89,22 +89,28 @@ async function saveScanHistoryEntry(entry) {
         ]
       );
     } else if (userId && productId) {
-      // Upsert: same user + same product → update existing row
+      // Upsert: same user + same product + same pet → update existing row
+      const petNameKey = String(petName || '').trim();
+      const petTypeKey = petType === 'cat' ? 'cat' : 'dog';
       const existing = await query(
-        `SELECT id FROM scan_history WHERE user_id = ? AND product_id = ? LIMIT 1`,
-        [userId, productId]
+        `SELECT id FROM scan_history
+         WHERE user_id = ? AND product_id = ? AND pet_name = ? AND pet_type = ?
+         LIMIT 1`,
+        [userId, productId, petNameKey, petTypeKey]
       );
       if (existing.length > 0) {
         await query(
           `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, ocr_extracted_text = ?, analysis_json = ?, scan_type = ?, pet_name = ?, pet_type = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,
-          [finalScore, grade, rec, ocrExtractedText, analysisJson, scanType, petName, petType, existing[0].id]
+          [finalScore, grade, rec, ocrExtractedText, analysisJson, scanType, petNameKey, petTypeKey, existing[0].id]
         );
-        console.log(`📜 [scan_history] UPDATED existing id=${existing[0].id} for product=${productLabel}`);
+        console.log(
+          `📜 [scan_history] UPDATED existing id=${existing[0].id} for product=${productLabel} pet=${petNameKey} (${petTypeKey})`
+        );
       } else {
         await query(
           `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [scanId, userId, deviceId || null, petName, petType, productId, scanType, finalScore, grade, rec, ocrExtractedText, analysisJson]
+          [scanId, userId, deviceId || null, petNameKey, petTypeKey, productId, scanType, finalScore, grade, rec, ocrExtractedText, analysisJson]
         );
       }
     } else {

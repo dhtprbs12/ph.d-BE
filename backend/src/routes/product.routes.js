@@ -819,22 +819,29 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
     const recForHistory = toHistoryRecommendation(analysis.grade, analysis.recommendation);
     if (userId || deviceId) {
       try {
-        // Upsert: same user + same product → update
+        // Upsert: same user + same product + same pet → update
+        const petNameKey = String(pet.name || '').trim();
+        const petTypeKey = pet.pet_type === 'cat' ? 'cat' : 'dog';
         const existing = userId && product.id
-          ? await query('SELECT id FROM scan_history WHERE user_id = ? AND product_id = ? LIMIT 1', [userId, product.id])
+          ? await query(
+              `SELECT id FROM scan_history
+               WHERE user_id = ? AND product_id = ? AND pet_name = ? AND pet_type = ?
+               LIMIT 1`,
+              [userId, product.id, petNameKey, petTypeKey]
+            )
           : [];
         if (existing.length > 0) {
           await query(
             `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, analysis_json = ?, pet_name = ?, pet_type = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,
-            [analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights }), pet.name, pet.pet_type, existing[0].id]
+            [analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights }), petNameKey, petTypeKey, existing[0].id]
           );
-          console.log('📜 [ANALYZE] Scan history updated:', existing[0].id);
+          console.log(`📜 [ANALYZE] Scan history updated: ${existing[0].id} pet=${petNameKey} (${petTypeKey})`);
         } else {
           const scanId = uuidv4();
           await query(
             `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
              VALUES (?, ?, ?, ?, ?, ?, 'product_search', ?, ?, ?, NULL, ?)`,
-            [scanId, userId, deviceId, pet.name, pet.pet_type, product.id, analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights })]
+            [scanId, userId, deviceId, petNameKey, petTypeKey, product.id, analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights })]
           );
           console.log('📜 [ANALYZE] Scan history saved:', scanId);
         }
