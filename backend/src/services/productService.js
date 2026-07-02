@@ -674,12 +674,121 @@ class ProductService {
     return rows[0] || null;
   }
 
+  _petTypesCompatible(scanPet, dbPet) {
+    if (!scanPet || scanPet === 'both') return true;
+    if (!dbPet || dbPet === 'both') return true;
+    return scanPet === dbPet;
+  }
+
+  _lifeStagesCompatibleSlot(scannedStage, dbStage, petType = null) {
+    const scan = scannedStage && scannedStage !== 'all' ? scannedStage : null;
+    const db = productMatchKey.normalizeLifeStage(dbStage, petType);
+    if (db === 'all') return true;
+    if (!scan) return true;
+    return scan === db;
+  }
+
   /**
-   * Build match_key from slots and look up product.
+   * Column fallback when full match_key misses (e.g. protein omitted on re-scan).
+   * Requires a single unambiguous row on brand_norm + line_name + pet + stage.
+   */
+  async findBySlotColumns(slots) {
+    const brandNorm = productMatchKey.normalizeBrand(slots.brand);
+    const lineName = productMatchKey.normalizeLineName(slots.lineName);
+    if (!brandNorm || !lineName) return null;
+
+    const lifeStage = productMatchKey.normalizeLifeStage(slots.lifeStage, slots.targetPetType);
+    const scanPet = slots.targetPetType || null;
+
+    const rows = await query(
+      `SELECT * FROM products
+       WHERE brand_norm = ? AND line_name = ?
+         AND raw_ingredients_text IS NOT NULL AND raw_ingredients_text != ''`,
+      [brandNorm, lineName]
+    );
+
+    const filtered = rows.filter((r) => {
+      if (!this._petTypesCompatible(scanPet, r.target_pet_type)) return false;
+      if (!this._lifeStagesCompatibleSlot(lifeStage, r.target_life_stage, scanPet)) return false;
+      return true;
+    });
+
+    if (filtered.length === 1) return filtered[0];
+
+    if (filtered.length > 1 && lifeStage !== 'all') {
+      const stageExact = filtered.filter(
+        (r) => productMatchKey.normalizeLifeStage(r.target_life_stage, r.target_pet_type) === lifeStage
+      );
+      if (stageExact.length === 1) return stageExact[0];
+    }
+
+    return null;
+  }
+
+  /**
+   * Build match_key from slots and look up product (with protein-less + column fallbacks).
    */
   async findByMatchSlots(slots) {
-    const matchKey = productMatchKey.buildMatchKey(slots);
-    return this.findByMatchKey(matchKey);
+    const withPet = { ...slots, targetPetType: slots.targetPetType };
+    const fullKey = productMatchKey.buildMatchKey(withPet);
+    let row = await this.findByMatchKey(fullKey);
+    if (row) return row;
+
+    if (productMatchKey.normalizeProteinList(slots.primaryProteins)) {
+      const keyNoProtein = productMatchKey.buildMatchKey({
+        ...withPet,
+        primaryProteins: null,
+      });
+      row = await this.findByMatchKey(keyNoProtein);
+      if (row) return row;
+    }
+
+    return this.findBySlotColumns(slots);
+  }
+
+  /**
+   * Backfill match_key / slot columns on products created before slot matching existed.
+   */
+  async ensureProductMatchFields(productId, slots) {
+    const product = await this.findById(productId);
+    if (!product || product.match_key) return product;
+
+    const fields = productMatchKey.buildProductMatchFields({
+      ...slots,
+      targetPetType: slots.targetPetType || product.target_pet_type,
+    });
+
+    try {
+      await query(
+        `UPDATE products SET
+           brand_norm = COALESCE(brand_norm, ?),
+           line_name = COALESCE(line_name, ?),
+           primary_proteins = COALESCE(primary_proteins, ?),
+           breed_size = ?,
+           diet_tags = COALESCE(diet_tags, ?),
+           match_key = ?,
+           target_life_stage = CASE
+             WHEN target_life_stage IS NULL OR target_life_stage = 'all' THEN ?
+             ELSE target_life_stage
+           END
+         WHERE id = ? AND (match_key IS NULL OR match_key = '')`,
+        [
+          fields.brand_norm,
+          fields.line_name,
+          fields.primary_proteins,
+          fields.breed_size,
+          fields.diet_tags,
+          fields.match_key,
+          fields.target_life_stage,
+          productId,
+        ]
+      );
+    } catch (err) {
+      console.warn(`⚠️ [MATCH] ensureProductMatchFields failed for ${productId}:`, err.message);
+      return product;
+    }
+
+    return this.findById(productId);
   }
 
   /** DB-ready match column values from scan/import slots. */
@@ -704,10 +813,17 @@ class ProductService {
       null;
 
     if (productMatchKey.hasMinimumMatchSlots(slots)) {
-      const exact = await this.findByMatchSlots(slots);
+      const lookupKey = productMatchKey.buildMatchKey({
+        ...slots,
+        targetPetType: slots.targetPetType,
+      });
+      let exact = await this.findByMatchSlots(slots);
+      if (exact && !exact.match_key) {
+        exact = await this.ensureProductMatchFields(exact.id, slots);
+      }
       if (exact) {
         console.log(
-          `✅ [MATCH] Exact match_key hit: "${exact.brand} ${exact.name}" (${exact.match_key})`
+          `✅ [MATCH] Exact hit: "${exact.brand} ${exact.name}" (key: ${exact.match_key || lookupKey})`
         );
         return {
           slots,
@@ -715,6 +831,7 @@ class ProductService {
           candidates: [{ product: exact, score: 1.0, matchType: 'exact' }],
         };
       }
+      console.log(`⚠️ [MATCH] No exact hit for key: ${lookupKey}`);
     }
 
     const lifeStageFilter =
@@ -736,7 +853,9 @@ class ProductService {
   async findProductForConfirm({ slots, ingredientsList, brand, displayName }) {
     if (productMatchKey.hasMinimumMatchSlots(slots)) {
       const byKey = await this.findByMatchSlots(slots);
-      if (byKey) return byKey;
+      if (byKey) {
+        return this.ensureProductMatchFields(byKey.id, slots);
+      }
     }
 
     if (ingredientsList?.length) {

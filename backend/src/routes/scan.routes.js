@@ -1743,6 +1743,8 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
         ingredientsList,
         imageUrl: frontData?.imageUrl || null
       });
+    } else {
+      product = await productService.ensureProductMatchFields(product.id, slots);
     }
 
     // Handle product image (non-blocking)
