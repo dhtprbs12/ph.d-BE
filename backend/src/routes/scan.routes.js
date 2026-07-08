@@ -1120,14 +1120,27 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       });
     }
 
-    // Fallback: infer lifeStage from text when Gemini omits it
+    // Fallback: infer missing slots from text when Gemini omits them
+    const inferText = [extracted.productName, extracted.lineName, extracted.rawOcrText]
+      .filter(Boolean).join(' ').toLowerCase();
+
     if (!extracted.lifeStage) {
-      const stageText = [extracted.productName, extracted.lineName, extracted.rawOcrText]
-        .filter(Boolean).join(' ').toLowerCase();
-      if (/\bpuppy\b/.test(stageText)) extracted.lifeStage = 'puppy';
-      else if (/\bkitten\b/.test(stageText)) extracted.lifeStage = 'kitten';
-      else if (/\bsenior\b|\b7\+/.test(stageText)) extracted.lifeStage = 'senior';
-      else if (/\badult\b/.test(stageText)) extracted.lifeStage = 'adult';
+      if (/\bpuppy\b/.test(inferText)) extracted.lifeStage = 'puppy';
+      else if (/\bkitten\b/.test(inferText)) extracted.lifeStage = 'kitten';
+      else if (/\bsenior\b|\b7\+/.test(inferText)) extracted.lifeStage = 'senior';
+      else if (/\badult\b/.test(inferText)) extracted.lifeStage = 'adult';
+    }
+
+    if (!extracted.dietTags || extracted.dietTags.length === 0) {
+      const tags = [];
+      if (/\bgrain[\s-]?free\b/.test(inferText)) tags.push('grain_free');
+      if (/\blimited[\s-]?ingredient\b/.test(inferText)) tags.push('limited_ingredient');
+      if (tags.length) extracted.dietTags = tags;
+    }
+
+    if (!extracted.breedSize || extracted.breedSize === 'all') {
+      if (/\blarge[\s-]?breed\b/.test(inferText)) extracted.breedSize = 'large_breed';
+      else if (/\bsmall[\s-]?breed\b/.test(inferText)) extracted.breedSize = 'small_breed';
     }
 
     // Normalize product name (strip filler words) — fallback when slots incomplete

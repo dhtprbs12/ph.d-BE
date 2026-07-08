@@ -105,6 +105,30 @@ class GeminiService {
     await this.cacheResult(imageHash, extracted);
     const { ocrFullText: _omit, ...result } = extracted;
     result.rawOcrText = _omit || null;
+
+    // Infer missing slots from available text (safety net for Gemini omissions)
+    const slotInferText = [result.productName, result.lineName, result.rawOcrText]
+      .filter(Boolean).join(' ').toLowerCase();
+
+    if (!result.lifeStage) {
+      if (/\bpuppy\b/.test(slotInferText)) result.lifeStage = 'puppy';
+      else if (/\bkitten\b/.test(slotInferText)) result.lifeStage = 'kitten';
+      else if (/\bsenior\b|\b7\+/.test(slotInferText)) result.lifeStage = 'senior';
+      else if (/\badult\b/.test(slotInferText)) result.lifeStage = 'adult';
+    }
+
+    if (!result.dietTags || result.dietTags.length === 0) {
+      const tags = [];
+      if (/\bgrain[\s-]?free\b/.test(slotInferText)) tags.push('grain_free');
+      if (/\blimited[\s-]?ingredient\b/.test(slotInferText)) tags.push('limited_ingredient');
+      if (tags.length) result.dietTags = tags;
+    }
+
+    if (!result.breedSize || result.breedSize === 'all') {
+      if (/\blarge[\s-]?breed\b/.test(slotInferText)) result.breedSize = 'large_breed';
+      else if (/\bsmall[\s-]?breed\b/.test(slotInferText)) result.breedSize = 'small_breed';
+    }
+
     return result;
   }
 
@@ -208,31 +232,32 @@ Product identity slots (for DB matching — separate from productName):
 - lineName: product LINE / SERIES only (e.g. "Select", "Core", "Wholesome Grains", "Complete Health"). NOT flavor words.
 - primaryProteins: main animal protein sources as lowercase tokens (e.g. ["chicken"], ["lamb","salmon"]). From flavor text on label.
 - breedSize: "large_breed" | "small_breed" | "all" — only when label says Large Breed / Small Breed / similar.
-- dietTags: optional tags like ["grain_free"], ["limited_ingredient"] when clearly stated on label.
+- dietTags: tags like ["grain_free"], ["limited_ingredient"] when clearly stated on label.
 - lifeStage: "Puppy" → "puppy", "Kitten" → "kitten", "Senior" / "7+" → "senior", "Adult" → "adult" (never combine puppy+kitten)
 
 productName rules (IMPORTANT):
 - Return the SHORTEST name that distinguishes this SKU from other products of the same brand.
-- INCLUDE: product line name (even if it contains adjective-like words), flavor/protein source, size variant (e.g. "Large Breed", "Small Breed")
+- INCLUDE: product line name (even if it contains adjective-like words), flavor/protein source
 - ONLY remove words from this EXACT exclude list (nothing else):
   "Recipe", "Formula", "With", "Made With", "For Dogs", "For Cats",
   "Premium", "Natural", "Delicious", "Nutritious", "Healthy",
-  "High Protein", "Real", "Grain-Free", "Grain Inclusive",
-  "All Breeds", "Balanced"
-- Also exclude (captured in other fields):
-  Life stage words: "Puppy" → "puppy", "Kitten" → "kitten" (never combine; use targetPet if only one species is shown)
-  Pet type words: "Dog Food", "Cat Food" → targetPet field
+  "High Protein", "Real", "All Breeds", "Balanced"
+- Also exclude from productName (MUST capture in the corresponding slot field — never discard silently):
+  Life stage → lifeStage: "Puppy" → "puppy", "Kitten" → "kitten", "Adult" → "adult", "Senior"/"7+" → "senior"
+  Diet words → dietTags: "Grain-Free"/"Grain Free" → ["grain_free"], "Limited Ingredient" → ["limited_ingredient"]
+  Pet type → targetPet: "Dog Food"/"For Dogs" → "dog", "Cat Food"/"For Cats" → "cat"
+  Breed size → breedSize: "Large Breed" → "large_breed", "Small Breed" → "small_breed"
+- CRITICAL: If you remove ANY word from productName, the information MUST appear in its slot field. Never discard information.
 - Do NOT remove words that are part of the product LINE/SERIES name.
   If unsure whether a word is filler vs. line name, KEEP IT.
 - Use Title Case. Replace "AND"/"&" with "&".
-- Examples:
-  "ACANA Wholesome Grains Red Meat & Grains Recipe" → "Wholesome Grains Red Meat"
-  ("Wholesome Grains" is the series name — keep it)
-  "BACKCOUNTRY Heartlands Recipe With Beef And Bison" → "Backcountry Heartlands Beef & Bison"
-  "Complete Health Natural Grain Free Adult Deboned Chicken & Oatmeal" → "Complete Health Deboned Chicken & Oatmeal"
-  "Amazing Grains Original Recipe For Dogs" → "Amazing Grains Original"
-  "CORE Grain Free Ocean Whitefish Salmon & Herring Recipe" → "Core Ocean Whitefish Salmon & Herring"
-  "Bil-Jac Select Chicken Formula Senior 7+" → lineName "Select", primaryProteins ["chicken"], lifeStage "senior"`;
+- Examples (showing productName + where removed words go):
+  "Bil-Jac Adult Select Chicken Formula" → productName "Select Chicken", lineName "Select", lifeStage "adult", primaryProteins ["chicken"]
+  "ACANA Wholesome Grains Red Meat & Grains Recipe" → productName "Wholesome Grains Red Meat", lineName "Wholesome Grains", primaryProteins ["beef"]
+  "Blue Buffalo Life Protection Large Breed Puppy Chicken" → productName "Life Protection Chicken", lineName "Life Protection", lifeStage "puppy", breedSize "large_breed", primaryProteins ["chicken"]
+  "Wellness CORE Grain Free Ocean Whitefish" → productName "Core Ocean Whitefish", lineName "Core", dietTags ["grain_free"], primaryProteins ["whitefish"]
+  "Bil-Jac Select Chicken Formula Senior 7+" → productName "Select Chicken", lineName "Select", lifeStage "senior", primaryProteins ["chicken"]
+  "Amazing Grains Original Recipe For Dogs" → productName "Amazing Grains Original", lineName "Amazing Grains", targetPet "dog"`;
 
     const result = await this.model.generateContent({
       contents: [
