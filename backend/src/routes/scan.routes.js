@@ -356,9 +356,8 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     // Pet-specific concerns are handled via rule-based warnings (no AI needed)
     const healthConditions = pet.healthConditions || [];
     const hasConditions = healthConditions.length > 0;
-    const rawProductType = extracted.productType || product?.product_type || 
-      (ingredientsList.length <= 6 ? 'treats' : 'food');
-    const isTreatProduct = rawProductType === 'treats' || rawProductType === 'supplement' || ingredientsList.length <= 6;
+    const rawProductType = extracted.productType || product?.product_type || 'food';
+    const isTreatProduct = rawProductType === 'treats' || rawProductType === 'treat' || rawProductType === 'supplement';
     const productType = isTreatProduct ? 'treats' : 'food';
     
     // Always evaluate as "healthy" — one universal score per product
@@ -2263,9 +2262,8 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
     // UNIVERSAL SCORING — always score as "healthy" baseline
     const healthConditions = pet.healthConditions || [];
     const hasConditions = healthConditions.length > 0;
-    const rawProductType2 = extracted.productType || product?.product_type || 
-      (ingredientsList.length <= 6 ? 'treats' : 'food');
-    const isTreatProduct2 = rawProductType2 === 'treats' || rawProductType2 === 'supplement' || ingredientsList.length <= 6;
+    const rawProductType2 = extracted.productType || product?.product_type || 'food';
+    const isTreatProduct2 = rawProductType2 === 'treats' || rawProductType2 === 'treat' || rawProductType2 === 'supplement';
     const productType = isTreatProduct2 ? 'treats' : 'food';
     
     // Always evaluate as "healthy" — universal score
@@ -3026,12 +3024,12 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
         return res.status(400).json({ error: 'productType must be "food" or "treats"' });
       }
     } else {
-      productType = ingredientsList.length <= 6 ? 'treats' : 'food';
+      productType = 'food';
     }
 
     console.log(
       `🏷️ [Manual] productType=${productType}${
-        req.body.productType || req.body.product_type ? ' (client)' : ' (length heuristic fallback)'
+        req.body.productType || req.body.product_type ? ' (client)' : ' (default)'
       }`
     );
 
