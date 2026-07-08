@@ -726,7 +726,7 @@ class ProductService {
   }
 
   /**
-   * Build match_key from slots and look up product (with protein-less + column fallbacks).
+   * Build match_key from slots and look up product (protein-less fallback only).
    */
   async findByMatchSlots(slots) {
     const withPet = { ...slots, targetPetType: slots.targetPetType };
@@ -743,7 +743,7 @@ class ProductService {
       if (row) return row;
     }
 
-    return this.findBySlotColumns(slots);
+    return null;
   }
 
   /**

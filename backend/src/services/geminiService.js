@@ -104,6 +104,7 @@ class GeminiService {
 
     await this.cacheResult(imageHash, extracted);
     const { ocrFullText: _omit, ...result } = extracted;
+    result.rawOcrText = _omit || null;
     return result;
   }
 

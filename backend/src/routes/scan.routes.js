@@ -1120,6 +1120,16 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       });
     }
 
+    // Fallback: infer lifeStage from text when Gemini omits it
+    if (!extracted.lifeStage) {
+      const stageText = [extracted.productName, extracted.lineName, extracted.rawOcrText]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (/\bpuppy\b/.test(stageText)) extracted.lifeStage = 'puppy';
+      else if (/\bkitten\b/.test(stageText)) extracted.lifeStage = 'kitten';
+      else if (/\bsenior\b|\b7\+/.test(stageText)) extracted.lifeStage = 'senior';
+      else if (/\badult\b/.test(stageText)) extracted.lifeStage = 'adult';
+    }
+
     // Normalize product name (strip filler words) — fallback when slots incomplete
     const normalizedName = productService.normalizeProductName(extracted.productName);
 
