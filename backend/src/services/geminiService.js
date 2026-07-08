@@ -228,36 +228,29 @@ Rules:
 - Read guaranteedAnalysis numbers from the label or OCR when visible; null if not shown
 - Do not invent product names; use null when unreadable
 
-Product identity slots (for DB matching — separate from productName):
-- lineName: product LINE / SERIES only (e.g. "Select", "Core", "Wholesome Grains", "Complete Health"). NOT flavor words.
-- primaryProteins: main animal protein sources as lowercase tokens (e.g. ["chicken"], ["lamb","salmon"]). From flavor text on label.
-- breedSize: "large_breed" | "small_breed" | "all" — only when label says Large Breed / Small Breed / similar.
-- dietTags: tags like ["grain_free"], ["limited_ingredient"] when clearly stated on label.
-- lifeStage: "Puppy" → "puppy", "Kitten" → "kitten", "Senior" / "7+" → "senior", "Adult" → "adult" (never combine puppy+kitten)
+SLOT EXTRACTION (most important — fill these FIRST):
+- brand: manufacturer name exactly as printed
+- lineName: product LINE or SERIES name only (e.g. "Select", "Core", "Wholesome Grains", "Life Protection"). NOT flavor/protein words.
+- lifeStage: "Puppy" → "puppy", "Kitten" → "kitten", "Adult" → "adult", "Senior"/"7+" → "senior", "All Life Stages" → "all". If label clearly says a life stage, you MUST capture it here.
+- primaryProteins: main animal protein sources as lowercase (e.g. ["chicken"], ["lamb","salmon"]). From flavor/name on label.
+- breedSize: "large_breed" | "small_breed" | "all". Only when label explicitly says Large Breed / Small Breed.
+- dietTags: ["grain_free"], ["limited_ingredient"] — only when clearly stated on label.
+- targetPet: "dog" | "cat" | "both" — from "Dog Food", "Cat Food", or imagery.
 
-productName rules (IMPORTANT):
-- Return the SHORTEST name that distinguishes this SKU from other products of the same brand.
-- INCLUDE: product line name (even if it contains adjective-like words), flavor/protein source
-- ONLY remove words from this EXACT exclude list (nothing else):
-  "Recipe", "Formula", "With", "Made With", "For Dogs", "For Cats",
-  "Premium", "Natural", "Delicious", "Nutritious", "Healthy",
-  "High Protein", "Real", "All Breeds", "Balanced"
-- Also exclude from productName (MUST capture in the corresponding slot field — never discard silently):
-  Life stage → lifeStage: "Puppy" → "puppy", "Kitten" → "kitten", "Adult" → "adult", "Senior"/"7+" → "senior"
-  Diet words → dietTags: "Grain-Free"/"Grain Free" → ["grain_free"], "Limited Ingredient" → ["limited_ingredient"]
-  Pet type → targetPet: "Dog Food"/"For Dogs" → "dog", "Cat Food"/"For Cats" → "cat"
-  Breed size → breedSize: "Large Breed" → "large_breed", "Small Breed" → "small_breed"
-- CRITICAL: If you remove ANY word from productName, the information MUST appear in its slot field. Never discard information.
-- Do NOT remove words that are part of the product LINE/SERIES name.
-  If unsure whether a word is filler vs. line name, KEEP IT.
-- Use Title Case. Replace "AND"/"&" with "&".
-- Examples (showing productName + where removed words go):
-  "Bil-Jac Adult Select Chicken Formula" → productName "Select Chicken", lineName "Select", lifeStage "adult", primaryProteins ["chicken"]
-  "ACANA Wholesome Grains Red Meat & Grains Recipe" → productName "Wholesome Grains Red Meat", lineName "Wholesome Grains", primaryProteins ["beef"]
-  "Blue Buffalo Life Protection Large Breed Puppy Chicken" → productName "Life Protection Chicken", lineName "Life Protection", lifeStage "puppy", breedSize "large_breed", primaryProteins ["chicken"]
-  "Wellness CORE Grain Free Ocean Whitefish" → productName "Core Ocean Whitefish", lineName "Core", dietTags ["grain_free"], primaryProteins ["whitefish"]
-  "Bil-Jac Select Chicken Formula Senior 7+" → productName "Select Chicken", lineName "Select", lifeStage "senior", primaryProteins ["chicken"]
-  "Amazing Grains Original Recipe For Dogs" → productName "Amazing Grains Original", lineName "Amazing Grains", targetPet "dog"`;
+productName: Just write the full product name as printed on the label (excluding brand). No formatting rules needed — we build the display name from slots in code.
+
+Examples:
+  Label: "Bil-Jac Adult Select Chicken Formula Dog Food"
+  → brand "Bil-Jac", productName "Adult Select Chicken Formula", lineName "Select", lifeStage "adult", primaryProteins ["chicken"], targetPet "dog"
+
+  Label: "Blue Buffalo Life Protection Large Breed Puppy Chicken & Brown Rice"
+  → brand "Blue Buffalo", productName "Life Protection Large Breed Puppy Chicken & Brown Rice", lineName "Life Protection", lifeStage "puppy", breedSize "large_breed", primaryProteins ["chicken"], targetPet "dog"
+
+  Label: "Wellness CORE Grain Free Ocean Whitefish Salmon & Herring"
+  → brand "Wellness", productName "CORE Grain Free Ocean Whitefish Salmon & Herring", lineName "Core", dietTags ["grain_free"], primaryProteins ["whitefish","salmon","herring"]
+
+  Label: "ACANA Wholesome Grains Red Meat Recipe"
+  → brand "ACANA", productName "Wholesome Grains Red Meat Recipe", lineName "Wholesome Grains", primaryProteins ["beef"]`;
 
     const result = await this.model.generateContent({
       contents: [
