@@ -334,10 +334,9 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
     // Use DB-stored hash if available, otherwise generate
     const ingredientHash = product.ingredient_hash || productService.generateIngredientHash(ingredientsList);
     const geminiService = require('../services/geminiService');
-    const isTreatProduct = product.product_type === 'treats' || product.product_type === 'supplement' || ingredientsList.length <= 6;
+    const isTreatProduct = product.product_type === 'treats' || product.product_type === 'treat' || product.product_type === 'supplement';
     const productTypeForHash = isTreatProduct ? 'treats' : 'food';
-    // For AI prompt context: pass actual product_type so AI knows supplement vs treat vs food
-    const productTypeForAI = product.product_type || (isTreatProduct ? 'treats' : 'food');
+    const productTypeForAI = product.product_type || 'food';
     
     // Universal scoring — always evaluate as "healthy"
     const hasConditions = pet.healthConditions && pet.healthConditions.length > 0;
@@ -608,7 +607,7 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
           ingredientHash,
           conditionHash,
           petType: pet.pet_type,
-          productType: product.product_type || 'dry_food',
+          productType: productTypeForHash,
           review: merged
         });
       } else if (productCacheHit) {
@@ -645,7 +644,7 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
             ingredientHash,
             conditionHash,
             petType: pet.pet_type,
-            productType: product.product_type || 'dry_food',
+            productType: productTypeForHash,
             review
           });
         } catch (err) {
@@ -979,9 +978,9 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
         const ingredientHash = candidate.ingredient_hash || productService.generateIngredientHash(ingredientsList);
         if (!ingredientHash) return;
 
-        const isTreatProduct = candidate.product_type === 'treats' || candidate.product_type === 'supplement' || ingredientsList.length <= 6;
+        const isTreatProduct = candidate.product_type === 'treats' || candidate.product_type === 'treat' || candidate.product_type === 'supplement';
         const productTypeForHash = isTreatProduct ? 'treats' : 'food';
-        const actualCandidateType = candidate.product_type || (isTreatProduct ? 'treats' : 'food');
+        const actualCandidateType = candidate.product_type || 'food';
 
         // Check/score each condition
         let worstScore = 100;
@@ -1050,7 +1049,7 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
                       hit_count = hit_count + 1`,
                     [
                       uuidv4(), ingredientHash, conditionHash, petType,
-                      candidate.product_type || 'dry_food',
+                      productTypeForHash,
                       computed.finalScore, computed.grade, computed.recommendation || 'consider',
                       JSON.stringify(computed.keyIssues || []),
                       JSON.stringify(computed.positives || []),
@@ -1104,7 +1103,7 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
                     hit_count = hit_count + 1`,
                   [
                     uuidv4(), ingredientHash, conditionHash, petType,
-                    candidate.product_type || 'dry_food',
+                    productTypeForHash,
                     aiReview.finalScore, aiReview.grade, aiReview.recommendation || 'consider',
                     JSON.stringify(aiReview.keyIssues || []),
                     JSON.stringify(aiReview.positives || []),
