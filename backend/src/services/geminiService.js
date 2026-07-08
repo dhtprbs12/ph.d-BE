@@ -110,7 +110,7 @@ class GeminiService {
     const slotInferText = [result.productName, result.lineName, result.rawOcrText]
       .filter(Boolean).join(' ').toLowerCase();
 
-    if (!result.lifeStage) {
+    if (!result.lifeStage || result.lifeStage === 'all') {
       if (/\bpuppy\b/.test(slotInferText)) result.lifeStage = 'puppy';
       else if (/\bkitten\b/.test(slotInferText)) result.lifeStage = 'kitten';
       else if (/\bsenior\b|\b7\+/.test(slotInferText)) result.lifeStage = 'senior';

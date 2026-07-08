@@ -1124,7 +1124,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     const inferText = [extracted.productName, extracted.lineName, extracted.rawOcrText]
       .filter(Boolean).join(' ').toLowerCase();
 
-    if (!extracted.lifeStage) {
+    if (!extracted.lifeStage || extracted.lifeStage === 'all') {
       if (/\bpuppy\b/.test(inferText)) extracted.lifeStage = 'puppy';
       else if (/\bkitten\b/.test(inferText)) extracted.lifeStage = 'kitten';
       else if (/\bsenior\b|\b7\+/.test(inferText)) extracted.lifeStage = 'senior';
