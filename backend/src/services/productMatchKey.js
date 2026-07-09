@@ -148,9 +148,9 @@ function buildDisplayName(slots = {}) {
   const parts = [];
   const stage = normalizeLifeStage(slots.lifeStage, slots.targetPetType);
 
-  if (stage === 'puppy') parts.push('Puppy');
-  else if (stage === 'kitten') parts.push('Kitten');
-  else if (stage === 'senior') parts.push('7+');
+  if (stage && stage !== 'all') {
+    parts.push(stage.charAt(0).toUpperCase() + stage.slice(1));
+  }
 
   const line = formatLineDisplay(slots.lineName);
   if (line) parts.push(line);
