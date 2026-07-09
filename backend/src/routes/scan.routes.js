@@ -1837,7 +1837,8 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
 
 /**
  * POST /api/scan/quick-analyze
- * Skip back label scan — analyze a known product from the DB for a specific pet
+ * Skip back label scan — analyze a known product from the DB for a specific pet.
+ * Uses product.ingredient_hash to check cache first for instant results.
  */
 router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
   try {
@@ -1851,15 +1852,6 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
     const product = await productService.findById(productId);
     if (!product || !product.raw_ingredients_text) {
       return res.status(404).json({ error: 'Product not found or has no ingredient data' });
-    }
-
-    const rawText = product.raw_ingredients_text;
-    const isUserConfirmed = product.source === 'user_scan';
-    const ingredientsList = isUserConfirmed
-      ? rawText.split(',').map(s => s.trim()).filter(Boolean)
-      : ingredientAnalyzer.parseIngredientText(rawText);
-    if (ingredientsList.length === 0) {
-      return res.status(422).json({ error: 'Could not parse ingredients for this product' });
     }
 
     // Build pet object
@@ -1881,6 +1873,90 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
       healthConditions: parsedConditions
     };
 
+    // Use stored ingredient_hash — no re-parsing needed for cache lookup
+    const ingredientHash = product.ingredient_hash;
+    const isTreatProduct = product.product_type === 'treats' || product.product_type === 'treat' || product.product_type === 'supplement';
+    const productType = isTreatProduct ? 'treats' : 'food';
+    const conditionHash = getSingleConditionHash('healthy', productType);
+
+    // Try instant cache hit using the product's stored hash
+    if (ingredientHash) {
+      try {
+        const cached = await query(
+          `SELECT * FROM product_review_cache WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
+          [ingredientHash, conditionHash, pet.pet_type]
+        );
+
+        if (cached.length > 0) {
+          const row = cached[0];
+          await query('UPDATE product_review_cache SET hit_count = hit_count + 1 WHERE id = ?', [row.id]);
+          await query('UPDATE products SET scan_count = scan_count + 1 WHERE id = ?', [product.id]);
+
+          const ingredientsList = ingredientAnalyzer.parseIngredientText(product.raw_ingredients_text);
+          const analysis = await ingredientAnalyzer.analyzeIngredients(ingredientsList, pet);
+
+          analysis.finalScore = row.final_score;
+          analysis.grade = row.grade;
+          analysis.recommendation = row.recommendation;
+
+          const aiInsights = {
+            topBenefits: safeJsonParse(row.positives, []),
+            topConcerns: safeJsonParse(row.key_issues, []),
+            conditionWarnings: ingredientAnalyzer.generateConditionWarnings(ingredientsList, pet.healthConditions || []),
+            aiGenerated: true
+          };
+
+          const scanId = uuidv4();
+          await saveScanHistoryEntry({
+            scanId,
+            userId,
+            deviceId,
+            productId: product.id,
+            scanType: 'quick_analyze',
+            petName: pet.name,
+            petType: pet.pet_type,
+            grade: row.grade,
+            score: row.final_score,
+            recommendation: row.recommendation,
+            analysisJson: { ...analysis, aiInsights }
+          });
+
+          console.log(`⚡ [QUICK] Instant cache hit for "${product.brand || ''} ${product.name}" → score=${row.final_score}`);
+
+          return res.json({
+            scanId,
+            status: 'complete',
+            scanType: 'quick_analyze',
+            extracted: {
+              productName: product.name,
+              brand: product.brand,
+              targetPet: product.target_pet_type,
+              ingredientCount: ingredientsList.length,
+              confidence: 1.0
+            },
+            product: {
+              id: product.id,
+              name: product.name,
+              brand: product.brand,
+              image_url: product.image_url,
+              product_type: product.product_type
+            },
+            analysis,
+            aiInsights,
+            pet: { id: pet.id || 'local', name: pet.name, petType: pet.pet_type }
+          });
+        }
+      } catch (err) {
+        console.warn('[QUICK] Cache lookup failed, falling back to full analysis:', err.message);
+      }
+    }
+
+    // Cache miss — fall back to full analysis pipeline
+    const ingredientsList = ingredientAnalyzer.parseIngredientText(product.raw_ingredients_text);
+    if (ingredientsList.length === 0) {
+      return res.status(422).json({ error: 'Could not parse ingredients for this product' });
+    }
+
     const scanId = uuidv4();
     const extracted = {
       productName: product.name,
@@ -1893,7 +1969,6 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
       imageType: 'quick_analyze'
     };
 
-    // Store initial state for polling
     analysisStore.set(scanId, {
       status: 'processing',
       progress: 'Analyzing ingredients...',
@@ -1903,12 +1978,10 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
       startTime: Date.now()
     });
 
-    // Increment scan count
     await query('UPDATE products SET scan_count = scan_count + 1 WHERE id = ?', [product.id]);
 
-    console.log(`⚡ [QUICK] Starting analysis for "${product.brand || ''} ${product.name}" (${ingredientsList.length} ingredients) for ${pet.name}`);
+    console.log(`⚡ [QUICK] Cache miss — full analysis for "${product.brand || ''} ${product.name}" (${ingredientsList.length} ingredients) for ${pet.name}`);
 
-    // Trigger background analysis (same as back label flow)
     processAnalysisInBackground(scanId, ingredientsList, pet, extracted, product, deviceId || 'unknown', userId);
 
     res.json({

@@ -319,13 +319,7 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
     // raw_ingredients_text is already clean comma-separated; use simple split
     // to preserve the exact order/count the user confirmed.
     const rawText = product.raw_ingredients_text || '';
-    const isUserConfirmed = product.source === 'user_scan';
-    let ingredientsList;
-    if (isUserConfirmed) {
-      ingredientsList = rawText.split(',').map(s => s.trim()).filter(Boolean);
-    } else {
-      ingredientsList = ingredientAnalyzer.parseIngredientText(rawText);
-    }
+    const ingredientsList = ingredientAnalyzer.parseIngredientText(rawText);
     if (!ingredientsList || ingredientsList.length === 0) {
       return res.status(400).json({ error: 'Product has no ingredients to analyze' });
     }
@@ -900,9 +894,7 @@ router.get('/:id/cached-review', optionalAuth, async (req, res, next) => {
 
     // Generate condition warnings for the viewing user's pet (rule-based, fast)
     const rawText = product.raw_ingredients_text || '';
-    const ingredientsList = product.source === 'user_scan'
-      ? rawText.split(',').map(s => s.trim()).filter(Boolean)
-      : ingredientAnalyzer.parseIngredientText(rawText);
+    const ingredientsList = ingredientAnalyzer.parseIngredientText(rawText);
     const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, parsedConditions);
 
     res.json({
