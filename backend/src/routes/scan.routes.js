@@ -1943,7 +1943,7 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
             userId,
             deviceId,
             productId: product.id,
-            scanType: 'quick_analyze',
+            scanType: 'label_photo',
             petName: pet.name,
             petType: pet.pet_type,
             grade: row.grade,
