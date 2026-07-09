@@ -1907,6 +1907,37 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
           };
 
           const scanId = uuidv4();
+          const resultPayload = {
+            scanId,
+            scanType: 'quick_analyze',
+            imageType: 'quick_analyze',
+            extracted: {
+              productName: product.name,
+              brand: product.brand,
+              targetPet: product.target_pet_type,
+              ingredientCount: ingredientsList.length,
+              confidence: 1.0
+            },
+            product: {
+              id: product.id,
+              name: product.name,
+              brand: product.brand,
+              image_url: product.image_url,
+              product_type: product.product_type
+            },
+            analysis,
+            aiInsights,
+            pet: { id: pet.id || 'local', name: pet.name, petType: pet.pet_type }
+          };
+
+          // Store in analysisStore so polling works
+          analysisStore.set(scanId, {
+            status: 'complete',
+            createdAt: Date.now(),
+            duration: 0,
+            result: resultPayload
+          });
+
           await saveScanHistoryEntry({
             scanId,
             userId,
