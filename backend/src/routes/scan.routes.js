@@ -1916,9 +1916,9 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
             petName: pet.name,
             petType: pet.pet_type,
             grade: row.grade,
-            score: row.final_score,
+            finalScore: row.final_score,
             recommendation: row.recommendation,
-            analysisJson: { ...analysis, aiInsights }
+            analysisJson: JSON.stringify({ ...analysis, aiInsights })
           });
 
           console.log(`⚡ [QUICK] Instant cache hit for "${product.brand || ''} ${product.name}" → score=${row.final_score}`);
