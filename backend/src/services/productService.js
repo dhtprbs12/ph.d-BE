@@ -101,7 +101,7 @@ class ProductService {
 
     if (normBrand && normName) {
       const exact = results.find(r =>
-        this.normalizeForMatch(r.brand) === normBrand &&
+        (this.normalizeForMatch(r.brand) === normBrand || this.normalizeForMatch(r.manufacturer) === normBrand) &&
         this.normalizeForMatch(r.name) === normName
       );
       if (exact) return exact;
@@ -109,7 +109,7 @@ class ProductService {
 
     if (normBrand) {
       const brandMatch = results.find(r =>
-        this.normalizeForMatch(r.brand) === normBrand
+        this.normalizeForMatch(r.brand) === normBrand || this.normalizeForMatch(r.manufacturer) === normBrand
       );
       if (brandMatch) return brandMatch;
     }
@@ -122,7 +122,7 @@ class ProductService {
     let best = null;
     let bestKey = -1;
     for (const r of results) {
-      const dbBrand = this.normalizeForMatch(r.brand);
+      const dbBrand = this.normalizeForMatch(r.brand) || this.normalizeForMatch(r.manufacturer);
       const dbName = this.normalizeForMatch(r.name);
       const jb = normBrand ? this._jaccardTokenSimilarity(normBrand, dbBrand) : 1;
       const jn = normName ? this._jaccardTokenSimilarity(normName, dbName) : 1;
@@ -167,9 +167,9 @@ class ProductService {
     
     let sql = `
       SELECT * FROM products 
-      WHERE (name LIKE ? OR brand LIKE ?)
+      WHERE (name LIKE ? OR brand LIKE ? OR manufacturer LIKE ?)
     `;
-    const params = [`%${term}%`, `%${term}%`];
+    const params = [`%${term}%`, `%${term}%`, `%${term}%`];
 
     if (targetPetType) {
       sql += ` AND (target_pet_type = ? OR target_pet_type = 'both')`;
@@ -358,8 +358,8 @@ class ProductService {
 
     // Text search
     if (searchTerm && searchTerm.length >= 2) {
-      where.push('(p.name LIKE ? OR p.brand LIKE ?)');
-      params.push(`%${searchTerm}%`, `%${searchTerm}%`);
+      where.push('(p.name LIKE ? OR p.brand LIKE ? OR p.manufacturer LIKE ?)');
+      params.push(`%${searchTerm}%`, `%${searchTerm}%`, `%${searchTerm}%`);
     }
 
     // ── Assemble WHERE ──
@@ -394,6 +394,7 @@ class ProductService {
       : null;
 
     const matchFields = productMatchKey.buildProductMatchFields({
+      manufacturer: productData.manufacturer,
       brand: productData.brand,
       lineName: productData.lineName,
       lifeStage: productData.lifeStage,
@@ -405,14 +406,15 @@ class ProductService {
     
     await query(
       `INSERT INTO products 
-       (id, name, brand, barcode, brand_norm, line_name, primary_proteins, breed_size, diet_tags, match_key,
+       (id, name, brand, manufacturer, barcode, brand_norm, line_name, primary_proteins, breed_size, diet_tags, match_key,
         product_type, texture, target_pet_type, target_life_stage, 
         raw_ingredients_text, ingredient_hash, image_url, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user_scan')`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user_scan')`,
       [
         id,
         productData.name || productData.displayName || 'Unknown Product',
         productData.brand || null,
+        productData.manufacturer || null,
         productData.barcode || null,
         matchFields.brand_norm,
         matchFields.line_name,
@@ -761,6 +763,7 @@ class ProductService {
     try {
       await query(
         `UPDATE products SET
+           manufacturer = COALESCE(manufacturer, ?),
            brand_norm = COALESCE(brand_norm, ?),
            line_name = COALESCE(line_name, ?),
            primary_proteins = COALESCE(primary_proteins, ?),
@@ -773,6 +776,7 @@ class ProductService {
            END
          WHERE id = ? AND (match_key IS NULL OR match_key = '')`,
         [
+          fields.manufacturer,
           fields.brand_norm,
           fields.line_name,
           fields.primary_proteins,
@@ -952,19 +956,20 @@ class ProductService {
     const normName = this.normalizeForMatch(productName);
 
     const allRows = await query(
-      `SELECT * FROM products WHERE brand IS NOT NULL OR name IS NOT NULL LIMIT 500`
+      `SELECT * FROM products WHERE brand IS NOT NULL OR name IS NOT NULL OR manufacturer IS NOT NULL LIMIT 500`
     );
 
     const scored = [];
 
     for (const r of allRows) {
       const dbBrand = this.normalizeForMatch(r.brand);
+      const dbMfr = this.normalizeForMatch(r.manufacturer);
       const dbName = this.normalizeForMatch(r.name);
 
       let nameScore = 0;
 
-      // Brand must match (exact normalized) for any candidate to qualify
-      if (normBrand && dbBrand !== normBrand) continue;
+      // Brand or manufacturer must match for any candidate to qualify
+      if (normBrand && dbBrand !== normBrand && dbMfr !== normBrand) continue;
       if (!normBrand && !dbBrand) continue;
 
       // Name similarity

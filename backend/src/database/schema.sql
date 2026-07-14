@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS products (
     id VARCHAR(36) PRIMARY KEY,
     name VARCHAR(300) NOT NULL,
     brand VARCHAR(200),
+    manufacturer VARCHAR(200) NULL,
     barcode VARCHAR(20) NULL,
     brand_norm VARCHAR(200) NULL,
     line_name VARCHAR(100) NULL,
@@ -100,7 +101,7 @@ CREATE TABLE IF NOT EXISTS products (
     UNIQUE INDEX idx_products_match_key (match_key),
     INDEX idx_products_brand_norm (brand_norm),
     INDEX idx_products_line_name (line_name),
-    FULLTEXT INDEX ft_product_search (name, brand)
+    FULLTEXT INDEX ft_product_search (name, brand, manufacturer)
 );
 
 -- Product ingredients (parsed)

@@ -100,9 +100,9 @@ router.post('/', validatePet, async (req, res, next) => {
     const { name, petType, breed, ageMonths, weightKg, sex, activityLevel, healthConditions } = req.body;
     const petId = uuidv4();
 
-    // Check if this is the first pet (make it primary)
-    const existingPets = await query('SELECT COUNT(*) as count FROM pets WHERE user_id = ?', [req.user.id]);
-    const isPrimary = existingPets[0].count === 0;
+    // If no other pet is currently primary, this one becomes primary
+    const primaryExists = await query('SELECT id FROM pets WHERE user_id = ? AND is_primary = TRUE LIMIT 1', [req.user.id]);
+    const isPrimary = primaryExists.length === 0;
 
     // Create pet
     await query(

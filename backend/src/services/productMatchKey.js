@@ -1,10 +1,16 @@
 /**
- * Canonical product match key for stable SKU identity (brand + line + stage + …).
+ * Canonical product match key for stable SKU identity.
+ * Format: manufacturer|brand|lineName|lifeStage|proteins|breedSize|dietTags|
  * Display names are built separately; match_key is for exact DB lookup.
  */
 
 const ALLOWED_LIFE_STAGES = new Set(['puppy', 'kitten', 'adult', 'senior', 'all']);
 const ALLOWED_BREED_SIZES = new Set(['all', 'large_breed', 'small_breed']);
+
+function normalizeManufacturer(manufacturer) {
+  if (!manufacturer) return '';
+  return String(manufacturer).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
 
 function normalizeBrand(brand) {
   if (!brand) return '';
@@ -76,6 +82,7 @@ function normalizeBreedSize(breedSize) {
 
 /**
  * @param {object} slots
+ * @param {string} [slots.manufacturer]
  * @param {string} [slots.brand]
  * @param {string} [slots.lineName]
  * @param {string} [slots.lifeStage]
@@ -86,6 +93,7 @@ function normalizeBreedSize(breedSize) {
  */
 function buildMatchKey(slots = {}) {
   const parts = [
+    normalizeManufacturer(slots.manufacturer),
     normalizeBrand(slots.brand),
     normalizeLineName(slots.lineName),
     normalizeLifeStage(slots.lifeStage, slots.targetPetType),
@@ -198,6 +206,7 @@ function buildSlotsFromExtracted(extracted = {}) {
   }
 
   return {
+    manufacturer: extracted.manufacturer || null,
     brand: extracted.brand || null,
     lineName,
     lifeStage,
@@ -208,9 +217,10 @@ function buildSlotsFromExtracted(extracted = {}) {
   };
 }
 
-/** Enough signal for exact match_key lookup (brand + line). */
+/** Enough signal for exact match_key lookup (manufacturer or brand + line). */
 function hasMinimumMatchSlots(slots = {}) {
-  return !!normalizeBrand(slots.brand) && !!normalizeLineName(slots.lineName);
+  const hasBrandOrMfr = !!normalizeBrand(slots.brand) || !!normalizeManufacturer(slots.manufacturer);
+  return hasBrandOrMfr && !!normalizeLineName(slots.lineName);
 }
 
 /** Required front-label fields before proceeding to back scan. */
@@ -224,6 +234,7 @@ function getMissingRequiredFrontFields(extracted = {}) {
 }
 
 function buildProductMatchFields(slots = {}) {
+  const manufacturer = slots.manufacturer || null;
   const brandNorm = normalizeBrand(slots.brand) || null;
   const lineName = normalizeLineName(slots.lineName) || null;
   const lifeStage = normalizeLifeStage(slots.lifeStage, slots.targetPetType);
@@ -231,6 +242,7 @@ function buildProductMatchFields(slots = {}) {
   const primaryProteins = serializePrimaryProteins(slots.primaryProteins);
   const dietTags = serializeDietTags(slots.dietTags);
   const matchKey = buildMatchKey({
+    manufacturer: slots.manufacturer,
     brand: slots.brand,
     lineName: slots.lineName,
     lifeStage,
@@ -241,6 +253,7 @@ function buildProductMatchFields(slots = {}) {
   });
 
   return {
+    manufacturer,
     brand_norm: brandNorm,
     line_name: lineName,
     target_life_stage: lifeStage,
@@ -254,6 +267,7 @@ function buildProductMatchFields(slots = {}) {
 module.exports = {
   ALLOWED_LIFE_STAGES,
   ALLOWED_BREED_SIZES,
+  normalizeManufacturer,
   normalizeBrand,
   normalizeLineName,
   normalizeProteinList,

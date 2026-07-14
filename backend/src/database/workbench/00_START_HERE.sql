@@ -15,6 +15,7 @@
 --   05_products_match_columns.sql   ← line_name, match_key, barcode 등
 --   06_split_puppy_kitten_life_stage.sql  ← puppy / kitten 분리
 --   07_scan_history_pet_upsert.sql        ← history upsert: user+product+pet
+--   08_add_manufacturer.sql              ← manufacturer 컬럼 + match_key 구조 변경 (data reset)
 --
 -- ONLY NEED MATCH COLUMNS?
 --   → 01_helpers.sql 실행 후 05_products_match_columns.sql 만 실행

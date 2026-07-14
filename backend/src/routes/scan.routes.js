@@ -1718,6 +1718,7 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
       frontData?.displayName ||
       productMatchKey.buildDisplayName(productMatchKey.buildSlotsFromExtracted(frontData || {})) ||
       productName;
+    const manufacturer = frontData?.manufacturer || req.body.manufacturer || null;
     const brand = frontData?.brand || req.body.brand || null;
     const productType = frontData?.productType || req.body.productType || 'dry_food';
     const targetPet = frontData?.targetPet || petType;
@@ -1725,6 +1726,7 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
     const lifeStage = frontData?.lifeStage || 'all';
 
     const slots = productMatchKey.buildSlotsFromExtracted({
+      manufacturer,
       brand,
       targetPet,
       lifeStage,
@@ -1737,6 +1739,7 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
 
     const extracted = {
       productName: displayName,
+      manufacturer,
       brand,
       targetPet,
       productType,
@@ -1758,6 +1761,7 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
       product = await productService.createFromScan({
         name: displayName,
         displayName,
+        manufacturer,
         brand,
         lineName: slots.lineName,
         primaryProteins: slots.primaryProteins,
@@ -2296,6 +2300,7 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
           product = await productService.createFromScan({
             name: displayName,
             displayName,
+            manufacturer: extracted.manufacturer,
             brand: extracted.brand,
             lineName: slots.lineName,
             primaryProteins: slots.primaryProteins,

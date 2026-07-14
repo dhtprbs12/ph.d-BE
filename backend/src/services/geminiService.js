@@ -205,6 +205,7 @@ Return JSON only:
 {
   "imageType": "ingredients_label" | "front_label" | "mixed",
   "productName": "string or null",
+  "manufacturer": "string or null",
   "brand": "string or null",
   "productType": "dry_food" | "wet_food" | "treats" | "supplement" | "other" | null,
   "texture": "dry" | "wet" | "semi_moist" | "freeze_dried" | null,
@@ -229,28 +230,38 @@ Rules:
 - Do not invent product names; use null when unreadable
 
 SLOT EXTRACTION (most important — fill these FIRST):
-- brand: manufacturer name exactly as printed
-- lineName: product LINE or SERIES name only (e.g. "Select", "Core", "Wholesome Grains", "Life Protection"). NOT flavor/protein words.
+- manufacturer: the parent company / maker. Usually printed smaller on the package (e.g. "Purina", "Mars", "Hill's", "Champion Petfoods", "Diamond Pet Foods", "General Mills", "Colgate-Palmolive", "J.M. Smucker"). If manufacturer and brand are the same entity (e.g. Bil-Jac, Wellness, ACANA), put the same value in both fields. Use null only if truly unreadable.
+- brand: the product line brand displayed most prominently on the front of the package (e.g. "Pro Plan", "Blue Buffalo", "Science Diet", "ACANA", "Wellness", "Bil-Jac"). This is NOT the parent company — it's the name consumers use to identify the product line.
+- lineName: product LINE or SERIES name only (e.g. "Select", "Core", "Complete Essentials", "Wholesome Grains", "Life Protection"). NOT flavor/protein words.
 - lifeStage: "Puppy" → "puppy", "Kitten" → "kitten", "Adult" → "adult", "Senior"/"7+" → "senior", "All Life Stages" → "all". If label clearly says a life stage, you MUST capture it here.
 - primaryProteins: main animal protein sources as lowercase (e.g. ["chicken"], ["lamb","salmon"]). From flavor/name on label.
 - breedSize: "large_breed" | "small_breed" | "all". Only when label explicitly says Large Breed / Small Breed.
 - dietTags: ["grain_free"], ["limited_ingredient"] — only when clearly stated on label.
 - targetPet: "dog" | "cat" | "both" — from "Dog Food", "Cat Food", or imagery.
 
-productName: Just write the full product name as printed on the label (excluding brand). No formatting rules needed — we build the display name from slots in code.
+productName: Just write the full product name as printed on the label (excluding manufacturer and brand). No formatting rules needed — we build the display name from slots in code.
 
 Examples:
+  Label: "Purina Pro Plan Adult Complete Essentials Salmon & Rice Formula Dog Food"
+  → manufacturer "Purina", brand "Pro Plan", productName "Adult Complete Essentials Salmon & Rice Formula", lineName "Complete Essentials", lifeStage "adult", primaryProteins ["salmon"], targetPet "dog"
+
+  Label: "Purina Pro Plan Puppy Sensitive Skin & Stomach Salmon & Rice Formula"
+  → manufacturer "Purina", brand "Pro Plan", productName "Puppy Sensitive Skin & Stomach Salmon & Rice Formula", lineName "Sensitive Skin & Stomach", lifeStage "puppy", primaryProteins ["salmon"], targetPet "dog"
+
   Label: "Bil-Jac Adult Select Chicken Formula Dog Food"
-  → brand "Bil-Jac", productName "Adult Select Chicken Formula", lineName "Select", lifeStage "adult", primaryProteins ["chicken"], targetPet "dog"
+  → manufacturer "Bil-Jac", brand "Bil-Jac", productName "Adult Select Chicken Formula", lineName "Select", lifeStage "adult", primaryProteins ["chicken"], targetPet "dog"
 
   Label: "Blue Buffalo Life Protection Large Breed Puppy Chicken & Brown Rice"
-  → brand "Blue Buffalo", productName "Life Protection Large Breed Puppy Chicken & Brown Rice", lineName "Life Protection", lifeStage "puppy", breedSize "large_breed", primaryProteins ["chicken"], targetPet "dog"
+  → manufacturer "Blue Buffalo", brand "Blue Buffalo", productName "Life Protection Large Breed Puppy Chicken & Brown Rice", lineName "Life Protection", lifeStage "puppy", breedSize "large_breed", primaryProteins ["chicken"], targetPet "dog"
+
+  Label: "Hill's Science Diet Adult Sensitive Stomach & Skin Chicken Recipe"
+  → manufacturer "Hill's", brand "Science Diet", productName "Adult Sensitive Stomach & Skin Chicken Recipe", lineName "Sensitive Stomach & Skin", lifeStage "adult", primaryProteins ["chicken"], targetPet "dog"
 
   Label: "Wellness CORE Grain Free Ocean Whitefish Salmon & Herring"
-  → brand "Wellness", productName "CORE Grain Free Ocean Whitefish Salmon & Herring", lineName "Core", dietTags ["grain_free"], primaryProteins ["whitefish","salmon","herring"]
+  → manufacturer "Wellness", brand "Wellness", productName "CORE Grain Free Ocean Whitefish Salmon & Herring", lineName "Core", dietTags ["grain_free"], primaryProteins ["whitefish","salmon","herring"]
 
   Label: "ACANA Wholesome Grains Red Meat Recipe"
-  → brand "ACANA", productName "Wholesome Grains Red Meat Recipe", lineName "Wholesome Grains", primaryProteins ["beef"]`;
+  → manufacturer "Champion Petfoods", brand "ACANA", productName "Wholesome Grains Red Meat Recipe", lineName "Wholesome Grains", primaryProteins ["beef"]`;
 
     const result = await this.model.generateContent({
       contents: [
