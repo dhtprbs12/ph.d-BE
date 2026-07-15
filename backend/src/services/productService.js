@@ -409,7 +409,7 @@ class ProductService {
        (id, name, brand, manufacturer, barcode, brand_norm, line_name, primary_proteins, breed_size, diet_tags, match_key,
         product_type, texture, target_pet_type, target_life_stage, 
         raw_ingredients_text, ingredient_hash, image_url, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user_scan')`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user_scan')`,
       [
         id,
         productData.name || productData.displayName || 'Unknown Product',
