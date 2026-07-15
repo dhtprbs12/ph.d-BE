@@ -1169,6 +1169,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     pendingFrontLabels.set(pendingScanId, {
       productName: resolvedProductName,
       displayName: displayName || resolvedProductName,
+      manufacturer: extracted.manufacturer,
       brand: extracted.brand,
       targetPet: extracted.targetPet,
       productType: extracted.productType,
@@ -1178,7 +1179,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       primaryProteins: slots.primaryProteins,
       breedSize: slots.breedSize,
       dietTags: slots.dietTags,
-      packageShape: extracted.packageShape, // drives the back-label capture mode
+      packageShape: extracted.packageShape,
       imageType: extracted.imageType,
       imageUrl: exactCandidate?.product?.image_url || null,
       matchedProductId: exactCandidate?.product?.id || null,
@@ -1587,6 +1588,7 @@ router.post('/back/:pendingScanId', authenticateToken, upload.single('image'), a
       ...extracted,
       productName: frontData.productName || extracted.productName,
       displayName: frontData.displayName || frontData.productName || extracted.productName,
+      manufacturer: frontData.manufacturer || extracted.manufacturer,
       brand: frontData.brand || extracted.brand,
       targetPet: frontData.targetPet || extracted.targetPet,
       productType: frontData.productType || extracted.productType,
@@ -1619,6 +1621,7 @@ router.post('/back/:pendingScanId', authenticateToken, upload.single('image'), a
       ...frontData,
       productName: mergedExtracted.productName,
       displayName: mergedExtracted.displayName,
+      manufacturer: mergedExtracted.manufacturer,
       brand: mergedExtracted.brand,
       targetPet: mergedExtracted.targetPet,
       productType: mergedExtracted.productType,

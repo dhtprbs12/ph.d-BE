@@ -404,33 +404,41 @@ class ProductService {
       dietTags: productData.dietTags,
     });
     
-    await query(
-      `INSERT INTO products 
-       (id, name, brand, manufacturer, barcode, brand_norm, line_name, primary_proteins, breed_size, diet_tags, match_key,
-        product_type, texture, target_pet_type, target_life_stage, 
-        raw_ingredients_text, ingredient_hash, image_url, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user_scan')`,
-      [
-        id,
-        productData.name || productData.displayName || 'Unknown Product',
-        productData.brand || null,
-        productData.manufacturer || null,
-        productData.barcode || null,
-        matchFields.brand_norm,
-        matchFields.line_name,
-        matchFields.primary_proteins,
-        matchFields.breed_size,
-        matchFields.diet_tags,
-        matchFields.match_key,
-        productData.productType || 'dry_food',
-        productData.texture || null,
-        productData.targetPetType || 'both',
-        productData.lifeStage || matchFields.target_life_stage || 'all',
-        productData.rawIngredientsText || null,
-        ingredientHash,
-        productData.imageUrl || null
-      ]
-    );
+    try {
+      await query(
+        `INSERT INTO products 
+         (id, name, brand, manufacturer, barcode, brand_norm, line_name, primary_proteins, breed_size, diet_tags, match_key,
+          product_type, texture, target_pet_type, target_life_stage, 
+          raw_ingredients_text, ingredient_hash, image_url, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user_scan')`,
+        [
+          id,
+          productData.name || productData.displayName || 'Unknown Product',
+          productData.brand || null,
+          productData.manufacturer || null,
+          productData.barcode || null,
+          matchFields.brand_norm,
+          matchFields.line_name,
+          matchFields.primary_proteins,
+          matchFields.breed_size,
+          matchFields.diet_tags,
+          matchFields.match_key,
+          productData.productType || 'dry_food',
+          productData.texture || null,
+          productData.targetPetType || 'both',
+          productData.lifeStage || matchFields.target_life_stage || 'all',
+          productData.rawIngredientsText || null,
+          ingredientHash,
+          productData.imageUrl || null
+        ]
+      );
+    } catch (err) {
+      if (err.code === 'ER_DUP_ENTRY' && ingredientHash) {
+        const existing = await this.findByIngredientHash(ingredientHash);
+        if (existing) return existing;
+      }
+      throw err;
+    }
 
     return await this.findById(id);
   }
