@@ -1194,6 +1194,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     const mapProductResponse = (p) => ({
       id: p.id,
       name: p.name,
+      manufacturer: p.manufacturer,
       brand: p.brand,
       imageUrl: p.image_url,
       productType: p.product_type,
@@ -1239,6 +1240,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
         captured: {
           productName: resolvedProductName,
           displayName: displayName || resolvedProductName,
+          manufacturer: extracted.manufacturer,
           brand: extracted.brand,
           targetPet: extracted.targetPet,
           productType: extracted.productType,
@@ -1486,6 +1488,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       captured: {
         productName: resolvedProductName,
         displayName: displayName || resolvedProductName,
+        manufacturer: extracted.manufacturer,
         brand: extracted.brand,
         targetPet: extracted.targetPet,
         productType: extracted.productType,
@@ -1804,7 +1807,7 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
       status: 'processing',
       progress: 'Analyzing confirmed ingredients...',
       extracted,
-      product: { id: product.id, name: product.name, brand: product.brand, image_url: product.image_url },
+      product: { id: product.id, name: product.name, manufacturer: product.manufacturer, brand: product.brand, image_url: product.image_url },
       pet,
       startTime: Date.now()
     });
@@ -1829,6 +1832,7 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
       product: {
         id: product.id,
         name: product.name,
+        manufacturer: product.manufacturer,
         brand: product.brand,
         image_url: product.image_url,
       },
@@ -1928,6 +1932,7 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
             product: {
               id: product.id,
               name: product.name,
+              manufacturer: product.manufacturer,
               brand: product.brand,
               image_url: product.image_url,
               product_type: product.product_type
@@ -1975,6 +1980,7 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
             product: {
               id: product.id,
               name: product.name,
+              manufacturer: product.manufacturer,
               brand: product.brand,
               image_url: product.image_url,
               product_type: product.product_type
@@ -2011,7 +2017,7 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
       status: 'processing',
       progress: 'Analyzing ingredients...',
       extracted,
-      product: { id: product.id, name: product.name, brand: product.brand, image_url: product.image_url },
+      product: { id: product.id, name: product.name, manufacturer: product.manufacturer, brand: product.brand, image_url: product.image_url },
       pet,
       startTime: Date.now()
     });
@@ -2036,6 +2042,7 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
       product: {
         id: product.id,
         name: product.name,
+        manufacturer: product.manufacturer,
         brand: product.brand,
         image_url: product.image_url,
         isNew: false
@@ -2069,6 +2076,7 @@ router.get('/pending/:pendingScanId', async (req, res) => {
     exists: true,
     captured: {
       productName: frontData.productName,
+      manufacturer: frontData.manufacturer,
       brand: frontData.brand,
       targetPet: frontData.targetPet,
       productType: frontData.productType
@@ -2358,7 +2366,7 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
           position: i + 1,
           status: 'analyzing'
         })),
-        product: product ? { id: product.id, name: product.name, brand: product.brand } : null,
+        product: product ? { id: product.id, name: product.name, manufacturer: product.manufacturer, brand: product.brand } : null,
         pet: { id: pet.id || 'local', name: pet.name, petType: pet.pet_type }
       });
     }
@@ -2735,6 +2743,7 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
       product: product ? {
         id: product.id,
         name: product.name,
+        manufacturer: product.manufacturer,
         brand: product.brand
       } : null,
       analysis,

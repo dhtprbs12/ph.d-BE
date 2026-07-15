@@ -287,6 +287,7 @@ Examples:
       imageType: parsed.imageType || null,
       productType: parsed.productType || null,
       productName: parsed.productName || null,
+      manufacturer: parsed.manufacturer || null,
       brand: parsed.brand || null,
       targetPet: parsed.targetPet || null,
       ...slots,
@@ -1015,9 +1016,10 @@ Be specific to ${pet.name}. Don't be generic. Reference their actual conditions/
         const slots = normalizeExtractedSlots(parsed);
 
         return {
-          imageType: parsed.imageType || null,  // front_label, ingredients_label, mixed
-          productType: parsed.productType || null,  // dry_food, wet_food, treats, etc.
+          imageType: parsed.imageType || null,
+          productType: parsed.productType || null,
           productName: parsed.productName || null,
+          manufacturer: parsed.manufacturer || null,
           brand: parsed.brand || null,
           targetPet: parsed.targetPet || null,
           ...slots,
