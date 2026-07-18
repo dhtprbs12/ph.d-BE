@@ -8,7 +8,7 @@ const connectDB = async () => {
     const dbUrl = process.env.MYSQL_URL || process.env.DATABASE_URL;
 
     const poolConfig = dbUrl
-      ? { uri: dbUrl, waitForConnections: true, connectionLimit: 10, queueLimit: 0, enableKeepAlive: true, keepAliveInitialDelay: 0 }
+      ? { uri: dbUrl, waitForConnections: true, connectionLimit: 10, queueLimit: 0, enableKeepAlive: true, keepAliveInitialDelay: 10000, idleTimeout: 60000 }
       : {
           host: process.env.DB_HOST,
           port: process.env.DB_PORT || 3306,
@@ -19,7 +19,8 @@ const connectDB = async () => {
           connectionLimit: 10,
           queueLimit: 0,
           enableKeepAlive: true,
-          keepAliveInitialDelay: 0
+          keepAliveInitialDelay: 10000,
+          idleTimeout: 60000,
         };
 
     pool = mysql.createPool(poolConfig);
@@ -44,10 +45,17 @@ const getPool = () => {
 };
 
 const query = async (sql, params) => {
-  const pool = getPool();
-  // Use query() instead of execute() for more flexible parameter handling
-  const [results] = await pool.query(sql, params);
-  return results;
+  const p = getPool();
+  try {
+    const [results] = await p.query(sql, params);
+    return results;
+  } catch (err) {
+    if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET' || err.code === 'EPIPE') {
+      const [results] = await p.query(sql, params);
+      return results;
+    }
+    throw err;
+  }
 };
 
 module.exports = { connectDB, getPool, query };
