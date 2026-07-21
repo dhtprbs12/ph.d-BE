@@ -192,10 +192,18 @@ router.put('/:id', validatePet, async (req, res, next) => {
  */
 router.delete('/:id', async (req, res, next) => {
   try {
-    const result = await query('DELETE FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
-
-    if (result.affectedRows === 0) {
+    const [pet] = await query('SELECT is_primary FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    if (!pet) {
       return res.status(404).json({ error: 'Pet not found' });
+    }
+
+    await query('DELETE FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+
+    if (pet.is_primary) {
+      await query(
+        'UPDATE pets SET is_primary = TRUE WHERE user_id = ? AND is_primary = FALSE ORDER BY created_at ASC LIMIT 1',
+        [req.user.id]
+      );
     }
 
     res.json({ message: 'Pet deleted successfully' });
