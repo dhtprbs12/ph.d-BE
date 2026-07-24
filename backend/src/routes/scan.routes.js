@@ -1756,19 +1756,15 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
       imageType: 'confirmed_editor'
     };
 
-    // Find or create product (barcode → match_key → ingredient hash → create)
-    let product = null;
-    if (barcode) {
-      product = await productService.findByBarcode(barcode);
-    }
-    if (!product) {
-      product = await productService.findProductForConfirm({
-        slots,
-        ingredientsList,
-        brand,
-        displayName,
-      });
-    }
+    // Find or create product (match_key → ingredient hash → create)
+    // Note: barcode is NOT used for lookup here because the user explicitly
+    // confirmed this product via front label + ingredients. Barcode is stored after.
+    let product = await productService.findProductForConfirm({
+      slots,
+      ingredientsList,
+      brand,
+      displayName,
+    });
 
     if (!product) {
       product = await productService.createFromScan({
