@@ -164,12 +164,21 @@ class ProductService {
     }
     
     const term = searchTerm.trim();
+    const words = term.split(/\s+/).filter(Boolean);
     
-    let sql = `
-      SELECT * FROM products 
-      WHERE (name LIKE ? OR brand LIKE ? OR manufacturer LIKE ?)
-    `;
-    const params = [`%${term}%`, `%${term}%`, `%${term}%`];
+    let sql = `SELECT * FROM products WHERE `;
+    const params = [];
+
+    if (words.length > 1) {
+      const wordClauses = words.map(() => `(name LIKE ? OR brand LIKE ? OR manufacturer LIKE ?)`);
+      sql += `(${wordClauses.join(' AND ')})`;
+      for (const w of words) {
+        params.push(`%${w}%`, `%${w}%`, `%${w}%`);
+      }
+    } else {
+      sql += `(name LIKE ? OR brand LIKE ? OR manufacturer LIKE ?)`;
+      params.push(`%${term}%`, `%${term}%`, `%${term}%`);
+    }
 
     if (targetPetType) {
       sql += ` AND (target_pet_type = ? OR target_pet_type = 'both')`;

@@ -996,7 +996,7 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
       grade: analysis.grade,
       recommendation: analysis.recommendation,
       ocrExtractedText: extracted.rawIngredientsText,
-      analysisJson: JSON.stringify(analysis),
+      analysisJson: JSON.stringify({ ...analysis, aiInsights }),
     });
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -1670,7 +1670,8 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
       pendingScanId,
       ingredients,
       petName, petType, petBreed, petAgeMonths, petWeightKg,
-      petAllergies, petHealthConditions, deviceId
+      petAllergies, petHealthConditions, deviceId,
+      barcode
     } = req.body;
     const userId = req.user?.id || null;
 
@@ -1755,13 +1756,19 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
       imageType: 'confirmed_editor'
     };
 
-    // Find or create product (match_key → ingredient hash → create)
-    let product = await productService.findProductForConfirm({
-      slots,
-      ingredientsList,
-      brand,
-      displayName,
-    });
+    // Find or create product (barcode → match_key → ingredient hash → create)
+    let product = null;
+    if (barcode) {
+      product = await productService.findByBarcode(barcode);
+    }
+    if (!product) {
+      product = await productService.findProductForConfirm({
+        slots,
+        ingredientsList,
+        brand,
+        displayName,
+      });
+    }
 
     if (!product) {
       product = await productService.createFromScan({
@@ -1779,10 +1786,18 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
         lifeStage: slots.lifeStage !== 'all' ? slots.lifeStage : lifeStage,
         rawIngredientsText: rawText,
         ingredientsList,
-        imageUrl: frontData?.imageUrl || null
+        imageUrl: frontData?.imageUrl || null,
+        barcode: barcode || null
       });
     } else {
       product = await productService.ensureProductMatchFields(product.id, slots);
+    }
+
+    // Save barcode to product if scanned and product doesn't already have one
+    if (barcode && product && !product.barcode) {
+      await query('UPDATE products SET barcode = ? WHERE id = ?', [barcode, product.id]);
+      product.barcode = barcode;
+      console.log(`📊 [CONFIRM] Barcode saved: ${barcode} for product ${product.id}`);
     }
 
     // Handle product image (non-blocking)
@@ -2725,7 +2740,7 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
       grade: analysis.grade,
       recommendation: analysis.recommendation,
       ocrExtractedText: extracted.rawIngredientsText || product?.raw_ingredients_text,
-      analysisJson: JSON.stringify(analysis),
+      analysisJson: JSON.stringify({ ...analysis, aiInsights }),
     });
 
     const response = {
@@ -3522,7 +3537,7 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
       grade: analysis.grade,
       recommendation: analysis.recommendation,
       rawTextInput: ingredientsText,
-      analysisJson: JSON.stringify(analysis),
+      analysisJson: JSON.stringify({ ...analysis, aiInsights }),
     });
 
     // Ensure all required fields are present
