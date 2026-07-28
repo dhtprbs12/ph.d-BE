@@ -332,6 +332,52 @@ router.post('/save', async (req, res) => {
     // Update ingredient dictionary
     await updateIngredientDictionary(ingredientsList);
 
+    // Run analysis and cache it (same as app's processAnalysisInBackground)
+    try {
+      console.log(`🧪 [Batch] Running analysis for "${product.name}" (${ingredientsList.length} ingredients)...`);
+      const productType = (extracted.productType === 'treats' || extracted.productType === 'treat') ? 'treats' : 'food';
+      const ingredientHash = productService.generateIngredientHash(ingredientsList);
+      const { getSingleConditionHash } = require('../../backend/src/utils/cacheHelpers');
+      const conditionHash = getSingleConditionHash('healthy', productType);
+
+      // Check if already cached
+      const existing = await query(
+        `SELECT id FROM product_review_cache WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?`,
+        [ingredientHash, conditionHash, 'dog']
+      );
+
+      if (existing.length === 0) {
+        // Generate AI holistic review (same as app)
+        const review = await geminiService.reviewProductHolistically({
+          ingredients: ingredientsList,
+          petType: 'dog',
+          healthConditions: [],
+          productType,
+          petName: 'default',
+        });
+
+        await query(
+          `INSERT INTO product_review_cache 
+           (id, ingredient_hash, conditions_hash, pet_type, product_type, final_score, grade, recommendation,
+            key_issues, positives, ai_summary, protein_quality, has_artificial_additives, primary_ingredient_type)
+           VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE hit_count = hit_count + 1`,
+          [
+            ingredientHash, conditionHash, 'dog', `healthy_${productType}`,
+            review.finalScore, review.grade, review.recommendation,
+            JSON.stringify(review.keyIssues || []), JSON.stringify(review.positives || []),
+            review.aiSummary || null, review.proteinQuality || null,
+            review.hasArtificialAdditives ? 1 : 0, review.primaryIngredientType || null
+          ]
+        );
+        console.log(`✅ [Batch] Analysis cached: score=${review.finalScore} grade=${review.grade}`);
+      } else {
+        console.log(`⚡ [Batch] Analysis already cached for this product`);
+      }
+    } catch (analysisErr) {
+      console.error(`⚠️ [Batch] Analysis failed (product still saved):`, analysisErr.message);
+    }
+
     // Remove from pending queue
     const queueIdx = pendingQueue.findIndex(p => p.id === id);
     if (queueIdx >= 0) pendingQueue[queueIdx].status = 'saved';

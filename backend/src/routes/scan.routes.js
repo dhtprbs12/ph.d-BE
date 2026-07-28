@@ -304,7 +304,18 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
         [ingredientHash, `healthy_%`]
       );
       if (cacheRows.length > 0) {
-        try { analysis = JSON.parse(cacheRows[0].review_json); } catch {}
+        const row = cacheRows[0];
+        analysis = {
+          finalScore: row.final_score,
+          grade: row.grade,
+          recommendation: row.recommendation,
+          keyIssues: safeJsonParse(row.key_issues, []),
+          positives: safeJsonParse(row.positives, []),
+          aiSummary: row.ai_summary,
+          proteinQuality: row.protein_quality,
+          hasArtificialAdditives: !!row.has_artificial_additives,
+          primaryIngredientType: row.primary_ingredient_type,
+        };
       }
     }
 
@@ -317,7 +328,7 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
         image_url: product.image_url,
         barcode: product.barcode,
       },
-      score: analysis?.score ?? null,
+      score: analysis?.finalScore ?? null,
       grade: analysis?.grade ?? null,
       analysis: analysis || null,
       scanType: 'barcode_lookup',
