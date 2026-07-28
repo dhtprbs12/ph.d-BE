@@ -212,44 +212,51 @@ router.get('/queue', (req, res) => {
 
 /**
  * GET /api/batch/ingredients/suggest?q=
- * Autocomplete ingredient names from DB
+ * Same logic as app's /api/scan/ingredient-suggest
+ * Searches ai_assessment_cache.ingredient_normalized (prefix + contains)
  */
 router.get('/ingredients/suggest', async (req, res) => {
   try {
-    const q = (req.query.q || '').trim();
-    if (q.length < 2) return res.json([]);
+    const raw = String(req.query.q || '').trim();
+    const limit = 20;
+    if (raw.length < 1) return res.json([]);
 
-    // Try ingredient_dictionary table first
-    try {
-      const rows = await query(
-        `SELECT name, frequency FROM ingredient_dictionary 
-         WHERE name LIKE ? ORDER BY frequency DESC LIMIT 20`,
-        [`%${q}%`]
-      );
-      return res.json(rows.map(r => r.name));
-    } catch (e) {
-      // Table might not exist yet; fall back to parsing products
-    }
+    const qLower = raw.toLowerCase();
+    const esc = qLower.replace(/[%_\\]/g, '\\$&');
+    const prefixPat = `${esc}%`;
+    const containPat = `%${esc}%`;
 
-    // Fallback: search raw_ingredients_text across products
-    const rows = await query(
-      `SELECT DISTINCT raw_ingredients_text FROM products 
-       WHERE raw_ingredients_text LIKE ? LIMIT 50`,
-      [`%${q}%`]
+    // Prefix matches first
+    const prefixRows = await query(
+      `SELECT DISTINCT ingredient_normalized AS n
+       FROM ai_assessment_cache
+       WHERE ingredient_normalized LIKE ? ESCAPE '\\\\'
+       ORDER BY n ASC LIMIT ?`,
+      [prefixPat, limit]
     );
+    const out = prefixRows.map(r => r.n);
+    const seen = new Set(out.map(x => x.toLowerCase()));
 
-    const matches = new Set();
-    for (const row of rows) {
-      if (!row.raw_ingredients_text) continue;
-      const parts = ingredientAnalyzer.parseIngredientText(row.raw_ingredients_text);
-      for (const part of parts) {
-        if (part.toLowerCase().includes(q.toLowerCase())) {
-          matches.add(part.trim());
+    // Then contains matches
+    if (out.length < limit) {
+      const need = limit - out.length;
+      const containRows = await query(
+        `SELECT DISTINCT ingredient_normalized AS n
+         FROM ai_assessment_cache
+         WHERE ingredient_normalized LIKE ? ESCAPE '\\\\'
+           AND NOT (ingredient_normalized LIKE ? ESCAPE '\\\\')
+         ORDER BY n ASC LIMIT ?`,
+        [containPat, prefixPat, need]
+      );
+      for (const r of containRows) {
+        if (!seen.has(r.n.toLowerCase())) {
+          out.push(r.n);
+          if (out.length >= limit) break;
         }
       }
     }
 
-    res.json([...matches].slice(0, 20));
+    res.json(out);
   } catch (e) {
     console.error('❌ Suggest error:', e);
     res.status(500).json({ error: e.message });
