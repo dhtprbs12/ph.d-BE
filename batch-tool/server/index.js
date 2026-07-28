@@ -8,7 +8,6 @@ require('dotenv').config({ path: fs.existsSync(localEnv) ? localEnv : backendEnv
 
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 const routes = require('./routes');
 
 const app = express();
