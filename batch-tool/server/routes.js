@@ -4,6 +4,23 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 
+// HEIC to JPEG conversion
+async function ensureJpeg(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.heic' || ext === '.heif') {
+    const convert = require('heic-convert');
+    const inputBuffer = fs.readFileSync(filePath);
+    const jpegBuffer = await convert({ buffer: inputBuffer, format: 'JPEG', quality: 0.9 });
+    const jpegPath = filePath.replace(/\.heic$/i, '.jpg').replace(/\.heif$/i, '.jpg');
+    fs.writeFileSync(jpegPath, jpegBuffer);
+    return { path: jpegPath, buffer: jpegBuffer, mime: 'image/jpeg' };
+  }
+  // For non-HEIC, just read the buffer
+  const buffer = fs.readFileSync(filePath);
+  const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
+  return { path: filePath, buffer, mime };
+}
+
 // Reuse existing backend services
 const geminiService = require('../../backend/src/services/geminiService');
 const ingredientAnalyzer = require('../../backend/src/services/ingredientAnalyzer');
@@ -48,19 +65,20 @@ router.post(
         return res.status(400).json({ error: 'front and ingredients images are required' });
       }
 
-      // 1. Process front label
-      const frontBuffer = fs.readFileSync(frontFile.path);
-      const frontResult = await geminiService.extractFromImage(frontBuffer, frontFile.mimetype || 'image/jpeg');
+      // 1. Process front label (convert HEIC if needed)
+      const front = await ensureJpeg(frontFile.path);
+      const frontResult = await geminiService.extractFromImage(front.buffer, front.mime);
 
-      // 2. Process ingredients
-      const ingredientsBuffer = fs.readFileSync(ingredientsFile.path);
-      const ingredientsResult = await geminiService.extractFromImage(ingredientsBuffer, ingredientsFile.mimetype || 'image/jpeg');
+      // 2. Process ingredients (convert HEIC if needed)
+      const ing = await ensureJpeg(ingredientsFile.path);
+      const ingredientsResult = await geminiService.extractFromImage(ing.buffer, ing.mime);
 
       // 3. Decode barcode (if provided)
       let barcodeValue = null;
       if (barcodeFile) {
         try {
-          barcodeValue = await decodeBarcode(barcodeFile.path);
+          const bc = await ensureJpeg(barcodeFile.path);
+          barcodeValue = await decodeBarcode(bc.path);
         } catch (e) {
           console.warn('⚠️ Barcode decode failed:', e.message);
         }
@@ -129,16 +147,17 @@ router.post('/process-bulk', upload.array('photos', 300), async (req, res) => {
       const set = sets[idx];
       if (!set.front || !set.ingredients) continue;
 
-      const frontBuffer = fs.readFileSync(set.front.path);
-      const frontResult = await geminiService.extractFromImage(frontBuffer, set.front.mimetype || 'image/jpeg');
+      const front = await ensureJpeg(set.front.path);
+      const frontResult = await geminiService.extractFromImage(front.buffer, front.mime);
 
-      const ingredientsBuffer = fs.readFileSync(set.ingredients.path);
-      const ingredientsResult = await geminiService.extractFromImage(ingredientsBuffer, set.ingredients.mimetype || 'image/jpeg');
+      const ing = await ensureJpeg(set.ingredients.path);
+      const ingredientsResult = await geminiService.extractFromImage(ing.buffer, ing.mime);
 
       let barcodeValue = null;
       if (set.barcode) {
         try {
-          barcodeValue = await decodeBarcode(set.barcode.path);
+          const bc = await ensureJpeg(set.barcode.path);
+          barcodeValue = await decodeBarcode(bc.path);
         } catch (e) {
           console.warn(`⚠️ Barcode decode failed for set ${idx}:`, e.message);
         }
