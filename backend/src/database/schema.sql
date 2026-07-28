@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS products (
     base_dog_score INT,
     base_cat_score INT,
     -- Metadata
-    source ENUM('database', 'user_scan', 'api') DEFAULT 'database',
+    source ENUM('database', 'user_scan', 'api', 'batch_import') DEFAULT 'database',
     scan_count INT DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

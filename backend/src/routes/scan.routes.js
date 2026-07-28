@@ -279,9 +279,11 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
   try {
     const barcode = String(req.query.barcode || '').trim();
     const petType = String(req.query.petType || 'dog');
+    console.log(`[QuickScan] barcode received: "${barcode}"`);
     if (!barcode) return res.status(400).json({ error: 'barcode is required' });
 
     const product = await productService.findByBarcode(barcode);
+    console.log(`[QuickScan] DB lookup result:`, product ? `found id=${product.id} name="${product.name}"` : 'NOT FOUND');
     if (!product) {
       return res.status(404).json({ error: 'Product not found for this barcode' });
     }
