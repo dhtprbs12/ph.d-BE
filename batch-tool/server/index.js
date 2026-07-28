@@ -8,6 +8,7 @@ require('dotenv').config({ path: fs.existsSync(localEnv) ? localEnv : backendEnv
 
 const express = require('express');
 const cors = require('cors');
+const { connectDB } = require('../../backend/src/database/connection');
 const routes = require('./routes');
 
 const app = express();
@@ -19,6 +20,12 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 app.use('/api/batch', routes);
 
-app.listen(PORT, () => {
-  console.log(`🚀 Batch Tool server running on http://localhost:${PORT}`);
+// Initialize DB then start server
+connectDB().then(() => {
+  app.listen(PORT, () => {
+    console.log(`🚀 Batch Tool server running on http://localhost:${PORT}`);
+  });
+}).catch(err => {
+  console.error('❌ Failed to connect to DB:', err.message);
+  process.exit(1);
 });
