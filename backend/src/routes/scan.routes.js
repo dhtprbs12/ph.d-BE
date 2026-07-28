@@ -282,7 +282,14 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
     console.log(`[QuickScan] barcode received: "${barcode}"`);
     if (!barcode) return res.status(400).json({ error: 'barcode is required' });
 
-    const product = await productService.findByBarcode(barcode);
+    // Normalize: try original, then with leading 0 (UPC-A→EAN-13), then without leading 0
+    let product = await productService.findByBarcode(barcode);
+    if (!product && barcode.length === 12) {
+      product = await productService.findByBarcode('0' + barcode);
+    }
+    if (!product && barcode.length === 13 && barcode.startsWith('0')) {
+      product = await productService.findByBarcode(barcode.slice(1));
+    }
     console.log(`[QuickScan] DB lookup result:`, product ? `found id=${product.id} name="${product.name}"` : 'NOT FOUND');
     if (!product) {
       return res.status(404).json({ error: 'Product not found for this barcode' });
