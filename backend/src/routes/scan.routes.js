@@ -271,6 +271,53 @@ router.get('/ingredient-suggest', async (req, res, next) => {
   }
 });
 
+/**
+ * GET /api/scan/barcode-lookup?barcode=...&petType=dog
+ * Quick lookup: barcode → product → cached review → return result
+ */
+router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
+  try {
+    const barcode = String(req.query.barcode || '').trim();
+    const petType = String(req.query.petType || 'dog');
+    if (!barcode) return res.status(400).json({ error: 'barcode is required' });
+
+    const product = await productService.findByBarcode(barcode);
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found for this barcode' });
+    }
+
+    // Try to get cached review
+    const ingredientHash = product.ingredient_hash;
+    let analysis = null;
+    if (ingredientHash) {
+      const cacheRows = await query(
+        `SELECT * FROM product_review_cache WHERE ingredient_hash = ? AND product_type LIKE ? LIMIT 1`,
+        [ingredientHash, `healthy_%`]
+      );
+      if (cacheRows.length > 0) {
+        try { analysis = JSON.parse(cacheRows[0].review_json); } catch {}
+      }
+    }
+
+    res.json({
+      product: {
+        id: product.id,
+        name: product.name,
+        manufacturer: product.manufacturer,
+        brand: product.brand,
+        image_url: product.image_url,
+        barcode: product.barcode,
+      },
+      score: analysis?.score ?? null,
+      grade: analysis?.grade ?? null,
+      analysis: analysis || null,
+      scanType: 'barcode_lookup',
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // ============================================
 // USER STATS & BADGE (for gamification)
 // ============================================
