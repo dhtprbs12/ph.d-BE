@@ -357,6 +357,34 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
       }
     }
 
+    // Run per-ingredient analysis for detailed view
+    let ingredientDetails = [];
+    let parsedIngredients = [];
+    if (product.raw_ingredients_text) {
+      parsedIngredients = product.raw_ingredients_text.split(',').map(s => s.trim()).filter(Boolean);
+      try {
+        const pet = { name: 'default', pet_type: petType, healthConditions: [] };
+        const detailed = await ingredientAnalyzer.analyzeIngredients(parsedIngredients, pet);
+        ingredientDetails = detailed.ingredients || [];
+      } catch (err) {
+        console.error('[QuickScan] ingredient analysis failed:', err.message);
+      }
+    }
+
+    // Merge holistic review with ingredient details
+    const fullAnalysis = analysis ? {
+      finalScore: analysis.finalScore,
+      grade: analysis.grade,
+      recommendation: analysis.recommendation,
+      ingredients: ingredientDetails,
+      warnings: [],
+      positives: analysis.positives || [],
+      summary: analysis.aiSummary || '',
+      keyIssues: analysis.keyIssues || [],
+      proteinQuality: analysis.proteinQuality,
+      hasArtificialAdditives: analysis.hasArtificialAdditives,
+    } : null;
+
     res.json({
       product: {
         id: product.id,
@@ -366,9 +394,10 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
         image_url: product.image_url,
         barcode: product.barcode,
       },
+      parsedIngredients,
       score: analysis?.finalScore ?? null,
       grade: analysis?.grade ?? null,
-      analysis: analysis || null,
+      analysis: fullAnalysis,
       scanType: 'barcode_lookup',
     });
   } catch (e) {
