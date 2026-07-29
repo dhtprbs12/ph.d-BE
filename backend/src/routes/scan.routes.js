@@ -319,6 +319,44 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
       }
     }
 
+    // If no cached analysis, run it now
+    if (!analysis && product.raw_ingredients_text) {
+      try {
+        console.log(`[QuickScan] No cache found, running analysis on the fly...`);
+        const ingredientsList = product.raw_ingredients_text.split(',').map(s => s.trim()).filter(Boolean);
+        const productType = (product.product_type === 'treats' || product.product_type === 'treat') ? 'treats' : 'food';
+        const review = await geminiService.reviewProductHolistically({
+          ingredients: ingredientsList,
+          petType: petType,
+          healthConditions: [],
+          productType,
+          petName: 'your pet',
+        });
+
+        // Cache it
+        const { getSingleConditionHash } = require('../utils/cacheHelpers');
+        const conditionHash = getSingleConditionHash('healthy', productType);
+        await query(
+          `INSERT INTO product_review_cache 
+           (id, ingredient_hash, conditions_hash, pet_type, product_type, final_score, grade, recommendation,
+            key_issues, positives, ai_summary, protein_quality, has_artificial_additives, primary_ingredient_type)
+           VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE hit_count = hit_count + 1`,
+          [
+            ingredientHash, conditionHash, petType, `healthy_${productType}`,
+            review.finalScore, review.grade, review.recommendation,
+            JSON.stringify(review.keyIssues || []), JSON.stringify(review.positives || []),
+            review.aiSummary || null, review.proteinQuality || null,
+            review.hasArtificialAdditives ? 1 : 0, review.primaryIngredientType || null
+          ]
+        );
+        analysis = review;
+        console.log(`[QuickScan] Analysis done & cached: score=${review.finalScore}`);
+      } catch (err) {
+        console.error(`[QuickScan] On-the-fly analysis failed:`, err.message);
+      }
+    }
+
     res.json({
       product: {
         id: product.id,
