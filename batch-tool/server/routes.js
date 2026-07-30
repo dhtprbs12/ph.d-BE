@@ -26,6 +26,7 @@ const geminiService = require('../../backend/src/services/geminiService');
 const ingredientAnalyzer = require('../../backend/src/services/ingredientAnalyzer');
 const productMatchKey = require('../../backend/src/services/productMatchKey');
 const productService = require('../../backend/src/services/productService');
+const imageService = require('../../backend/src/services/imageService');
 const { query } = require('../../backend/src/database/connection');
 const { decodeBarcode } = require('./barcodeDecoder');
 
@@ -327,6 +328,18 @@ router.post('/save', async (req, res) => {
         await query('UPDATE products SET barcode = ? WHERE id = ?', [barcode, product.id]);
         product.barcode = barcode;
       }
+    }
+
+    // Fetch and save product image (search Google → download → R2)
+    try {
+      const imgUrl = await imageService.fetchAndSaveProductImage(
+        product.id,
+        product.name,
+        extracted.brand || extracted.manufacturer
+      );
+      if (imgUrl) console.log(`🖼️ [Batch] Image saved: ${imgUrl}`);
+    } catch (imgErr) {
+      console.error(`⚠️ [Batch] Image fetch failed:`, imgErr.message);
     }
 
     // Update ingredient dictionary
