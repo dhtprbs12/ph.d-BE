@@ -16,6 +16,7 @@ const imageService = require('../services/imageService');
 const imagePreprocess = require('../services/imagePreprocessService');
 const productMatchKey = require('../services/productMatchKey');
 const { authenticateToken } = require('../middleware/auth');
+const { recordScanAndCheckLevel } = require('../services/tokenService');
 
 // Helper: Get recommendation from grade if AI didn't provide one
 function getRecommendationFromGrade(grade) {
@@ -123,6 +124,13 @@ async function saveScanHistoryEntry(entry) {
     console.log(
       `📜 [scan_history] OK id=${scanId} type=${scanType} product=${productLabel} user=${userId || deviceLabel} grade=${grade} score=${finalScore} rec=${rec}`
     );
+
+    // Update scan level (gamification)
+    if (userId) {
+      recordScanAndCheckLevel(userId).catch(e =>
+        console.warn('[scan_history] scan-level update failed:', e.message)
+      );
+    }
   } catch (err) {
     console.error(
       `❌ [scan_history] FAIL id=${scanId} type=${scanType} product=${productLabel} user=${userId || deviceLabel} grade=${grade} rec=${rec} rawRec=${recommendation || '—'} — ${err.message}`

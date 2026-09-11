@@ -45,16 +45,24 @@ const getPool = () => {
 };
 
 const query = async (sql, params) => {
-  const p = getPool();
-  try {
-    const [results] = await p.query(sql, params);
-    return results;
-  } catch (err) {
-    if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET' || err.code === 'EPIPE') {
+  const maxRetries = 3;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const p = getPool();
       const [results] = await p.query(sql, params);
       return results;
+    } catch (err) {
+      const isConnectionError = ['PROTOCOL_CONNECTION_LOST', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT'].includes(err.code)
+        || (err.message && err.message.includes('Connection lost'));
+      if (isConnectionError && attempt < maxRetries) {
+        console.warn(`⚠️ DB connection error (attempt ${attempt}/${maxRetries}): ${err.code || err.message}. Reconnecting...`);
+        try { await pool.end(); } catch {}
+        pool = null;
+        await connectDB();
+        continue;
+      }
+      throw err;
     }
-    throw err;
   }
 };
 

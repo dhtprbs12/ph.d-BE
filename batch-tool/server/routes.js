@@ -85,6 +85,14 @@ router.post(
         }
       }
 
+      // Skip if barcode already in DB
+      if (barcodeValue) {
+        const existing = await productService.findByBarcode(barcodeValue);
+        if (existing) {
+          return res.json({ skipped: true, reason: 'barcode_exists', barcode: barcodeValue, existingProduct: existing.name });
+        }
+      }
+
       // Build combined result
       const id = uuidv4();
       const result = {
@@ -161,6 +169,16 @@ router.post('/process-bulk', upload.array('photos', 300), async (req, res) => {
           barcodeValue = await decodeBarcode(bc.path);
         } catch (e) {
           console.warn(`⚠️ Barcode decode failed for set ${idx}:`, e.message);
+        }
+      }
+
+      // Skip if barcode already in DB
+      if (barcodeValue) {
+        const existing = await productService.findByBarcode(barcodeValue);
+        if (existing) {
+          console.log(`⚡ [Bulk] Skipping set ${idx}: barcode ${barcodeValue} already exists as "${existing.name}"`);
+          results.push({ skipped: true, barcode: barcodeValue, existingProduct: existing.name });
+          continue;
         }
       }
 
@@ -294,15 +312,14 @@ router.post('/save', async (req, res) => {
 
     const displayName = productMatchKey.buildDisplayName(slots) || extracted.productName || 'Unknown Product';
 
-    // Check if product already exists
-    let product = await productService.findProductForConfirm({
-      slots,
-      ingredientsList,
-      brand: extracted.brand,
-      displayName,
-    });
+    // Check if this exact barcode already exists — only skip if same barcode
+    let product = null;
+    if (barcode) {
+      product = await productService.findByBarcode(barcode);
+    }
 
     if (!product) {
+      // Different barcode (or no barcode) = always create new row
       product = await productService.createFromScan({
         name: displayName,
         displayName,
@@ -322,12 +339,6 @@ router.post('/save', async (req, res) => {
         barcode: barcode || null,
         source: 'batch_import',
       });
-    } else {
-      // Update barcode if not set
-      if (barcode && !product.barcode) {
-        await query('UPDATE products SET barcode = ? WHERE id = ?', [barcode, product.id]);
-        product.barcode = barcode;
-      }
     }
 
     // Fetch and save product image (search Google → download → R2)
@@ -352,6 +363,21 @@ router.post('/save', async (req, res) => {
       const ingredientHash = productService.generateIngredientHash(ingredientsList);
       const { getSingleConditionHash } = require('../../backend/src/utils/cacheHelpers');
       const conditionHash = getSingleConditionHash('healthy', productType);
+
+      // Fill per-ingredient AI assessment cache (same as app)
+      try {
+        const result = await ingredientAnalyzer.ensureIngredientAssessmentsInCache({
+          ingredientsList,
+          condition: 'healthy',
+          productTypeForHash: productType,
+          petType: 'dog',
+          petName: 'default',
+          productTypeForAI: extracted.productType || 'dry_food',
+        });
+        console.log(`💾 [Batch] Ingredient cache: ${result.filledFromAi} AI-assessed, ${result.neutralFallbacks} neutral`);
+      } catch (cacheErr) {
+        console.warn(`⚠️ [Batch] Ingredient cache fill failed:`, cacheErr.message);
+      }
 
       // Check if already cached
       const existing = await query(

@@ -12,6 +12,8 @@ const productRoutes = require('./routes/product.routes');
 const reviewRoutes = require('./routes/review.routes');
 const adminRoutes = require('./routes/admin.routes');
 const communityRoutes = require('./routes/community.routes');
+const gamificationRoutes = require('./routes/gamification.routes');
+const shopRoutes = require('./routes/shop.routes');
 
 const errorHandler = require('./middleware/errorHandler');
 const { connectDB } = require('./database/connection');
@@ -68,6 +70,8 @@ app.use('/api/products', productRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/community', communityRoutes);
+app.use('/api/gamification', gamificationRoutes);
+app.use('/api/shop', shopRoutes);
 
 // Error handling
 app.use(errorHandler);

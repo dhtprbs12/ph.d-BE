@@ -7,6 +7,8 @@ interface Props {
 
 export default function IngredientEditor({ ingredients, onChange }: Props) {
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
 
   const handleEdit = (idx: number, value: string) => {
     const next = [...ingredients];
@@ -31,22 +33,104 @@ export default function IngredientEditor({ ingredients, onChange }: Props) {
     setEditingIdx(ingredients.length);
   };
 
+  const handleCopy = () => {
+    const text = ingredients.join(', ');
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      setCopyMsg('Copied!');
+      setTimeout(() => setCopyMsg(''), 1500);
+    } catch {
+      prompt('Copy this:', text);
+    }
+  };
+
+  const handlePaste = () => {
+    const text = prompt('Paste ingredients (comma-separated):');
+    if (text) {
+      const parsed = text.split(',').map(s => s.trim()).filter(Boolean);
+      if (parsed.length > 0) {
+        onChange(parsed);
+        setEditingIdx(null);
+      }
+    }
+  };
+
+  const [copyMsg, setCopyMsg] = useState('');
+
+  const handleDragStart = (idx: number) => {
+    setDragIdx(idx);
+  };
+
+  const handleDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    setDragOverIdx(idx);
+  };
+
+  const handleDrop = (idx: number) => {
+    if (dragIdx === null || dragIdx === idx) {
+      setDragIdx(null);
+      setDragOverIdx(null);
+      return;
+    }
+    const next = [...ingredients];
+    const [moved] = next.splice(dragIdx, 1);
+    const targetIdx = dragIdx < idx ? idx - 1 : idx;
+    next.splice(targetIdx, 0, moved);
+    onChange(next);
+    setDragIdx(null);
+    setDragOverIdx(null);
+  };
+
+  const handleDragEnd = () => {
+    setDragIdx(null);
+    setDragOverIdx(null);
+  };
+
   return (
-    <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-      {ingredients.map((ing, idx) => (
-        <IngredientRow
-          key={idx}
-          index={idx}
-          value={ing}
-          isEditing={editingIdx === idx}
-          onStartEdit={() => setEditingIdx(idx)}
-          onStopEdit={() => setEditingIdx(null)}
-          onChange={v => handleEdit(idx, v)}
-          onDelete={() => handleDelete(idx)}
-          onAddBelow={() => handleAdd(idx)}
-        />
-      ))}
-      <button onClick={handleAddEnd} style={styles.addBtn}>+ Add Ingredient</button>
+    <div>
+      <div style={styles.toolbar}>
+        <button onClick={handleCopy} style={styles.toolBtn} title="Copy all ingredients">
+          📋 Copy {copyMsg && <span style={{ color: '#2e7d56', marginLeft: 4 }}>{copyMsg}</span>}
+        </button>
+        <button onClick={handlePaste} style={styles.toolBtn} title="Paste ingredients (comma-separated)">
+          📥 Paste
+        </button>
+      </div>
+      <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+        {ingredients.map((ing, idx) => (
+          <div
+            key={idx}
+            draggable={editingIdx !== idx}
+            onDragStart={() => handleDragStart(idx)}
+            onDragOver={(e) => handleDragOver(e, idx)}
+            onDrop={() => handleDrop(idx)}
+            onDragEnd={handleDragEnd}
+            style={{
+              borderTop: dragOverIdx === idx && dragIdx !== null && dragIdx !== idx ? '2px solid #2e7d56' : 'none',
+              opacity: dragIdx === idx ? 0.4 : 1,
+            }}
+          >
+            <IngredientRow
+              index={idx}
+              value={ing}
+              isEditing={editingIdx === idx}
+              onStartEdit={() => setEditingIdx(idx)}
+              onStopEdit={() => setEditingIdx(null)}
+              onChange={v => handleEdit(idx, v)}
+              onDelete={() => handleDelete(idx)}
+              onAddBelow={() => handleAdd(idx)}
+            />
+          </div>
+        ))}
+        <button onClick={handleAddEnd} style={styles.addBtn}>+ Add Ingredient</button>
+      </div>
     </div>
   );
 }
@@ -107,6 +191,7 @@ function IngredientRow({
   if (!isEditing) {
     return (
       <div style={styles.row}>
+        <span style={styles.dragHandle} title="Drag to reorder">⠿</span>
         <span style={styles.idx}>{index + 1}.</span>
         <span style={styles.text} onClick={onStartEdit}>{value || '(empty)'}</span>
         <button onClick={onAddBelow} style={styles.smallBtn} title="Add below">+</button>
@@ -147,6 +232,28 @@ function IngredientRow({
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  toolbar: {
+    display: 'flex',
+    gap: 8,
+    marginBottom: 8,
+  },
+  toolBtn: {
+    background: '#f5f5f5',
+    border: '1px solid #ddd',
+    borderRadius: 6,
+    padding: '4px 10px',
+    fontSize: 12,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+  },
+  dragHandle: {
+    cursor: 'grab',
+    color: '#bbb',
+    fontSize: 14,
+    userSelect: 'none' as const,
+    padding: '0 2px',
+  },
   row: {
     display: 'flex',
     alignItems: 'center',

@@ -1,11 +1,22 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
+const multer = require('multer');
 const router = express.Router();
 const { query } = require('../database/connection');
 const { authenticateToken, optionalAuth } = require('../middleware/auth');
 const productService = require('../services/productService');
 const ingredientAnalyzer = require('../services/ingredientAnalyzer');
 const imageService = require('../services/imageService');
+const tokenService = require('../services/tokenService');
+
+const registerUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'));
+  },
+});
 const { 
   getSingleConditionHash, 
   safeJsonParse, 
@@ -1335,6 +1346,98 @@ router.get('/barcode/:barcode', optionalAuth, async (req, res, next) => {
     next(error);
   }
 });
+
+/**
+ * POST /api/products/register
+ * User-submitted product: front label + ingredient label + barcode photo
+ * Awards 🦴×20 tokens on successful registration.
+ */
+
+async function uploadRegistrationImage(buffer, filename) {
+  const key = `products/${filename}`;
+  if (imageService.r2Client) {
+    return await imageService.uploadToR2(buffer, key, 'image/jpeg');
+  }
+  return await imageService.saveLocally(buffer, filename);
+}
+
+router.post('/register',
+  authenticateToken,
+  registerUpload.fields([
+    { name: 'frontImage', maxCount: 1 },
+    { name: 'ingredientImage', maxCount: 1 },
+    { name: 'barcodeImage', maxCount: 1 },
+  ]),
+  async (req, res, next) => {
+    try {
+      const userId = req.user.userId;
+      const { barcode, productName, brand, petType } = req.body;
+
+      if (!req.files?.frontImage?.[0] || !req.files?.ingredientImage?.[0]) {
+        return res.status(400).json({ error: 'Front label and ingredient label images are required' });
+      }
+
+      const productId = uuidv4();
+      const frontBuffer = req.files.frontImage[0].buffer;
+      const ingredientBuffer = req.files.ingredientImage[0].buffer;
+      const barcodeBuffer = req.files?.barcodeImage?.[0]?.buffer;
+
+      let frontImageUrl = null;
+      let ingredientImageUrl = null;
+      let barcodeImageUrl = null;
+
+      try {
+        frontImageUrl = await uploadRegistrationImage(frontBuffer, `${productId}_front.jpg`);
+      } catch (e) {
+        console.warn('[Register] Front image upload failed:', e.message);
+      }
+      try {
+        ingredientImageUrl = await uploadRegistrationImage(ingredientBuffer, `${productId}_ingredients.jpg`);
+      } catch (e) {
+        console.warn('[Register] Ingredient image upload failed:', e.message);
+      }
+      if (barcodeBuffer) {
+        try {
+          barcodeImageUrl = await uploadRegistrationImage(barcodeBuffer, `${productId}_barcode.jpg`);
+        } catch (e) {
+          console.warn('[Register] Barcode image upload failed:', e.message);
+        }
+      }
+
+      await query(
+        `INSERT INTO products (id, name, brand, barcode, pet_type, status, front_image_url, ingredient_image_url, barcode_image_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [productId, productName || 'Unknown Product', brand || null, barcode || null, petType || 'dog', frontImageUrl, ingredientImageUrl, barcodeImageUrl]
+      );
+
+      // Award 🦴×20 tokens
+      await tokenService.grantTokens(userId, 20, 'product_register', 'New product registered 🦴×20', productId);
+
+      const tokenInfo = await tokenService.getTokenInfo(userId);
+
+      console.log(`📦 [Register] New product registered: ${productName || 'Unknown'} (id=${productId}) by user=${userId}`);
+
+      res.status(201).json({
+        success: true,
+        product: {
+          id: productId,
+          name: productName || 'Unknown Product',
+          brand: brand || null,
+          barcode: barcode || null,
+          status: 'pending',
+          frontImageUrl,
+          ingredientImageUrl,
+          barcodeImageUrl,
+        },
+        tokensAwarded: 20,
+        tokenBalance: tokenInfo.balance,
+      });
+    } catch (error) {
+      console.error('[Register] Error:', error);
+      next(error);
+    }
+  }
+);
 
 module.exports = router;
 
