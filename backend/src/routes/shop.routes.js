@@ -67,6 +67,8 @@ router.post('/items/:id/purchase', async (req, res, next) => {
     const userId = req.user.userId;
     const itemId = req.params.id;
     
+    console.log(`🛒 [Shop] Purchase attempt: userId=${userId}, itemId=${itemId}`);
+    
     // Get item
     const [item] = await query('SELECT * FROM shop_items WHERE id = ?', [itemId]);
     if (!item) return res.status(404).json({ error: 'Item not found' });
