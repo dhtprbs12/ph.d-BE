@@ -14,7 +14,7 @@ router.use(authenticateToken);
  */
 router.get('/items', async (req, res, next) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id;
     const { category } = req.query;
     
     let sql = `
@@ -64,7 +64,7 @@ router.get('/items', async (req, res, next) => {
  */
 router.post('/items/:id/purchase', async (req, res, next) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id;
     const itemId = req.params.id;
     
     console.log(`🛒 [Shop] Purchase attempt: userId=${userId}, itemId=${itemId}`);
@@ -127,7 +127,7 @@ router.post('/items/:id/purchase', async (req, res, next) => {
  */
 router.get('/character', async (req, res, next) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id;
     
     // Get equipped state
     const [equipped] = await query('SELECT * FROM user_equipped WHERE user_id = ?', [userId]);
@@ -175,7 +175,7 @@ router.get('/character', async (req, res, next) => {
  */
 router.put('/character/equip', async (req, res, next) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id;
     const { slot, itemId } = req.body;
     
     const validSlots = ['hat', 'glasses', 'accessory', 'clothes', 'background', 'effect'];
@@ -217,7 +217,7 @@ router.put('/character/equip', async (req, res, next) => {
  */
 router.put('/character/type', async (req, res, next) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id;
     const { characterType } = req.body;
     
     if (!['dog', 'cat'].includes(characterType)) {
