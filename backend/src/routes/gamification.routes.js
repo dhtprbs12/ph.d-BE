@@ -10,7 +10,7 @@ const { query } = require('../database/connection');
  */
 router.get('/tokens', authenticateToken, async (req, res, next) => {
   try {
-    const info = await tokenService.getTokenInfo(req.user.userId);
+    const info = await tokenService.getTokenInfo(req.user.id);
     res.json(info);
   } catch (error) {
     next(error);
@@ -25,7 +25,7 @@ router.get('/tokens/history', authenticateToken, async (req, res, next) => {
   try {
     const limit = parseInt(req.query.limit) || 20;
     const offset = parseInt(req.query.offset) || 0;
-    const transactions = await tokenService.getTransactionHistory(req.user.userId, limit, offset);
+    const transactions = await tokenService.getTransactionHistory(req.user.id, limit, offset);
     res.json({ transactions });
   } catch (error) {
     next(error);
@@ -40,7 +40,7 @@ const { SCAN_LEVELS } = require('../services/tokenService');
 
 router.get('/scan-level', authenticateToken, async (req, res, next) => {
   try {
-    const [row] = await query('SELECT total_scans, current_level FROM user_scan_level WHERE user_id = ?', [req.user.userId]);
+    const [row] = await query('SELECT total_scans, current_level FROM user_scan_level WHERE user_id = ?', [req.user.id]);
     const totalScans = row?.total_scans || 0;
     const currentLevel = row?.current_level || 1;
     
@@ -69,7 +69,7 @@ router.get('/streak', authenticateToken, async (req, res, next) => {
   try {
     const [row] = await query(
       'SELECT current_streak, longest_streak, last_checkin_date FROM user_streaks WHERE user_id = ?',
-      [req.user.userId]
+      [req.user.id]
     );
     
     const milestones = [
@@ -95,7 +95,7 @@ router.get('/streak', authenticateToken, async (req, res, next) => {
  */
 router.get('/summary', authenticateToken, async (req, res, next) => {
   try {
-    const userId = req.user.userId;
+    const userId = req.user.id;
     const [tokenRow] = await query('SELECT balance, total_earned, total_spent FROM user_tokens WHERE user_id = ?', [userId]);
     const [levelRow] = await query('SELECT total_scans, current_level FROM user_scan_level WHERE user_id = ?', [userId]);
     const [streakRow] = await query('SELECT current_streak, longest_streak, last_checkin_date FROM user_streaks WHERE user_id = ?', [userId]);
