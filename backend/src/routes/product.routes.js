@@ -1370,7 +1370,7 @@ router.post('/register',
   ]),
   async (req, res, next) => {
     try {
-      const userId = req.user.userId;
+      const userId = req.user.id;
       const { barcode, productName, brand, petType } = req.body;
 
       if (!req.files?.frontImage?.[0] || !req.files?.ingredientImage?.[0]) {
