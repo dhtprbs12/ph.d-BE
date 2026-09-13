@@ -345,7 +345,7 @@ router.get('/:id/current-food', async (req, res, next) => {
     // Calculate days on this food
     const startedAt = new Date(food.started_at);
     const now = new Date();
-    const daysOnFood = Math.floor((now - startedAt) / (1000 * 60 * 60 * 24));
+    const daysOnFood = Math.floor((now - startedAt) / (1000 * 60 * 60 * 24)) + 1;
 
     res.json({
       currentFood: {
@@ -407,7 +407,7 @@ router.post('/:id/current-food', async (req, res, next) => {
         productName,
         brand: brand || null,
         startedAt: today,
-        daysOnFood: 0,
+        daysOnFood: 1,
       },
     });
   } catch (error) {
@@ -457,7 +457,7 @@ router.put('/:id/current-food', async (req, res, next) => {
         productName,
         brand: brand || null,
         startedAt: today,
-        daysOnFood: 0,
+        daysOnFood: 1,
       },
     });
   } catch (error) {
@@ -528,7 +528,7 @@ router.get('/:id/checkins/summary', async (req, res, next) => {
     const fromDate = sevenDaysAgo.toISOString().split('T')[0];
 
     const checkins = await query(
-      'SELECT stool_score, appetite, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND localDate >= ?',
+      'SELECT stool_score, appetite, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND date >= ?',
       [req.params.id, fromDate]
     );
 
@@ -573,15 +573,15 @@ router.get('/:id/checkins', async (req, res, next) => {
       `SELECT dc.*, pf.product_name as food_name
        FROM daily_checkins dc
        LEFT JOIN pet_foods pf ON dc.pet_food_id = pf.id
-       WHERE dc.pet_id = ? AND dc.localDate BETWEEN ? AND ?
-       ORDER BY dc.localDate DESC`,
+       WHERE dc.pet_id = ? AND dc.date BETWEEN ? AND ?
+       ORDER BY dc.date DESC`,
       [req.params.id, from, to]
     );
 
     res.json({
       checkins: checkins.map(c => ({
         id: c.id,
-        date: c.localDate || c.date,
+        date: c.date,
         stoolScore: c.stool_score,
         appetite: c.appetite,
         vomiting: !!c.vomiting,
@@ -755,7 +755,7 @@ router.get('/:id/passport', async (req, res, next) => {
       const toDate = food.ended_at || new Date().toISOString().split('T')[0];
       
       const checkins = await query(
-        'SELECT stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND localDate BETWEEN ? AND ?',
+        'SELECT stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND date BETWEEN ? AND ?',
         [req.params.id, fromDate, toDate]
       );
       
@@ -820,7 +820,7 @@ router.get('/:id/insights', async (req, res, next) => {
       const toDate = food.ended_at || new Date().toISOString().split('T')[0];
       
       const checkins = await query(
-        'SELECT stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND localDate BETWEEN ? AND ?',
+        'SELECT stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND date BETWEEN ? AND ?',
         [req.params.id, fromDate, toDate]
       );
 
