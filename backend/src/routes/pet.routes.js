@@ -726,6 +726,94 @@ router.post('/:id/checkins', async (req, res, next) => {
 });
 
 // ══════════════════════════════════════════════
+// Nom Nom Notes (pet_notes) + Streak
+// ══════════════════════════════════════════════
+
+/**
+ * GET /api/pets/:id/streak
+ * Get current streak info for the pet's owner
+ */
+router.get('/:id/streak', authenticateToken, async (req, res, next) => {
+  try {
+    const [pet] = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    if (!pet) return res.status(404).json({ error: 'Pet not found' });
+
+    const [streakRow] = await query(
+      'SELECT current_streak, longest_streak, last_checkin_date FROM user_streaks WHERE user_id = ?',
+      [req.user.id]
+    );
+
+    res.json({
+      currentStreak: streakRow?.current_streak || 0,
+      longestStreak: streakRow?.longest_streak || 0,
+      lastCheckinDate: streakRow?.last_checkin_date || null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/pets/:id/notes?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Get notes for a date range
+ */
+router.get('/:id/notes', authenticateToken, async (req, res, next) => {
+  try {
+    const [pet] = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    if (!pet) return res.status(404).json({ error: 'Pet not found' });
+
+    const to = req.query.to || new Date().toISOString().split('T')[0];
+    const fromDefault = new Date();
+    fromDefault.setDate(fromDefault.getDate() - 30);
+    const from = req.query.from || fromDefault.toISOString().split('T')[0];
+
+    const notes = await query(
+      'SELECT date, note FROM pet_notes WHERE pet_id = ? AND date BETWEEN ? AND ? ORDER BY date DESC',
+      [req.params.id, from, to]
+    );
+
+    res.json({
+      notes: notes.map(n => ({
+        date: typeof n.date === 'string' ? n.date : new Date(n.date).toISOString().split('T')[0],
+        note: n.note,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PUT /api/pets/:id/notes/:date
+ * Upsert a note for a specific date
+ */
+router.put('/:id/notes/:date', authenticateToken, async (req, res, next) => {
+  try {
+    const [pet] = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    if (!pet) return res.status(404).json({ error: 'Pet not found' });
+
+    const { note } = req.body;
+    const dateStr = req.params.date;
+
+    if (!note || !note.trim()) {
+      await query('DELETE FROM pet_notes WHERE pet_id = ? AND date = ?', [req.params.id, dateStr]);
+      return res.json({ success: true, deleted: true });
+    }
+
+    const { v4: uuidv4 } = require('uuid');
+    await query(
+      `INSERT INTO pet_notes (id, pet_id, date, note) VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE note = VALUES(note), updated_at = CURRENT_TIMESTAMP`,
+      [uuidv4(), req.params.id, dateStr, note.trim()]
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ══════════════════════════════════════════════
 // Nutrition Passport & Insights Endpoints
 // ══════════════════════════════════════════════
 
