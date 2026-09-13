@@ -1405,9 +1405,9 @@ router.post('/register',
       }
 
       await query(
-        `INSERT INTO products (id, name, brand, barcode, pet_type, status, front_image_url, ingredient_image_url, barcode_image_url, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-        [productId, productName || 'Unknown Product', brand || null, barcode || null, petType || 'dog', frontImageUrl, ingredientImageUrl, barcodeImageUrl]
+        `INSERT INTO products (id, name, brand, barcode, status, front_image_url, ingredient_image_url, barcode_image_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [productId, productName || 'Unknown Product', brand || null, barcode || null, frontImageUrl, ingredientImageUrl, barcodeImageUrl]
       );
 
       // Award 🦴×20 tokens
