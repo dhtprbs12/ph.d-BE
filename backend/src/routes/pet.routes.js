@@ -623,9 +623,9 @@ router.post('/:id/checkins', async (req, res, next) => {
     const checkinId = uuidv4();
     try {
       await query(
-        `INSERT INTO daily_checkins (id, pet_id, pet_food_id, date, stool_score, appetite, vomiting, itching, notes, localDate)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [checkinId, petId, currentFood?.id || null, localDate, stoolScore, appetite || 'normal', vomiting ? 1 : 0, itching ? 1 : 0, notes || null, localDate]
+        `INSERT INTO daily_checkins (id, pet_id, pet_food_id, date, stool_score, appetite, vomiting, itching, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [checkinId, petId, currentFood?.id || null, localDate, stoolScore, appetite || 'normal', vomiting ? 1 : 0, itching ? 1 : 0, notes || null]
       );
     } catch (e) {
       if (e.code === 'ER_DUP_ENTRY') {
