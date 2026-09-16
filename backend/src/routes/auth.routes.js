@@ -52,7 +52,6 @@ router.post('/register', validateRegistration, async (req, res, next) => {
     await query('INSERT INTO user_tokens (user_id, balance, total_earned, total_spent) VALUES (?, 10, 10, 0)', [userId]);
     await query('INSERT INTO user_scan_level (user_id, total_scans, current_level) VALUES (?, 0, 1)', [userId]);
     await query('INSERT INTO user_streaks (user_id, current_streak, longest_streak, last_checkin_date) VALUES (?, 0, 0, NULL)', [userId]);
-    await query('INSERT INTO user_equipped (user_id, character_type) VALUES (?, ?)', [userId, 'dog']);
 
     // Welcome bonus token transaction
     await query(
@@ -247,7 +246,6 @@ router.post('/register-nickname', [
     await query('INSERT INTO user_tokens (user_id, balance, total_earned, total_spent) VALUES (?, 10, 10, 0)', [userId]);
     await query('INSERT INTO user_scan_level (user_id, total_scans, current_level) VALUES (?, 0, 1)', [userId]);
     await query('INSERT INTO user_streaks (user_id, current_streak, longest_streak, last_checkin_date) VALUES (?, 0, 0, NULL)', [userId]);
-    await query('INSERT INTO user_equipped (user_id, character_type) VALUES (?, ?)', [userId, 'dog']);
 
     // Welcome bonus token transaction
     await query(
@@ -384,7 +382,6 @@ router.post('/device', async (req, res, next) => {
     await query('INSERT INTO user_tokens (user_id, balance, total_earned, total_spent) VALUES (?, 10, 10, 0)', [userId]);
     await query('INSERT INTO user_scan_level (user_id, total_scans, current_level) VALUES (?, 0, 1)', [userId]);
     await query('INSERT INTO user_streaks (user_id, current_streak, longest_streak, last_checkin_date) VALUES (?, 0, 0, NULL)', [userId]);
-    await query('INSERT INTO user_equipped (user_id, character_type) VALUES (?, ?)', [userId, 'dog']);
 
     // Welcome bonus token transaction
     await query(

@@ -112,6 +112,9 @@ router.post('/', validatePet, async (req, res, next) => {
       [petId, req.user.id, name, petType, breed || null, ageMonths || null, weightKg || null, sex || null, activityLevel || 'moderate', isPrimary]
     );
 
+    // Initialize character for this pet
+    await query('INSERT INTO pet_equipped (pet_id, character_type) VALUES (?, ?)', [petId, petType === 'cat' ? 'cat' : 'dog']);
+
     // Add health conditions if provided
     if (healthConditions && Array.isArray(healthConditions)) {
       for (const condition of healthConditions) {

@@ -122,15 +122,20 @@ router.post('/items/:id/purchase', async (req, res, next) => {
 });
 
 /**
- * GET /api/shop/character
- * Get user's character state: type, equipped items, owned items.
+ * GET /api/shop/character/:petId
+ * Get pet's character state: type, equipped items, owned items.
  */
-router.get('/character', async (req, res, next) => {
+router.get('/character/:petId', async (req, res, next) => {
   try {
     const userId = req.user.id;
+    const petId = req.params.petId;
+
+    // Verify pet ownership
+    const [pet] = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [petId, userId]);
+    if (!pet) return res.status(404).json({ error: 'Pet not found' });
     
     // Get equipped state
-    const [equipped] = await query('SELECT * FROM user_equipped WHERE user_id = ?', [userId]);
+    const [equipped] = await query('SELECT * FROM pet_equipped WHERE pet_id = ?', [petId]);
     
     // Get details for each equipped item
     const slots = ['hat', 'glasses', 'accessory', 'clothes', 'background', 'effect'];
@@ -169,14 +174,19 @@ router.get('/character', async (req, res, next) => {
 });
 
 /**
- * PUT /api/shop/character/equip
+ * PUT /api/shop/character/:petId/equip
  * Equip or unequip an item in a slot.
  * Body: { slot: 'hat'|'glasses'|..., itemId: 'xxx' | null }
  */
-router.put('/character/equip', async (req, res, next) => {
+router.put('/character/:petId/equip', async (req, res, next) => {
   try {
     const userId = req.user.id;
+    const petId = req.params.petId;
     const { slot, itemId } = req.body;
+
+    // Verify pet ownership
+    const [pet] = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [petId, userId]);
+    if (!pet) return res.status(404).json({ error: 'Pet not found' });
     
     const validSlots = ['hat', 'glasses', 'accessory', 'clothes', 'background', 'effect'];
     if (!validSlots.includes(slot)) {
@@ -198,11 +208,11 @@ router.put('/character/equip', async (req, res, next) => {
     
     const column = `${slot}_item_id`;
     await query(
-      `UPDATE user_equipped SET ${column} = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`,
-      [itemId || null, userId]
+      `UPDATE pet_equipped SET ${column} = ?, updated_at = CURRENT_TIMESTAMP WHERE pet_id = ?`,
+      [itemId || null, petId]
     );
     
-    console.log(`👔 [Equip] user=${userId} slot=${slot} item=${itemId || 'none'}`);
+    console.log(`👔 [Equip] pet=${petId} slot=${slot} item=${itemId || 'none'}`);
     
     res.json({ success: true, slot, itemId: itemId || null });
   } catch (error) {
@@ -211,22 +221,27 @@ router.put('/character/equip', async (req, res, next) => {
 });
 
 /**
- * PUT /api/shop/character/type
+ * PUT /api/shop/character/:petId/type
  * Switch character type (dog/cat).
  * Body: { characterType: 'dog' | 'cat' }
  */
-router.put('/character/type', async (req, res, next) => {
+router.put('/character/:petId/type', async (req, res, next) => {
   try {
     const userId = req.user.id;
+    const petId = req.params.petId;
     const { characterType } = req.body;
+
+    // Verify pet ownership
+    const [pet] = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [petId, userId]);
+    if (!pet) return res.status(404).json({ error: 'Pet not found' });
     
     if (!['dog', 'cat'].includes(characterType)) {
       return res.status(400).json({ error: 'characterType must be "dog" or "cat"' });
     }
     
     await query(
-      'UPDATE user_equipped SET character_type = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
-      [characterType, userId]
+      'UPDATE pet_equipped SET character_type = ?, updated_at = CURRENT_TIMESTAMP WHERE pet_id = ?',
+      [characterType, petId]
     );
     
     res.json({ success: true, characterType });
