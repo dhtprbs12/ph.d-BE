@@ -287,6 +287,8 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
   try {
     const barcode = String(req.query.barcode || '').trim();
     const petType = String(req.query.petType || 'dog');
+    const petName = String(req.query.petName || '');
+    const userId = req.user.id;
     console.log(`[QuickScan] barcode received: "${barcode}"`);
     if (!barcode) return res.status(400).json({ error: 'barcode is required' });
 
@@ -392,6 +394,28 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
       proteinQuality: analysis.proteinQuality,
       hasArtificialAdditives: analysis.hasArtificialAdditives,
     } : null;
+
+    // Record in scan_history (once per user+product+day)
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const [existing] = await query(
+        `SELECT id FROM scan_history WHERE user_id = ? AND product_id = ? AND DATE(created_at) = ? LIMIT 1`,
+        [userId, product.id, today]
+      );
+      if (!existing) {
+        await query(
+          `INSERT INTO scan_history (id, user_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, analysis_json)
+           VALUES (?, ?, ?, ?, ?, 'barcode', ?, ?, ?, ?)`,
+          [
+            uuidv4(), userId, petName || null, petType, product.id,
+            analysis?.finalScore ?? null, analysis?.grade ?? null, analysis?.recommendation ?? null,
+            fullAnalysis ? JSON.stringify(fullAnalysis) : null,
+          ]
+        );
+      }
+    } catch (histErr) {
+      console.warn('[QuickScan] Failed to record history:', histErr.message);
+    }
 
     res.json({
       product: {
