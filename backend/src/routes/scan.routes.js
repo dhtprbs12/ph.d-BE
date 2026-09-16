@@ -396,6 +396,8 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
     } : null;
 
     // Record in scan_history (once per user+product+day)
+    const histGrade = analysis?.grade ?? null;
+    const histRec = analysis ? toHistoryRecommendation(histGrade, analysis.recommendation) : 'acceptable';
     try {
       const today = new Date().toISOString().split('T')[0];
       const [existing] = await query(
@@ -408,13 +410,14 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
            VALUES (?, ?, ?, ?, ?, 'barcode', ?, ?, ?, ?)`,
           [
             uuidv4(), userId, petName || null, petType, product.id,
-            analysis?.finalScore ?? null, analysis?.grade ?? null, analysis?.recommendation ?? null,
+            analysis?.finalScore ?? null, histGrade, histRec,
             fullAnalysis ? JSON.stringify(fullAnalysis) : null,
           ]
         );
+        console.log(`📜 [QuickScan] scan_history recorded for product=${product.id} user=${userId}`);
       }
     } catch (histErr) {
-      console.warn('[QuickScan] Failed to record history:', histErr.message);
+      console.error('[QuickScan] Failed to record history:', histErr.message, histErr.stack);
     }
 
     res.json({
