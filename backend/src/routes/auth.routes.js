@@ -209,6 +209,7 @@ router.get('/check-nickname', async (req, res, next) => {
 router.post('/register-nickname', [
   body('nickname').trim().isLength({ min: 2, max: 30 }).matches(/^[a-zA-Z0-9_]+$/),
   body('pin').isLength({ min: 4, max: 6 }).isNumeric(),
+  body('email').optional({ checkFalsy: true }).isEmail().normalizeEmail(),
 ], async (req, res, next) => {
   try {
     const errors = validationResult(req);
@@ -216,7 +217,7 @@ router.post('/register-nickname', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { nickname, pin } = req.body;
+    const { nickname, pin, email } = req.body;
 
     // Check uniqueness
     const existing = await query('SELECT id FROM users WHERE LOWER(nickname) = LOWER(?) LIMIT 1', [nickname]);
@@ -226,12 +227,20 @@ router.post('/register-nickname', [
 
     const userId = uuidv4();
     const pinHash = await bcrypt.hash(pin, 10);
-    const placeholderEmail = `${nickname.toLowerCase()}@nickname.local`;
+    const userEmail = email || `${nickname.toLowerCase()}@nickname.local`;
     const placeholderPasswordHash = await bcrypt.hash(uuidv4(), 4);
+
+    // If real email provided, check uniqueness
+    if (email) {
+      const emailExists = await query('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
+      if (emailExists.length > 0) {
+        return res.status(409).json({ error: 'email_taken', message: 'This email is already in use.' });
+      }
+    }
 
     await query(
       'INSERT INTO users (id, email, password_hash, nickname, pin_hash, name) VALUES (?, ?, ?, ?, ?, ?)',
-      [userId, placeholderEmail, placeholderPasswordHash, nickname, pinHash, nickname]
+      [userId, userEmail, placeholderPasswordHash, nickname, pinHash, nickname]
     );
 
     // Initialize gamification tables
