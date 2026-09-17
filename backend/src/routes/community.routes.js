@@ -415,7 +415,15 @@ router.get('/top-scanners', async (req, res, next) => {
         COUNT(sh.id) as weekly_scans,
         COALESCE(us.current_streak, 0) as streak,
         COALESCE(usl.current_level, 1) as level,
-        COALESCE(usl.total_scans, 0) as total_scans
+        COALESCE(usl.total_scans, 0) as total_scans,
+        (
+          SELECT p.photo_url FROM pets p
+          WHERE p.id = (
+            SELECT sh2.pet_id FROM scan_history sh2
+            WHERE sh2.user_id = u.id AND sh2.pet_id IS NOT NULL
+            GROUP BY sh2.pet_id ORDER BY COUNT(*) DESC LIMIT 1
+          )
+        ) as pet_photo
       FROM scan_history sh
       JOIN users u ON sh.user_id = u.id
       LEFT JOIN user_streaks us ON us.user_id = u.id
@@ -436,6 +444,7 @@ router.get('/top-scanners', async (req, res, next) => {
       level: r.level,
       totalScans: r.total_scans,
       badge: getBadgeFromLevel(r.level),
+      petPhotoUrl: r.pet_photo || null,
     }));
 
     res.json({ scanners });

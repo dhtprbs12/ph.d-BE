@@ -56,6 +56,7 @@ async function saveScanHistoryEntry(entry) {
     deviceId,
     petName,
     petType,
+    petId = null,
     productId = null,
     scanType,
     finalScore,
@@ -74,14 +75,15 @@ async function saveScanHistoryEntry(entry) {
     if (scanType === 'manual_input') {
       await query(
         `INSERT INTO scan_history 
-         (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, raw_text_input, analysis_json)
-         VALUES (?, ?, ?, ?, ?, NULL, 'manual_input', ?, ?, ?, ?, ?)`,
+         (id, user_id, device_id, pet_name, pet_type, pet_id, product_id, scan_type, final_score, grade, recommendation, raw_text_input, analysis_json)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, 'manual_input', ?, ?, ?, ?, ?)`,
         [
           scanId,
           userId,
           deviceId || null,
           petName,
           petType,
+          petId,
           finalScore,
           grade,
           rec,
@@ -101,24 +103,24 @@ async function saveScanHistoryEntry(entry) {
       );
       if (existing.length > 0) {
         await query(
-          `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, ocr_extracted_text = ?, analysis_json = ?, scan_type = ?, pet_name = ?, pet_type = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,
-          [finalScore, grade, rec, ocrExtractedText, analysisJson, scanType, petNameKey, petTypeKey, existing[0].id]
+          `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, ocr_extracted_text = ?, analysis_json = ?, scan_type = ?, pet_name = ?, pet_type = ?, pet_id = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,
+          [finalScore, grade, rec, ocrExtractedText, analysisJson, scanType, petNameKey, petTypeKey, petId, existing[0].id]
         );
         console.log(
           `📜 [scan_history] UPDATED existing id=${existing[0].id} for product=${productLabel} pet=${petNameKey} (${petTypeKey})`
         );
       } else {
         await query(
-          `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [scanId, userId, deviceId || null, petNameKey, petTypeKey, productId, scanType, finalScore, grade, rec, ocrExtractedText, analysisJson]
+          `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, pet_id, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [scanId, userId, deviceId || null, petNameKey, petTypeKey, petId, productId, scanType, finalScore, grade, rec, ocrExtractedText, analysisJson]
         );
       }
     } else {
       await query(
-        `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [scanId, userId, deviceId || null, petName, petType, productId, scanType, finalScore, grade, rec, ocrExtractedText, analysisJson]
+        `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, pet_id, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [scanId, userId, deviceId || null, petName, petType, petId, productId, scanType, finalScore, grade, rec, ocrExtractedText, analysisJson]
       );
     }
     console.log(
@@ -288,6 +290,7 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
     const barcode = String(req.query.barcode || '').trim();
     const petType = String(req.query.petType || 'dog');
     const petName = String(req.query.petName || '');
+    const petId = req.query.petId || null;
     const userId = req.user.id;
     console.log(`[QuickScan] barcode received: "${barcode}"`);
     if (!barcode) return res.status(400).json({ error: 'barcode is required' });
@@ -406,10 +409,10 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
       );
       if (!existing) {
         await query(
-          `INSERT INTO scan_history (id, user_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, analysis_json)
-           VALUES (?, ?, ?, ?, ?, 'barcode', ?, ?, ?, ?)`,
+          `INSERT INTO scan_history (id, user_id, pet_name, pet_type, pet_id, product_id, scan_type, final_score, grade, recommendation, analysis_json)
+           VALUES (?, ?, ?, ?, ?, ?, 'barcode', ?, ?, ?, ?)`,
           [
-            uuidv4(), userId, petName || null, petType, product.id,
+            uuidv4(), userId, petName || null, petType, petId, product.id,
             analysis?.finalScore ?? null, histGrade, histRec,
             fullAnalysis ? JSON.stringify(fullAnalysis) : null,
           ]
@@ -1159,6 +1162,7 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
       deviceId,
       petName: pet.name,
       petType: pet.pet_type,
+      petId: pet.id || null,
       productId: product?.id || null,
       scanType: 'label_photo',
       finalScore: analysis.finalScore,
@@ -2138,6 +2142,7 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
             scanType: 'label_photo',
             petName: pet.name,
             petType: pet.pet_type,
+            petId: pet.id || null,
             grade: row.grade,
             finalScore: row.final_score,
             recommendation: row.recommendation,
@@ -2899,6 +2904,7 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
       deviceId,
       petName: pet.name,
       petType: pet.pet_type,
+      petId: pet.id || null,
       productId: product?.id || null,
       scanType: 'label_photo',
       finalScore: analysis.finalScore,
@@ -3697,6 +3703,7 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
       deviceId,
       petName: pet.name,
       petType: pet.pet_type,
+      petId: pet.id || null,
       scanType: 'manual_input',
       finalScore: analysis.finalScore,
       grade: analysis.grade,
