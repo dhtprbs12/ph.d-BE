@@ -283,24 +283,40 @@ router.get('/pet-of-the-week', async (req, res, next) => {
       LIMIT 3
     `);
 
-    const pets = rows.map((r, i) => ({
-      rank: i + 1,
-      petId: r.pet_id,
-      petName: r.pet_name,
-      petType: r.pet_type,
-      breed: r.breed,
-      nickname: r.nickname,
-      characterType: r.character_type,
-      equipped: {
-        hat: r.hat_item_id,
-        glasses: r.glasses_item_id,
-        accessory: r.accessory_item_id,
-        clothes: r.clothes_item_id,
-        background: r.background_item_id,
-        effect: r.effect_item_id,
-      },
-      itemCount: r.item_count,
-    }));
+    const pets = [];
+    for (const r of rows) {
+      // Resolve equipped item details
+      const slots = ['hat', 'glasses', 'accessory', 'clothes', 'background', 'effect'];
+      const equippedItems = {};
+      for (const slot of slots) {
+        const itemId = r[`${slot}_item_id`];
+        if (itemId) {
+          const [item] = await query('SELECT id, asset_key, layer_type, position_x, position_y, name FROM shop_items WHERE id = ?', [itemId]);
+          equippedItems[slot] = item ? {
+            id: item.id,
+            assetKey: item.asset_key,
+            layerType: item.layer_type,
+            positionX: item.position_x,
+            positionY: item.position_y,
+            name: item.name,
+          } : null;
+        } else {
+          equippedItems[slot] = null;
+        }
+      }
+
+      pets.push({
+        rank: pets.length + 1,
+        petId: r.pet_id,
+        petName: r.pet_name,
+        petType: r.pet_type,
+        breed: r.breed,
+        nickname: r.nickname,
+        characterType: r.character_type,
+        equipped: equippedItems,
+        itemCount: r.item_count,
+      });
+    }
 
     res.json({ pets });
   } catch (error) {
