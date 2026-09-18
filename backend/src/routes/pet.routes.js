@@ -573,9 +573,10 @@ router.get('/:id/checkins', async (req, res, next) => {
     const from = req.query.from || fromDefault.toISOString().split('T')[0];
 
     const checkins = await query(
-      `SELECT dc.*, pf.product_name as food_name
+      `SELECT dc.*, pf.product_name as food_name, p.image_url as food_image_url
        FROM daily_checkins dc
        LEFT JOIN pet_foods pf ON dc.pet_food_id = pf.id
+       LEFT JOIN products p ON pf.product_id = p.id
        WHERE dc.pet_id = ? AND dc.date BETWEEN ? AND ?
        ORDER BY dc.date DESC`,
       [req.params.id, from, to]
@@ -591,6 +592,7 @@ router.get('/:id/checkins', async (req, res, next) => {
         itching: !!c.itching,
         notes: c.notes,
         foodName: c.food_name,
+        foodImageUrl: c.food_image_url || null,
       })),
     });
   } catch (error) {

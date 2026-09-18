@@ -202,6 +202,23 @@ router.get('/check-nickname', async (req, res, next) => {
 });
 
 /**
+ * GET /api/auth/check-email?email=xxx
+ * Check email availability (no auth required)
+ */
+router.get('/check-email', async (req, res, next) => {
+  try {
+    const email = (req.query.email || '').trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.json({ available: false, reason: 'Invalid email format' });
+    }
+    const rows = await query('SELECT id FROM users WHERE LOWER(email) = ? LIMIT 1', [email]);
+    res.json({ available: rows.length === 0 });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /api/auth/register-nickname
  * Register with nickname + PIN
  */
