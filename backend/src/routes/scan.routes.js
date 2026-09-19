@@ -15,7 +15,7 @@ const {
 const imageService = require('../services/imageService');
 const imagePreprocess = require('../services/imagePreprocessService');
 const productMatchKey = require('../services/productMatchKey');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, optionalAuth } = require('../middleware/auth');
 const { recordScanAndCheckLevel } = require('../services/tokenService');
 
 // Helper: Get recommendation from grade if AI didn't provide one
@@ -199,9 +199,15 @@ setInterval(() => {
 // ============================================
 // PUBLIC COMMUNITY STATS (for trust indicators)
 // ============================================
-router.get('/stats', async (req, res, next) => {
+router.get('/stats', optionalAuth, async (req, res, next) => {
   try {
-    const [scanResult] = await query('SELECT COUNT(*) as count FROM scan_history');
+    const viewerId = req.user?.id && req.user.id !== 'anonymous' ? req.user.id : null;
+    const [scanResult] = viewerId
+      ? await query(
+          'SELECT COUNT(*) as count FROM scan_history WHERE user_id IS NULL OR user_id != ?',
+          [viewerId]
+        )
+      : await query('SELECT COUNT(*) as count FROM scan_history');
     const [productResult] = await query('SELECT COUNT(*) as count FROM products');
     const [cacheResult] = await query('SELECT COUNT(*) as count FROM ai_assessment_cache');
     
@@ -398,29 +404,32 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
       hasArtificialAdditives: analysis.hasArtificialAdditives,
     } : null;
 
-    // Record in scan_history (once per user+product+day)
-    const histGrade = analysis?.grade ?? null;
-    const histRec = analysis ? toHistoryRecommendation(histGrade, analysis.recommendation) : 'acceptable';
-    try {
-      const today = new Date().toISOString().split('T')[0];
-      const [existing] = await query(
-        `SELECT id FROM scan_history WHERE user_id = ? AND product_id = ? AND DATE(created_at) = ? LIMIT 1`,
-        [userId, product.id, today]
-      );
-      if (!existing) {
-        await query(
-          `INSERT INTO scan_history (id, user_id, pet_name, pet_type, pet_id, product_id, scan_type, final_score, grade, recommendation, analysis_json)
-           VALUES (?, ?, ?, ?, ?, ?, 'barcode', ?, ?, ?, ?)`,
-          [
-            uuidv4(), userId, petName || null, petType, petId, product.id,
-            analysis?.finalScore ?? null, histGrade, histRec,
-            fullAnalysis ? JSON.stringify(fullAnalysis) : null,
-          ]
+    // History only when the caller is analyzing (not current-food lookup / signup)
+    const recordHistory = String(req.query.recordHistory || '') === '1';
+    if (recordHistory && userId && userId !== 'anonymous' && analysis) {
+      const histGrade = analysis.grade ?? null;
+      const histRec = toHistoryRecommendation(histGrade, analysis.recommendation);
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        const [existing] = await query(
+          `SELECT id FROM scan_history WHERE user_id = ? AND product_id = ? AND DATE(created_at) = ? LIMIT 1`,
+          [userId, product.id, today]
         );
-        console.log(`📜 [QuickScan] scan_history recorded for product=${product.id} user=${userId}`);
+        if (!existing) {
+          await query(
+            `INSERT INTO scan_history (id, user_id, pet_name, pet_type, pet_id, product_id, scan_type, final_score, grade, recommendation, analysis_json)
+             VALUES (?, ?, ?, ?, ?, ?, 'barcode', ?, ?, ?, ?)`,
+            [
+              uuidv4(), userId, petName || null, petType, petId, product.id,
+              analysis.finalScore ?? null, histGrade, histRec,
+              fullAnalysis ? JSON.stringify(fullAnalysis) : null,
+            ]
+          );
+          console.log(`📜 [QuickScan] scan_history recorded for product=${product.id} user=${userId}`);
+        }
+      } catch (histErr) {
+        console.error('[QuickScan] Failed to record history:', histErr.message, histErr.stack);
       }
-    } catch (histErr) {
-      console.error('[QuickScan] Failed to record history:', histErr.message, histErr.stack);
     }
 
     res.json({

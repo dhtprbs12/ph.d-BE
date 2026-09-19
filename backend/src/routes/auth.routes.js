@@ -49,14 +49,14 @@ router.post('/register', validateRegistration, async (req, res, next) => {
     );
 
     // Initialize gamification tables
-    await query('INSERT INTO user_tokens (user_id, balance, total_earned, total_spent) VALUES (?, 10, 10, 0)', [userId]);
+    await query('INSERT INTO user_tokens (user_id, balance, total_earned, total_spent) VALUES (?, 20, 20, 0)', [userId]);
     await query('INSERT INTO user_scan_level (user_id, total_scans, current_level) VALUES (?, 0, 1)', [userId]);
     await query('INSERT INTO user_streaks (user_id, current_streak, longest_streak, last_checkin_date) VALUES (?, 0, 0, NULL)', [userId]);
 
     // Welcome bonus token transaction
     await query(
-      'INSERT INTO token_transactions (id, user_id, amount, type, description) VALUES (?, ?, 10, ?, ?)',
-      [uuidv4(), userId, 'checkin', 'Welcome bonus 🦴×10']
+      'INSERT INTO token_transactions (id, user_id, amount, type, description) VALUES (?, ?, 20, ?, ?)',
+      [uuidv4(), userId, 'checkin', 'Welcome bonus 🦴×20']
     );
 
     // Generate token
@@ -260,14 +260,14 @@ router.post('/register-nickname', [
     );
 
     // Initialize gamification tables
-    await query('INSERT INTO user_tokens (user_id, balance, total_earned, total_spent) VALUES (?, 10, 10, 0)', [userId]);
+    await query('INSERT INTO user_tokens (user_id, balance, total_earned, total_spent) VALUES (?, 20, 20, 0)', [userId]);
     await query('INSERT INTO user_scan_level (user_id, total_scans, current_level) VALUES (?, 0, 1)', [userId]);
     await query('INSERT INTO user_streaks (user_id, current_streak, longest_streak, last_checkin_date) VALUES (?, 0, 0, NULL)', [userId]);
 
     // Welcome bonus token transaction
     await query(
-      'INSERT INTO token_transactions (id, user_id, amount, type, description) VALUES (?, ?, 10, ?, ?)',
-      [uuidv4(), userId, 'checkin', 'Welcome bonus 🦴×10']
+      'INSERT INTO token_transactions (id, user_id, amount, type, description) VALUES (?, ?, 20, ?, ?)',
+      [uuidv4(), userId, 'checkin', 'Welcome bonus 🦴×20']
     );
 
     const token = jwt.sign(
@@ -396,14 +396,14 @@ router.post('/device', async (req, res, next) => {
     );
 
     // Initialize gamification tables
-    await query('INSERT INTO user_tokens (user_id, balance, total_earned, total_spent) VALUES (?, 10, 10, 0)', [userId]);
+    await query('INSERT INTO user_tokens (user_id, balance, total_earned, total_spent) VALUES (?, 20, 20, 0)', [userId]);
     await query('INSERT INTO user_scan_level (user_id, total_scans, current_level) VALUES (?, 0, 1)', [userId]);
     await query('INSERT INTO user_streaks (user_id, current_streak, longest_streak, last_checkin_date) VALUES (?, 0, 0, NULL)', [userId]);
 
     // Welcome bonus token transaction
     await query(
-      'INSERT INTO token_transactions (id, user_id, amount, type, description) VALUES (?, ?, 10, ?, ?)',
-      [uuidv4(), userId, 'checkin', 'Welcome bonus 🦴×10']
+      'INSERT INTO token_transactions (id, user_id, amount, type, description) VALUES (?, ?, 20, ?, ?)',
+      [uuidv4(), userId, 'checkin', 'Welcome bonus 🦴×20']
     );
 
     const token = jwt.sign(

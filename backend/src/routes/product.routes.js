@@ -334,7 +334,7 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
     if (!ingredientsList || ingredientsList.length === 0) {
       return res.status(400).json({ error: 'Product has no ingredients to analyze' });
     }
-    console.log(`📝 [ANALYZE] ${ingredientsList.length} ingredients found (${isUserConfirmed ? 'user-confirmed' : 'parsed'})`);
+    console.log(`📝 [ANALYZE] ${ingredientsList.length} ingredients found`);
 
     // Use DB-stored hash if available, otherwise generate
     const ingredientHash = product.ingredient_hash || productService.generateIngredientHash(ingredientsList);

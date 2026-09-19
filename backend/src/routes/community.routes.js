@@ -5,6 +5,12 @@ const { authenticateToken, optionalAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
+function viewerId(req) {
+  const id = req.user?.id;
+  if (!id || id === 'anonymous') return null;
+  return id;
+}
+
 // GET /api/community/trending?type=food|treats&petType=dog|cat
 router.get('/trending', async (req, res, next) => {
   try {
@@ -50,10 +56,11 @@ router.get('/trending', async (req, res, next) => {
 });
 
 // GET /api/community/feed?cursor=&limit=20
-router.get('/feed', async (req, res, next) => {
+router.get('/feed', optionalAuth, async (req, res, next) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 20, 50);
     const offset = parseInt(req.query.offset) || 0;
+    const excludeId = viewerId(req);
 
     const rows = await query(`
       SELECT 
@@ -75,9 +82,10 @@ router.get('/feed', async (req, res, next) => {
       JOIN products p ON sp.product_id = p.id
       LEFT JOIN pets pet ON pet.user_id = sp.user_id
       WHERE u.nickname IS NOT NULL
+        ${excludeId ? 'AND sp.user_id != ?' : ''}
       ORDER BY sp.saved_at DESC
       LIMIT ? OFFSET ?
-    `, [limit, offset]);
+    `, excludeId ? [excludeId, limit, offset] : [limit, offset]);
 
     // Deduplicate: one row per save (pets JOIN may produce duplicates if user has multiple pets)
     const seen = new Set();
@@ -197,13 +205,14 @@ router.get('/my-saved', authenticateToken, async (req, res, next) => {
 
 // GET /api/community/recent-activity?petType=dog|cat
 // Returns recent scan activity with nickname for community feed
-router.get('/recent-activity', async (req, res, next) => {
+router.get('/recent-activity', optionalAuth, async (req, res, next) => {
   try {
     const { petType } = req.query;
     let petFilter = '';
     if (petType === 'dog' || petType === 'cat') {
       petFilter = `AND sh.pet_type = '${petType}'`;
     }
+    const excludeId = viewerId(req);
 
     const rows = await query(`
       SELECT 
@@ -222,9 +231,10 @@ router.get('/recent-activity', async (req, res, next) => {
       WHERE sh.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
         AND p.name IS NOT NULL
         ${petFilter}
+        ${excludeId ? 'AND sh.user_id != ?' : ''}
       ORDER BY sh.created_at DESC
       LIMIT 20
-    `);
+    `, excludeId ? [excludeId] : []);
 
     const activity = rows.map(r => ({
       nickname: r.nickname || 'Anonymous',
@@ -326,10 +336,11 @@ router.get('/pet-of-the-week', async (req, res, next) => {
 
 // GET /api/community/breed-popular?petType=dog|cat&breed=Golden+Retriever
 // Popular foods for a specific breed, or overall petType if no breed
-router.get('/breed-popular', async (req, res, next) => {
+router.get('/breed-popular', optionalAuth, async (req, res, next) => {
   try {
     const { petType, breed } = req.query;
     const petTypeVal = petType === 'cat' ? 'cat' : 'dog';
+    const excludeId = viewerId(req);
 
     let breedFilter = '';
     let breedLabel = '';
@@ -340,6 +351,7 @@ router.get('/breed-popular', async (req, res, next) => {
       params.push(breed.trim());
       breedLabel = breed.trim();
     }
+    if (excludeId) params.push(excludeId);
 
     // Find top foods scanned by users who own pets of this breed/type
     const rows = await query(`
@@ -359,6 +371,7 @@ router.get('/breed-popular', async (req, res, next) => {
       WHERE p.product_type IN ('dry_food', 'wet_food')
         AND p.target_pet_type IN ('${petTypeVal}', 'both')
         AND p.name IS NOT NULL
+        ${excludeId ? 'AND sh.user_id != ?' : ''}
       GROUP BY p.id, p.name, p.brand, p.image_url
       ORDER BY user_count DESC
       LIMIT 5
@@ -371,11 +384,13 @@ router.get('/breed-popular', async (req, res, next) => {
       countBreedFilter = 'AND breed = ?';
       countParams.push(breed.trim());
     }
+    if (excludeId) countParams.push(excludeId);
     const [countRow] = await query(`
       SELECT COUNT(DISTINCT user_id) as parent_count
       FROM pets
       WHERE pet_type = '${petTypeVal}'
         ${countBreedFilter}
+        ${excludeId ? 'AND user_id != ?' : ''}
     `, countParams);
 
     const foods = rows.map(r => ({
