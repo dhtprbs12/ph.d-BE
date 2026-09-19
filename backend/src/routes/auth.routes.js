@@ -498,7 +498,7 @@ router.delete('/me', authenticateToken, async (req, res, next) => {
     await query('DELETE FROM user_items WHERE user_id = ?', [userId]);
     await query('DELETE FROM user_streaks WHERE user_id = ?', [userId]);
     await query('DELETE FROM user_scan_level WHERE user_id = ?', [userId]);
-    await query('DELETE FROM pet_notes WHERE user_id = ?', [userId]);
+    await query('DELETE FROM pet_notes WHERE pet_id IN (SELECT id FROM pets WHERE user_id = ?)', [userId]);
     await query('DELETE FROM pets WHERE user_id = ?', [userId]);
     await query('DELETE FROM users WHERE id = ?', [userId]);
 
