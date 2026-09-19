@@ -480,5 +480,33 @@ router.put('/upgrade', authenticateToken, [
   }
 });
 
+/**
+ * DELETE /api/auth/me
+ * Delete current user account and all associated data
+ */
+router.delete('/me', authenticateToken, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    // Delete in order respecting foreign key constraints
+    await query('DELETE FROM daily_checkins WHERE pet_id IN (SELECT id FROM pets WHERE user_id = ?)', [userId]);
+    await query('DELETE FROM pet_foods WHERE pet_id IN (SELECT id FROM pets WHERE user_id = ?)', [userId]);
+    await query('DELETE FROM pet_health_conditions WHERE pet_id IN (SELECT id FROM pets WHERE user_id = ?)', [userId]);
+    await query('DELETE FROM pet_equipped WHERE pet_id IN (SELECT id FROM pets WHERE user_id = ?)', [userId]);
+    await query('DELETE FROM scan_history WHERE user_id = ?', [userId]);
+    await query('DELETE FROM product_reviews WHERE user_id = ?', [userId]);
+    await query('DELETE FROM user_items WHERE user_id = ?', [userId]);
+    await query('DELETE FROM user_streaks WHERE user_id = ?', [userId]);
+    await query('DELETE FROM user_scan_level WHERE user_id = ?', [userId]);
+    await query('DELETE FROM pet_notes WHERE user_id = ?', [userId]);
+    await query('DELETE FROM pets WHERE user_id = ?', [userId]);
+    await query('DELETE FROM users WHERE id = ?', [userId]);
+
+    res.json({ success: true, message: 'Account deleted' });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
 
