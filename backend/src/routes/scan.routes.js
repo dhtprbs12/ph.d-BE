@@ -440,6 +440,7 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
         brand: product.brand,
         image_url: product.image_url,
         barcode: product.barcode,
+        target_life_stage: product.target_life_stage,
       },
       parsedIngredients,
       score: analysis?.finalScore ?? null,
@@ -3815,7 +3816,8 @@ router.get('/:id', authenticateToken, async (req, res, next) => {
 
     const [scan] = await query(
       `SELECT sh.*, p.name as product_name, p.brand as product_brand,
-              p.image_url as product_image, p.product_type
+              p.manufacturer as product_manufacturer, p.image_url as product_image,
+              p.product_type, p.target_life_stage as product_life_stage
        FROM scan_history sh
        LEFT JOIN products p ON sh.product_id = p.id
        WHERE sh.id = ? AND sh.user_id = ?`,

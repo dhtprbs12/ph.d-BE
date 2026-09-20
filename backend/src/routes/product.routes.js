@@ -912,9 +912,11 @@ router.get('/:id/cached-review', optionalAuth, async (req, res, next) => {
       product: {
         id: product.id,
         name: product.name,
+        manufacturer: product.manufacturer,
         brand: product.brand,
         image_url: product.image_url,
         product_type: product.product_type,
+        target_life_stage: product.target_life_stage,
       },
       analysis,
       aiInsights: {
