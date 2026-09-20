@@ -625,19 +625,53 @@ router.post('/:id/checkins', async (req, res, next) => {
       [petId]
     );
 
-    const checkinId = uuidv4();
-    try {
+    const [existingCheckin] = await query(
+      'SELECT id FROM daily_checkins WHERE pet_id = ? AND date = ? LIMIT 1',
+      [petId, localDate]
+    );
+
+    if (existingCheckin) {
       await query(
-        `INSERT INTO daily_checkins (id, pet_id, pet_food_id, date, stool_score, appetite, vomiting, itching, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [checkinId, petId, currentFood?.id || null, localDate, stoolScore, appetite || 'normal', vomiting ? 1 : 0, itching ? 1 : 0, notes || null]
+        `UPDATE daily_checkins
+         SET pet_food_id = ?, stool_score = ?, appetite = ?, vomiting = ?, itching = ?, notes = ?
+         WHERE id = ?`,
+        [currentFood?.id || null, stoolScore, appetite || 'normal', vomiting ? 1 : 0, itching ? 1 : 0, notes || null, existingCheckin.id]
       );
-    } catch (e) {
-      if (e.code === 'ER_DUP_ENTRY') {
-        return res.status(409).json({ error: 'already_checked_in', message: 'Already checked in for this date' });
-      }
-      throw e;
+
+      const [streakRow] = await query(
+        'SELECT current_streak, longest_streak FROM user_streaks WHERE user_id = ?',
+        [userId]
+      );
+
+      console.log(`📝 [CheckIn] updated pet=${petId} stool=${stoolScore} appetite=${appetite}`);
+
+      return res.json({
+        checkin: {
+          id: existingCheckin.id,
+          petId,
+          date: localDate,
+          stoolScore,
+          appetite: appetite || 'normal',
+          vomiting: !!vomiting,
+          itching: !!itching,
+          notes: notes || null,
+        },
+        tokensAwarded: 0,
+        streakInfo: {
+          currentStreak: streakRow?.current_streak || 0,
+          longestStreak: streakRow?.longest_streak || 0,
+          streakBonus: 0,
+        },
+        updated: true,
+      });
     }
+
+    const checkinId = uuidv4();
+    await query(
+      `INSERT INTO daily_checkins (id, pet_id, pet_food_id, date, stool_score, appetite, vomiting, itching, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [checkinId, petId, currentFood?.id || null, localDate, stoolScore, appetite || 'normal', vomiting ? 1 : 0, itching ? 1 : 0, notes || null]
+    );
 
     // ── Token + Streak logic ──
 
