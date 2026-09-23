@@ -873,9 +873,88 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
 });
 
 /**
+ * Result screen source: products + product_review_cache + ai_assessment_cache.
+ * Ingredient lines are filled by analyzeIngredients, which reads ai_assessment_cache.
+ */
+async function reviewFromProductCache(product, petName, petTypeQuery, parsedConditions) {
+  const rawText = product.raw_ingredients_text || '';
+  const ingredientsList = ingredientAnalyzer.parseIngredientText(rawText);
+  if (!ingredientsList.length) return null;
+
+  const ingredientHash = product.ingredient_hash || productService.generateIngredientHash(ingredientsList);
+  if (!ingredientHash) return null;
+
+  const isTreat = product.product_type === 'treats' || product.product_type === 'treat' || product.product_type === 'supplement';
+  const conditionHash = getSingleConditionHash('healthy', isTreat ? 'treats' : 'food');
+  const petType = petTypeQuery === 'cat' ? 'cat' : 'dog';
+
+  let rows = await query(
+    `SELECT * FROM product_review_cache WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ? LIMIT 1`,
+    [ingredientHash, conditionHash, petType]
+  );
+  if (!rows.length && petType !== 'dog') {
+    rows = await query(
+      `SELECT * FROM product_review_cache WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = 'dog' LIMIT 1`,
+      [ingredientHash, conditionHash]
+    );
+  }
+  if (!rows.length) return null;
+
+  const row = rows[0];
+  const positives = safeJsonParse(row.positives, []);
+  const keyIssues = safeJsonParse(row.key_issues, []);
+
+  let ingredients = [];
+  try {
+    const ingredientAnalysis = await ingredientAnalyzer.analyzeIngredients(ingredientsList, {
+      id: 'community',
+      name: petName || 'Pet',
+      pet_type: petType,
+      healthConditions: parsedConditions,
+    });
+    ingredients = ingredientAnalysis.ingredients || [];
+  } catch (e) {
+    console.warn('[CACHED-REVIEW] ingredient analysis skipped:', e.message);
+  }
+
+  const analysis = {
+    finalScore: row.final_score,
+    grade: row.grade,
+    recommendation: row.recommendation || 'consider',
+    ingredients,
+    warnings: [],
+    positives,
+    summary: row.ai_summary || '',
+    keyIssues,
+    proteinQuality: row.protein_quality,
+    hasArtificialAdditives: !!row.has_artificial_additives,
+  };
+
+  return {
+    product: {
+      id: product.id,
+      name: product.name,
+      manufacturer: product.manufacturer,
+      brand: product.brand,
+      image_url: product.image_url,
+      product_type: product.product_type,
+      target_life_stage: product.target_life_stage,
+    },
+    analysis,
+    aiInsights: {
+      topBenefits: positives,
+      topConcerns: keyIssues,
+      conditionWarnings: ingredientAnalyzer.generateConditionWarnings(ingredientsList, parsedConditions),
+      aiGenerated: true,
+    },
+    pet: { id: 'community', name: petName, petType },
+  };
+}
+
+/**
  * GET /api/products/:id/cached-review
- * Lightweight endpoint for Community tab — NO AI calls, NO re-analysis.
- * Reads from product_review_cache + per-ingredient cache + rule-based condition warnings.
+ * Result screen for every entry point. No scan_history.
+ * products + product_review_cache + ai_assessment_cache.
  */
 router.get('/:id/cached-review', optionalAuth, async (req, res, next) => {
   try {
@@ -888,45 +967,11 @@ router.get('/:id/cached-review', optionalAuth, async (req, res, next) => {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    // Find the most recent scan_history entry for this product (any user)
-    const [scanRow] = await query(
-      `SELECT analysis_json, pet_name, pet_type FROM scan_history WHERE product_id = ? ORDER BY created_at DESC LIMIT 1`,
-      [productId]
-    );
-
-    if (!scanRow || !scanRow.analysis_json) {
+    const fromCache = await reviewFromProductCache(product, petName, req.query.petType, parsedConditions);
+    if (!fromCache) {
       return res.status(404).json({ error: 'No analysis found — product needs initial scan first' });
     }
-
-    // mysql2 may auto-parse JSON columns
-    const analysis = typeof scanRow.analysis_json === 'string'
-      ? JSON.parse(scanRow.analysis_json)
-      : scanRow.analysis_json;
-
-    // Generate condition warnings for the viewing user's pet (rule-based, fast)
-    const rawText = product.raw_ingredients_text || '';
-    const ingredientsList = ingredientAnalyzer.parseIngredientText(rawText);
-    const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, parsedConditions);
-
-    res.json({
-      product: {
-        id: product.id,
-        name: product.name,
-        manufacturer: product.manufacturer,
-        brand: product.brand,
-        image_url: product.image_url,
-        product_type: product.product_type,
-        target_life_stage: product.target_life_stage,
-      },
-      analysis,
-      aiInsights: {
-        topBenefits: analysis.positives || [],
-        topConcerns: analysis.keyIssues || [],
-        conditionWarnings,
-        aiGenerated: true,
-      },
-      pet: { id: 'community', name: petName, petType: scanRow.pet_type || 'dog' },
-    });
+    res.json(fromCache);
   } catch (error) {
     console.error('[CACHED-REVIEW] Error:', error.message);
     next(error);
