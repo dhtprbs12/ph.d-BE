@@ -882,8 +882,8 @@ router.get('/:id/passport', async (req, res, next) => {
       const toDate = food.ended_at || new Date().toISOString().split('T')[0];
       
       const checkins = await query(
-        'SELECT stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND date BETWEEN ? AND ?',
-        [req.params.id, fromDate, toDate]
+        'SELECT stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND pet_food_id = ?',
+        [req.params.id, food.id]
       );
       
       const avgStool = checkins.length > 0
@@ -900,7 +900,7 @@ router.get('/:id/passport', async (req, res, next) => {
         isCurrent: !!food.is_current,
         startedAt: food.started_at,
         endedAt: food.ended_at,
-        daysOnFood: Math.floor((new Date(toDate) - new Date(fromDate)) / (1000 * 60 * 60 * 24)),
+        daysOnFood: Math.max(1, Math.floor((new Date(toDate) - new Date(fromDate)) / (1000 * 60 * 60 * 24)) + 1),
         stats: {
           checkinCount: checkins.length,
           avgStoolScore: avgStool,
@@ -947,8 +947,8 @@ router.get('/:id/insights', async (req, res, next) => {
       const toDate = food.ended_at || new Date().toISOString().split('T')[0];
       
       const checkins = await query(
-        'SELECT stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND date BETWEEN ? AND ?',
-        [req.params.id, fromDate, toDate]
+        'SELECT stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND pet_food_id = ?',
+        [req.params.id, food.id]
       );
 
       if (checkins.length < 3) continue;
