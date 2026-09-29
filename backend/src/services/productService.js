@@ -152,51 +152,87 @@ class ProductService {
     return results.length > 0 ? results[0] : null;
   }
 
+  /** Same recipe across bag sizes: name, manufacturer, life stage, product type. */
+  recipeIdentityColumns(alias = 'p') {
+    return [
+      `LOWER(TRIM(${alias}.name))`,
+      `LOWER(TRIM(COALESCE(${alias}.manufacturer, ${alias}.brand, '')))`,
+      `${alias}.target_life_stage`,
+      `${alias}.product_type`,
+    ].join(', ');
+  }
+
   /**
-   * Search products by text
+   * One id per recipe. Prefer a photo, then the most-scanned barcode.
+   * fromWhereSql must be `FROM products p ... WHERE ...`.
+   */
+  oneRowPerRecipeSql(fromWhereSql) {
+    return `
+      SELECT picked_id FROM (
+        SELECT p.id AS picked_id,
+          ROW_NUMBER() OVER (
+            PARTITION BY ${this.recipeIdentityColumns('p')}
+            ORDER BY (p.image_url IS NOT NULL AND p.image_url <> '') DESC,
+                     IFNULL(p.scan_count, 0) DESC,
+                     p.updated_at DESC
+          ) AS rn
+        ${fromWhereSql}
+      ) ranked
+      WHERE rn = 1
+    `;
+  }
+
+  /**
+   * Search products by text. Same name, manufacturer, life stage, and type
+   * collapse to one row so different bag sizes do not repeat.
    */
   async search(searchTerm, options = {}) {
     const { targetPetType, productType, lifeStage, limit = 20, offset = 0 } = options;
-    
-    // Handle empty search term
+
     if (!searchTerm || searchTerm.trim() === '') {
       return [];
     }
-    
+
     const term = searchTerm.trim();
     const words = term.split(/\s+/).filter(Boolean);
-    
-    let sql = `SELECT * FROM products WHERE `;
+    const where = [];
     const params = [];
 
     if (words.length > 1) {
-      const wordClauses = words.map(() => `(name LIKE ? OR brand LIKE ? OR manufacturer LIKE ?)`);
-      sql += `(${wordClauses.join(' AND ')})`;
+      const wordClauses = words.map(() => `(p.name LIKE ? OR p.brand LIKE ? OR p.manufacturer LIKE ?)`);
+      where.push(`(${wordClauses.join(' AND ')})`);
       for (const w of words) {
         params.push(`%${w}%`, `%${w}%`, `%${w}%`);
       }
     } else {
-      sql += `(name LIKE ? OR brand LIKE ? OR manufacturer LIKE ?)`;
+      where.push(`(p.name LIKE ? OR p.brand LIKE ? OR p.manufacturer LIKE ?)`);
       params.push(`%${term}%`, `%${term}%`, `%${term}%`);
     }
 
     if (targetPetType) {
-      sql += ` AND (target_pet_type = ? OR target_pet_type = 'both')`;
+      where.push(`(p.target_pet_type = ? OR p.target_pet_type = 'both')`);
       params.push(targetPetType);
     }
 
     if (productType) {
-      sql += ` AND product_type = ?`;
+      where.push('p.product_type = ?');
       params.push(productType);
     }
 
     if (lifeStage) {
-      sql += ` AND (target_life_stage = ? OR target_life_stage = 'all')`;
+      where.push(`(p.target_life_stage = ? OR p.target_life_stage = 'all')`);
       params.push(lifeStage);
     }
 
-    sql += ` ORDER BY name ASC LIMIT ? OFFSET ?`;
     params.push(parseInt(limit), parseInt(offset));
+    const sql = `
+      SELECT p.* FROM products p
+      INNER JOIN (
+        ${this.oneRowPerRecipeSql(`FROM products p WHERE ${where.join(' AND ')}`)}
+      ) picked ON picked.picked_id = p.id
+      ORDER BY p.name ASC
+      LIMIT ? OFFSET ?
+    `;
 
     return await query(sql, params);
   }
@@ -342,26 +378,54 @@ class ProductService {
       }
     }
 
-    // Ingredient inclusions — match if keyword appears in first 3 ingredients
+    // Ingredient inclusions. Main protein: name matches first, then the first 3 ingredients.
+    const MAIN_PROTEINS = new Set(['chicken', 'beef', 'fish', 'lamb', 'turkey', 'duck']);
     const activeInclusions = Object.entries(ingredientInclusions)
       .filter(([_, include]) => include)
       .map(([ingredient]) => ingredient);
-    
-    if (activeInclusions.length > 0) {
+    const proteinInclusions = activeInclusions.filter((key) => MAIN_PROTEINS.has(key));
+    const otherInclusions = activeInclusions.filter((key) => !MAIN_PROTEINS.has(key));
+
+    const firstThreeIngredientClauses = () => ([
+      `LOWER(SUBSTRING_INDEX(p.raw_ingredients_text, ',', 1)) LIKE ?`,
+      `LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(p.raw_ingredients_text, ',', 2), ',', -1))) LIKE ?`,
+      `LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(p.raw_ingredients_text, ',', 3), ',', -1))) LIKE ?`,
+    ]);
+
+    if (otherInclusions.length > 0) {
       const inclusionClauses = [];
-      for (const ingredient of activeInclusions) {
+      for (const ingredient of otherInclusions) {
         if (!ingredientKeywords[ingredient]) continue;
         for (const keyword of ingredientKeywords[ingredient]) {
-          inclusionClauses.push(
-            `LOWER(SUBSTRING_INDEX(p.raw_ingredients_text, ',', 1)) LIKE ?`,
-            `LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(p.raw_ingredients_text, ',', 2), ',', -1))) LIKE ?`,
-            `LOWER(TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(p.raw_ingredients_text, ',', 3), ',', -1))) LIKE ?`
-          );
+          inclusionClauses.push(...firstThreeIngredientClauses());
           params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
         }
       }
       if (inclusionClauses.length > 0) {
         where.push(`(${inclusionClauses.join(' OR ')})`);
+      }
+    }
+
+    let nameMatchSql = '';
+    let nameMatchParams = [];
+    if (proteinInclusions.length > 0) {
+      const nameClauses = [];
+      const ingredientClauses = [];
+      const ingredientParams = [];
+      for (const ingredient of proteinInclusions) {
+        if (!ingredientKeywords[ingredient]) continue;
+        for (const keyword of ingredientKeywords[ingredient]) {
+          const like = `%${keyword}%`;
+          nameClauses.push('LOWER(p.name) LIKE ?');
+          nameMatchParams.push(like);
+          ingredientClauses.push(...firstThreeIngredientClauses());
+          ingredientParams.push(like, like, like);
+        }
+      }
+      if (nameClauses.length > 0) {
+        nameMatchSql = `(${nameClauses.join(' OR ')})`;
+        where.push(`(${nameMatchSql} OR ${ingredientClauses.join(' OR ')})`);
+        params.push(...nameMatchParams, ...ingredientParams);
       }
     }
 
@@ -374,14 +438,33 @@ class ProductService {
     // ── Assemble WHERE ──
     const whereStr = where.length > 0 ? where.join(' AND ') : '1=1';
 
-    // Count total matching rows (before LIMIT/OFFSET)
-    const countSql = `SELECT COUNT(*) as total FROM products p${joinSql} WHERE ${whereStr}`;
+    // Count recipes, not barcode rows (same name + manufacturer + life stage + type = one)
+    const countSql = `
+      SELECT COUNT(*) AS total FROM (
+        SELECT 1
+        FROM products p${joinSql}
+        WHERE ${whereStr}
+        GROUP BY ${this.recipeIdentityColumns('p')}
+      ) grouped
+    `;
     const countResult = await query(countSql, [...params]);
     const total = countResult[0]?.total ?? 0;
 
-    // ── 3. ORDER + LIMIT ──
+    // ── 3. One row per recipe. Protein-in-name rows first, then page. ──
+    let orderSql = 'p.name ASC';
+    if (nameMatchSql) {
+      orderSql = `${nameMatchSql} DESC, p.name ASC`;
+      params.push(...nameMatchParams);
+    }
     params.push(limit, offset);
-    const sql = `SELECT p.* FROM products p${joinSql} WHERE ${whereStr} ORDER BY p.name ASC LIMIT ? OFFSET ?`;
+    const sql = `
+      SELECT p.* FROM products p
+      INNER JOIN (
+        ${this.oneRowPerRecipeSql(`FROM products p${joinSql} WHERE ${whereStr}`)}
+      ) picked ON picked.picked_id = p.id
+      ORDER BY ${orderSql}
+      LIMIT ? OFFSET ?
+    `;
 
     console.log('🔍 Filter SQL:', sql);
 
