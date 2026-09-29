@@ -834,18 +834,19 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
               [userId, product.id, petNameKey, petTypeKey]
             )
           : [];
+        const petIdKey = pet.id && pet.id !== 'local' ? pet.id : null;
         if (existing.length > 0) {
           await query(
-            `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, analysis_json = ?, pet_name = ?, pet_type = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,
-            [analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights }), petNameKey, petTypeKey, existing[0].id]
+            `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, analysis_json = ?, pet_name = ?, pet_type = ?, pet_id = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,
+            [analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights }), petNameKey, petTypeKey, petIdKey, existing[0].id]
           );
           console.log(`📜 [ANALYZE] Scan history updated: ${existing[0].id} pet=${petNameKey} (${petTypeKey})`);
         } else {
           const scanId = uuidv4();
           await query(
-            `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
-             VALUES (?, ?, ?, ?, ?, ?, 'product_search', ?, ?, ?, NULL, ?)`,
-            [scanId, userId, deviceId, petNameKey, petTypeKey, product.id, analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights })]
+            `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, pet_id, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'product_search', ?, ?, ?, NULL, ?)`,
+            [scanId, userId, deviceId, petNameKey, petTypeKey, petIdKey, product.id, analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights })]
           );
           console.log('📜 [ANALYZE] Scan history saved:', scanId);
         }
