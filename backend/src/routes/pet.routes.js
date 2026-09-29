@@ -333,7 +333,7 @@ router.get('/:id/current-food', async (req, res, next) => {
     }
 
     const [food] = await query(
-      `SELECT pf.*, p.name as product_display_name, p.brand, p.image_url, p.barcode
+      `SELECT pf.*, p.name as product_display_name, p.brand, p.manufacturer, p.image_url, p.barcode
        FROM pet_foods pf
        LEFT JOIN products p ON pf.product_id = p.id
        WHERE pf.pet_id = ? AND pf.is_current = TRUE
@@ -357,6 +357,7 @@ router.get('/:id/current-food', async (req, res, next) => {
         scanId: food.scan_id,
         productName: food.product_name,
         brand: food.brand || null,
+        manufacturer: food.manufacturer || null,
         imageUrl: food.image_url || null,
         barcode: food.barcode || null,
         startedAt: food.started_at,

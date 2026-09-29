@@ -426,6 +426,9 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
             ]
           );
           console.log(`📜 [QuickScan] scan_history recorded for product=${product.id} user=${userId}`);
+          recordScanAndCheckLevel(userId).catch(e =>
+            console.warn('[QuickScan] scan-level update failed:', e.message)
+          );
         }
       } catch (histErr) {
         console.error('[QuickScan] Failed to record history:', histErr.message, histErr.stack);
@@ -3771,8 +3774,8 @@ router.get('/history', authenticateToken, async (req, res, next) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    const { petName, petType } = req.query;
-    
+    const { petId } = req.query;
+
     let sql = `
       SELECT sh.*, p.name as product_name, p.brand as product_brand, p.image_url as product_image, p.target_life_stage as product_life_stage
       FROM scan_history sh
@@ -3781,13 +3784,9 @@ router.get('/history', authenticateToken, async (req, res, next) => {
     `;
     const params = [userId];
 
-    if (petName) {
-      sql += ' AND sh.pet_name = ?';
-      params.push(petName);
-    }
-    if (petType) {
-      sql += ' AND sh.pet_type = ?';
-      params.push(petType);
+    if (petId) {
+      sql += ' AND sh.pet_id = ?';
+      params.push(petId);
     }
 
     sql += ' ORDER BY sh.created_at DESC LIMIT ? OFFSET ?';
