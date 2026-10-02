@@ -17,6 +17,87 @@ function getSingleConditionHash(condition, productType) {
   return `${condition}_${productType}`;
 }
 
+/** ai_assessment_cache.category ENUM values. */
+const INGREDIENT_CATEGORIES = new Set([
+  'protein', 'grain', 'vegetable', 'fruit', 'vitamin', 'mineral', 'other',
+]);
+
+/**
+ * Coerce an AI-supplied category to the ai_assessment_cache ENUM, or null when
+ * the model returned something else (older prompts allowed free text).
+ * @param {unknown} raw
+ * @returns {string|null}
+ */
+function normalizeIngredientCategory(raw) {
+  const value = String(raw || '').trim().toLowerCase();
+  return INGREDIENT_CATEGORIES.has(value) ? value : null;
+}
+
+/** Words that describe processing, not the plant or animal the ingredient came from. */
+const SOURCE_NOISE_WORDS = new Set([
+  'deboned', 'dried', 'dehydrated', 'ground', 'whole', 'fresh', 'raw', 'meal', 'meals',
+  'byproduct', 'byproducts', 'by', 'product', 'products', 'hydrolyzed', 'concentrate',
+  'isolate', 'protein', 'flour', 'bran', 'gluten', 'starch', 'oil', 'fat', 'flavor',
+  'flavour', 'natural', 'powder', 'extract', 'source', 'of', 'and',
+]);
+
+/** Words that end in s but are already singular, so the -s rule must skip them. */
+const ALREADY_SINGULAR = new Set(['sassafras', 'gras', 'tagetes', 'molasses', 'watercress']);
+
+/** Singularize one word: potatoes -> potato, berries -> berry, peas -> pea. */
+function singularizeWord(word) {
+  if (word.length < 4 || ALREADY_SINGULAR.has(word)) return word;
+  if (word.endsWith('oes')) return word.slice(0, -2);
+  if (word.endsWith('ies')) return `${word.slice(0, -3)}y`;
+  if (/(ss|sh|ch|x|z)es$/.test(word)) return word.slice(0, -2);
+  // Latin/Greek endings (citrus, asparagus, orris) are not plurals.
+  if (/(us|is|ss)$/.test(word)) return word;
+  if (word.endsWith('s')) return word.slice(0, -1);
+  return word;
+}
+
+/** Different words for the same plant or animal. */
+const SOURCE_ALIASES = {
+  bovine: 'beef',
+  cow: 'milk',
+  dairy: 'milk',
+  pig: 'pork',
+  swine: 'pork',
+  sheep: 'lamb',
+  mutton: 'lamb',
+  soy: 'soybean',
+  flaxseed: 'flax',
+  linseed: 'flax',
+  garbanzo: 'chickpea',
+  rapeseed: 'canola',
+  maize: 'corn',
+  'miscanthus grass': 'miscanthus',
+  animal: 'meat',
+};
+
+/**
+ * Coerce an AI-supplied ingredient source to a stable grouping key. Strips the
+ * processing words the model sometimes leaves in so that "chicken meal" and
+ * "deboned chicken" land on the same value.
+ * @param {unknown} raw
+ * @returns {string|null}
+ */
+function normalizeIngredientSource(raw) {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (!value || value === 'null' || value === 'none' || value === 'n/a') return null;
+
+  const words = value
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w && !SOURCE_NOISE_WORDS.has(w))
+    .map(singularizeWord);
+  if (words.length === 0) return null;
+
+  const cleaned = words.join(' ').slice(0, 60);
+  if (!cleaned) return null;
+  return SOURCE_ALIASES[cleaned] || cleaned;
+}
+
 /**
  * Safe JSON parsing with fallback
  * @param {string|array} str - JSON string or array to parse
@@ -87,6 +168,9 @@ function isOldMd5Hash(hash) {
 
 module.exports = {
   getSingleConditionHash,
+  INGREDIENT_CATEGORIES,
+  normalizeIngredientCategory,
+  normalizeIngredientSource,
   safeJsonParse,
   gradeToNumber,
   numberToGrade,

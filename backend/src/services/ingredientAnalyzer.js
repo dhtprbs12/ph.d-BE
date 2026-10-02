@@ -687,7 +687,7 @@ class IngredientAnalyzer {
     petName,
     productTypeForAI
   }) {
-    const { getSingleConditionHash } = require('../utils/cacheHelpers');
+    const { getSingleConditionHash, normalizeIngredientCategory, normalizeIngredientSource } = require('../utils/cacheHelpers');
     const geminiService = require('../services/geminiService');
     const conditionHash = getSingleConditionHash(condition, productTypeForHash);
     const displayName = petName || 'your pet';
@@ -774,7 +774,9 @@ class IngredientAnalyzer {
           petType,
           assessment.riskScore ?? 0,
           assessment.explanation || '',
-          assessment.benefit || ''
+          assessment.benefit || '',
+          normalizeIngredientCategory(assessment.category),
+          normalizeIngredientSource(assessment.source)
         ]);
       }
     }
@@ -789,18 +791,20 @@ class IngredientAnalyzer {
           petType,
           0,
           'No matching AI row; neutral risk used so deterministic scoring can proceed',
-          ''
+          '',
+          null,
+          null
         ]);
       }
     }
 
     if (ingCacheInserts.length > 0) {
       try {
-        const placeholders = ingCacheInserts.map(() => '(UUID(), ?, ?, ?, ?, ?, ?)').join(', ');
+        const placeholders = ingCacheInserts.map(() => '(UUID(), ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
         await query(
-          `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit)
+          `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit, category, ingredient_source)
            VALUES ${placeholders}
-           ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), hit_count = hit_count + 1`,
+           ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), category = COALESCE(VALUES(category), category), ingredient_source = COALESCE(VALUES(ingredient_source), ingredient_source), hit_count = hit_count + 1`,
           ingCacheInserts.flat()
         );
         console.log(
@@ -817,8 +821,8 @@ class IngredientAnalyzer {
       for (const ing of uncached) {
         try {
           await query(
-            `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit)
-             VALUES (UUID(), ?, ?, ?, ?, ?, ?)
+            `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit, category, ingredient_source)
+             VALUES (UUID(), ?, ?, ?, ?, ?, ?, NULL, NULL)
              ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), hit_count = hit_count + 1`,
             [
               ing.normalizedName,

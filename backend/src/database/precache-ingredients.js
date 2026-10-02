@@ -32,7 +32,7 @@
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 const { connectDB, query } = require('../database/connection');
-const { getSingleConditionHash } = require('../utils/cacheHelpers');
+const { getSingleConditionHash, normalizeIngredientCategory, normalizeIngredientSource } = require('../utils/cacheHelpers');
 const { getComprehensiveList } = require('./comprehensive-ingredients');
 
 // We import the geminiService singleton — same instance the live app uses
@@ -137,17 +137,23 @@ async function saveBatchToCache(assessments, conditionsHash, petType) {
     const explanation = assessment.explanation || '';
     const benefit = assessment.benefit || '';
 
-    placeholders.push('(UUID(), ?, ?, ?, ?, ?, ?)');
-    values.push(normalized, conditionsHash, petType, riskScore, explanation, benefit);
+    placeholders.push('(UUID(), ?, ?, ?, ?, ?, ?, ?, ?)');
+    values.push(
+      normalized, conditionsHash, petType, riskScore, explanation, benefit,
+      normalizeIngredientCategory(assessment.category),
+      normalizeIngredientSource(assessment.source)
+    );
   }
 
   const sql = `INSERT INTO ai_assessment_cache 
-    (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit)
+    (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit, category, ingredient_source)
     VALUES ${placeholders.join(', ')}
     ON DUPLICATE KEY UPDATE 
       risk_score = VALUES(risk_score), 
       explanation = VALUES(explanation), 
       benefit = VALUES(benefit), 
+      category = COALESCE(VALUES(category), category),
+      ingredient_source = COALESCE(VALUES(ingredient_source), ingredient_source),
       hit_count = hit_count + 1`;
 
   await query(sql, values);

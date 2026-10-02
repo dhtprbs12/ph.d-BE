@@ -19,6 +19,8 @@ const registerUpload = multer({
 });
 const { 
   getSingleConditionHash, 
+  normalizeIngredientCategory,
+  normalizeIngredientSource,
   safeJsonParse, 
   gradeToNumber, 
   numberToGrade 
@@ -455,7 +457,9 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
                 if (ing.normalizedName) {
                   ingCacheInserts.push([
                     ing.normalizedName, conditionHash, pet.pet_type,
-                    assessment.riskScore || 0, assessment.explanation || '', assessment.benefit || ''
+                    assessment.riskScore || 0, assessment.explanation || '', assessment.benefit || '',
+                    normalizeIngredientCategory(assessment.category),
+                    normalizeIngredientSource(assessment.source)
                   ]);
                 }
               }
@@ -465,11 +469,11 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
           // STEP 3: Batch save to ai_assessment_cache
           if (ingCacheInserts.length > 0) {
             try {
-              const placeholders = ingCacheInserts.map(() => '(UUID(), ?, ?, ?, ?, ?, ?)').join(', ');
+              const placeholders = ingCacheInserts.map(() => '(UUID(), ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
               await query(
-                `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit)
+                `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit, category, ingredient_source)
                  VALUES ${placeholders}
-                 ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), hit_count = hit_count + 1`,
+                 ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), category = COALESCE(VALUES(category), category), ingredient_source = COALESCE(VALUES(ingredient_source), ingredient_source), hit_count = hit_count + 1`,
                 ingCacheInserts.flat()
               );
               console.log(`💾 [ANALYZE] Cached ${ingCacheInserts.length} ingredient assessments`);

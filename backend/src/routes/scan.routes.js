@@ -8,6 +8,8 @@ const geminiService = require('../services/geminiService');
 const productService = require('../services/productService');
 const { 
   getSingleConditionHash, 
+  normalizeIngredientCategory,
+  normalizeIngredientSource,
   safeJsonParse, 
   gradeToNumber, 
   numberToGrade 
@@ -747,7 +749,9 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
               if (ing.normalizedName) {
                 allCacheInserts.push([
                   ing.normalizedName, conditionHash, pet.pet_type,
-                  assessment.riskScore || 0, assessment.explanation || '', assessment.benefit || ''
+                  assessment.riskScore || 0, assessment.explanation || '', assessment.benefit || '',
+                  normalizeIngredientCategory(assessment.category),
+                  normalizeIngredientSource(assessment.source)
                 ]);
               }
             }
@@ -821,11 +825,11 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
       // BATCH INSERT cache entries to ai_assessment_cache
       if (allCacheInserts.length > 0) {
         try {
-          const placeholders = allCacheInserts.map(() => '(UUID(), ?, ?, ?, ?, ?, ?)').join(', ');
+          const placeholders = allCacheInserts.map(() => '(UUID(), ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
           await query(
-            `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit)
+            `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit, category, ingredient_source)
              VALUES ${placeholders}
-             ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), hit_count = hit_count + 1`,
+             ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), category = COALESCE(VALUES(category), category), ingredient_source = COALESCE(VALUES(ingredient_source), ingredient_source), hit_count = hit_count + 1`,
             allCacheInserts.flat()
           );
           console.log(`💾 [BG] Batch cached: ${allCacheInserts.length} ingredient-condition pairs`);
@@ -2722,7 +2726,9 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
               pet.pet_type,
               riskScore,
               assessment.explanation || '',
-              assessment.benefit || ''
+              assessment.benefit || '',
+              normalizeIngredientCategory(assessment.category),
+              normalizeIngredientSource(assessment.source)
             ]);
           }
         } else if (ing.needsAIAssessment || hasConditions) {
@@ -2733,16 +2739,18 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
       // BATCH INSERT: Cache (all at once)
       if (cacheInserts.length > 0) {
         try {
-          const placeholders = cacheInserts.map(() => '(UUID(), ?, ?, ?, ?, ?, ?)').join(', ');
+          const placeholders = cacheInserts.map(() => '(UUID(), ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
           const flatParams = cacheInserts.flat();
           await query(
             `INSERT INTO ai_assessment_cache 
-             (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit)
+             (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit, category, ingredient_source)
              VALUES ${placeholders}
              ON DUPLICATE KEY UPDATE 
                risk_score = VALUES(risk_score),
                explanation = VALUES(explanation),
                benefit = VALUES(benefit),
+               category = COALESCE(VALUES(category), category),
+               ingredient_source = COALESCE(VALUES(ingredient_source), ingredient_source),
                hit_count = hit_count + 1,
                updated_at = CURRENT_TIMESTAMP`,
             flatParams
@@ -3447,7 +3455,9 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
               // Prepare cache insert
               ingredientCacheInserts.push([
                 normalizedName, conditionHash, pet.pet_type,
-                assessment.riskScore || 0, assessment.explanation || '', assessment.benefit || ''
+                assessment.riskScore || 0, assessment.explanation || '', assessment.benefit || '',
+                normalizeIngredientCategory(assessment.category),
+                normalizeIngredientSource(assessment.source)
               ]);
             }
           }
@@ -3461,9 +3471,9 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
     for (const insert of ingredientCacheInserts) {
       try {
         await query(
-          `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit)
-           VALUES (UUID(), ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), hit_count = hit_count + 1`,
+          `INSERT INTO ai_assessment_cache (id, ingredient_normalized, conditions_hash, pet_type, risk_score, explanation, benefit, category, ingredient_source)
+           VALUES (UUID(), ?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), category = COALESCE(VALUES(category), category), ingredient_source = COALESCE(VALUES(ingredient_source), ingredient_source), hit_count = hit_count + 1`,
           insert
         );
       } catch (err) {}

@@ -1284,12 +1284,34 @@ ${extraRules}
 BAD explanation: "As the 5th ingredient, its quantity is likely small"
 GOOD explanation: "Provides empty calories with no nutritional benefit"
 
+CATEGORY — pick EXACTLY ONE of these lowercase values, nothing else:
+- "protein": animal or plant protein sources (chicken, chicken meal, by-product meal, liver, egg, fish, pea protein)
+- "grain": cereal grains and their fractions (rice, oatmeal, barley, corn, wheat, millet, sorghum, gluten)
+- "vegetable": vegetables, legumes, tubers, grasses (peas, lentils, potato, sweet potato, carrot, spinach, kale, alfalfa)
+- "fruit": fruits and berries (apple, blueberry, cranberry, pumpkin, tomato)
+- "vitamin": named vitamins and vitamin supplements (vitamin E supplement, thiamine mononitrate, biotin, folic acid)
+- "mineral": minerals and trace mineral salts/chelates (zinc sulfate, ferrous sulfate, calcium carbonate, salt, selenite, iodate)
+- "other": anything else (fats and oils, flavors, preservatives, probiotics, fiber additives, amino acids, gums, water)
+
+SOURCE — the single raw plant or animal the ingredient comes from, so that the
+same source written different ways collapses to one value. Rules:
+- lowercase, singular, 1-2 words, no processing words (deboned, dried, ground, whole, meal, by-product, hydrolyzed, concentrate, isolate, protein, flour, bran, gluten, starch, oil, fat, flavor)
+- "deboned chicken", "chicken meal", "chicken liver", "chicken by-product meal", "chicken fat" -> "chicken"
+- "brown rice", "brewers rice", "rice bran" -> "rice"
+- "whole corn", "corn gluten meal", "corn protein concentrate" -> "corn"
+- "yellow peas", "pea protein", "dried peas" -> "pea"
+- "dried sweet potatoes", "sweet potato flour" -> "sweet potato"
+- "poultry by-product meal", "poultry meal" -> "poultry" (use "poultry" only when the bird is genuinely unspecified)
+- "menhaden fish meal" -> "menhaden"; "fish meal" (unspecified) -> "fish"
+- use null when there is no single plant or animal source: salt, vitamins, minerals, amino acids, probiotics, gums, preservatives, water, yeast cultures
+
 Return VALID JSON (no + prefix on numbers, use -5 or 5, not +5):
 {
   "assessments": {
     "Ingredient Name": {
       "riskScore": <integer like -15, 0, 10, 45 - NO + prefix>,
-      "category": "string",
+      "category": "<protein|grain|vegetable|fruit|vitamin|mineral|other>",
+      "source": "<lowercase plant/animal source, or null>",
       "explanation": "string (describe the ingredient itself, NOT its position)",
       "benefit": "string or empty"
     }
@@ -1780,6 +1802,27 @@ isTreat ? `- Quality proteins (chicken, beef, fish): -12 to -18 (very beneficial
 
 IMPORTANT: Do NOT mention ingredient position/order in explanations.
 
+CATEGORY — pick EXACTLY ONE of these lowercase values, nothing else:
+- "protein": animal or plant protein sources (chicken, chicken meal, by-product meal, liver, egg, fish, pea protein)
+- "grain": cereal grains and their fractions (rice, oatmeal, barley, corn, wheat, millet, sorghum, gluten)
+- "vegetable": vegetables, legumes, tubers, grasses (peas, lentils, potato, sweet potato, carrot, spinach, kale, alfalfa)
+- "fruit": fruits and berries (apple, blueberry, cranberry, pumpkin, tomato)
+- "vitamin": named vitamins and vitamin supplements (vitamin E supplement, thiamine mononitrate, biotin, folic acid)
+- "mineral": minerals and trace mineral salts/chelates (zinc sulfate, ferrous sulfate, calcium carbonate, salt, selenite, iodate)
+- "other": anything else (fats and oils, flavors, preservatives, probiotics, fiber additives, amino acids, gums, water)
+
+SOURCE — the single raw plant or animal the ingredient comes from, so that the
+same source written different ways collapses to one value. Rules:
+- lowercase, singular, 1-2 words, no processing words (deboned, dried, ground, whole, meal, by-product, hydrolyzed, concentrate, isolate, protein, flour, bran, gluten, starch, oil, fat, flavor)
+- "deboned chicken", "chicken meal", "chicken liver", "chicken by-product meal", "chicken fat" -> "chicken"
+- "brown rice", "brewers rice", "rice bran" -> "rice"
+- "whole corn", "corn gluten meal", "corn protein concentrate" -> "corn"
+- "yellow peas", "pea protein", "dried peas" -> "pea"
+- "dried sweet potatoes", "sweet potato flour" -> "sweet potato"
+- "poultry by-product meal", "poultry meal" -> "poultry" (use "poultry" only when the bird is genuinely unspecified)
+- "menhaden fish meal" -> "menhaden"; "fish meal" (unspecified) -> "fish"
+- use null when there is no single plant or animal source: salt, vitamins, minerals, amino acids, probiotics, gums, preservatives, water, yeast cultures
+
 ═══ PART 2: HOLISTIC PRODUCT REVIEW ═══
 Evaluate the ENTIRE product (all ${totalIngredients} ingredients in the FULL INGREDIENT LIST above) for overall quality for a typical healthy ${petType}. Do not adjust the holistic score for specific medical conditions or allergies.
 
@@ -1797,7 +1840,8 @@ Return VALID JSON (no + prefix on numbers):
   "assessments": {
     "Ingredient Name": {
       "riskScore": <integer>,
-      "category": "string",
+      "category": "<protein|grain|vegetable|fruit|vitamin|mineral|other>",
+      "source": "<lowercase plant/animal source, or null>",
       "explanation": "string",
       "benefit": "string or empty"
     }
