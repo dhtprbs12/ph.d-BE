@@ -84,6 +84,7 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
       withLamb,
       withTurkey,
       withDuck,
+      withOther,
       minScore,
       q,
       healthConditions: healthConditionsRaw,
@@ -113,7 +114,8 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
         fish: withFish === 'true',
         lamb: withLamb === 'true',
         turkey: withTurkey === 'true',
-        duck: withDuck === 'true'
+        duck: withDuck === 'true',
+        other: withOther === 'true'
       },
       healthConditions,
       minScore: minScore ? parseInt(minScore) : undefined,
@@ -134,7 +136,7 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
         productType,
         lifeStage,
         ingredientInclusions: Object.entries({
-          withGrains, withChicken, withBeef, withFish, withLamb, withTurkey, withDuck
+          withGrains, withChicken, withBeef, withFish, withLamb, withTurkey, withDuck, withOther
         }).filter(([_, v]) => v === 'true').map(([k]) => k)
       },
       pagination: {

@@ -1323,6 +1323,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     if (!extracted.dietTags || extracted.dietTags.length === 0) {
       const tags = [];
       if (/\bgrain[\s-]?free\b/.test(inferText)) tags.push('grain_free');
+      else if (/\b(?:wholesome|ancient|whole|with)[\s-]?grains?\b/.test(inferText)) tags.push('with_grains');
       if (/\blimited[\s-]?ingredient\b/.test(inferText)) tags.push('limited_ingredient');
       if (tags.length) extracted.dietTags = tags;
     }

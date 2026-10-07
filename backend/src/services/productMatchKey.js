@@ -40,17 +40,30 @@ function normalizeProteinList(primaryProteins) {
     .join('+');
 }
 
-function normalizeDietTags(dietTags) {
+/**
+ * Tags that stay out of match_key. "with_grains" is read off the ingredient
+ * declaration, so a photo that crops the declaration yields a different tag for
+ * the same food — and every product registered before the tag existed has a key
+ * without it. Keeping it out leaves old and new keys comparable.
+ */
+const DIET_TAGS_OUTSIDE_MATCH_KEY = new Set(['with_grains']);
+
+function normalizeDietTagList(dietTags) {
   let list = dietTags;
-  if (list == null || list === '') return '';
+  if (list == null || list === '') return [];
   if (typeof list === 'string') {
     list = list.split(/[,+]/).map((s) => s.trim()).filter(Boolean);
   }
-  if (!Array.isArray(list)) return '';
+  if (!Array.isArray(list)) return [];
   return list
     .map((t) => String(t).toLowerCase().trim().replace(/\s+/g, '_'))
     .filter(Boolean)
-    .sort()
+    .sort();
+}
+
+function normalizeDietTags(dietTags) {
+  return normalizeDietTagList(dietTags)
+    .filter((t) => !DIET_TAGS_OUTSIDE_MATCH_KEY.has(t))
     .join('+');
 }
 
@@ -104,18 +117,30 @@ function buildMatchKey(slots = {}) {
   return `${parts.join('|')}|`;
 }
 
-/** DB column value: comma-separated sorted proteins */
+/**
+ * DB column value, in the order given. That order is weight order (most first).
+ * match_key still sorts, so a rescanned label matches either way.
+ */
 function serializePrimaryProteins(primaryProteins) {
-  const joined = normalizeProteinList(primaryProteins);
-  if (!joined) return null;
-  return joined.split('+').join(',');
+  let list = primaryProteins;
+  if (list == null || list === '') return null;
+  if (typeof list === 'string') {
+    list = list.split(/[,+]/).map((s) => s.trim()).filter(Boolean);
+  }
+  if (!Array.isArray(list)) return null;
+  const tokens = [];
+  for (const p of list) {
+    const token = String(p).toLowerCase().trim().replace(/\s+/g, '_');
+    if (token && !tokens.includes(token)) tokens.push(token);
+  }
+  return tokens.length ? tokens.join(',') : null;
 }
 
-/** DB column value: comma-separated sorted diet tags */
+/** DB column value: comma-separated sorted diet tags, including with_grains. */
 function serializeDietTags(dietTags) {
-  const joined = normalizeDietTags(dietTags);
-  if (!joined) return null;
-  return joined.split('+').join(',');
+  const list = normalizeDietTagList(dietTags);
+  if (list.length === 0) return null;
+  return list.join(',');
 }
 
 /**

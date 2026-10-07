@@ -159,6 +159,9 @@ class ProductService {
       `LOWER(TRIM(COALESCE(${alias}.manufacturer, ${alias}.brand, '')))`,
       `${alias}.target_life_stage`,
       `${alias}.product_type`,
+      // Some lines ship a grain-free and a with-grains version under one name
+      // (Blue Buffalo Basics). Those are two recipes, not two bag sizes.
+      `(${alias}.diet_tags LIKE '%grain_free%')`,
     ].join(', ');
   }
 
@@ -224,13 +227,21 @@ class ProductService {
       params.push(lifeStage);
     }
 
+    // Foods made for the requested stage rank above the 'all' rows kept above.
+    const orderParts = [];
+    if (lifeStage) {
+      orderParts.push('(p.target_life_stage = ?) DESC');
+      params.push(lifeStage);
+    }
+    orderParts.push('p.name ASC');
+
     params.push(parseInt(limit), parseInt(offset));
     const sql = `
       SELECT p.* FROM products p
       INNER JOIN (
         ${this.oneRowPerRecipeSql(`FROM products p WHERE ${where.join(' AND ')}`)}
       ) picked ON picked.picked_id = p.id
-      ORDER BY p.name ASC
+      ORDER BY ${orderParts.join(', ')}
       LIMIT ? OFFSET ?
     `;
 
@@ -368,8 +379,19 @@ class ProductService {
       });
     }
 
-    // Filter chip exclusions (grain-free toggle etc.)
+    // Diet Type chips read diet_tags. Scanning the ingredient text for grain
+    // words cannot tell "barley grass" or "goat meal" from an actual grain, and
+    // it left foods that list rice late in the declaration out of both chips.
+    if (allergenExclusions.grains) {
+      where.push(`p.diet_tags LIKE '%grain_free%'`);
+    }
+    if (ingredientInclusions.grains) {
+      where.push(`p.diet_tags LIKE '%with_grains%'`);
+    }
+
+    // Remaining chip exclusions still work off the ingredient declaration.
     for (const [allergen, exclude] of Object.entries(allergenExclusions)) {
+      if (allergen === 'grains') continue;
       if (exclude && ingredientKeywords[allergen]) {
         for (const keyword of ingredientKeywords[allergen]) {
           where.push(`LOWER(p.raw_ingredients_text) NOT LIKE ?`);
@@ -378,13 +400,23 @@ class ProductService {
       }
     }
 
-    // Ingredient inclusions. Main protein: name matches first, then the first 3 ingredients.
-    const MAIN_PROTEINS = new Set(['chicken', 'beef', 'fish', 'lamb', 'turkey', 'duck']);
+    // Main protein chips read primary_proteins. One chip maps to several tokens:
+    // Fish covers salmon and whitefish, Other covers the species with no chip of
+    // their own. poultry stays poultry — it is not chicken.
+    const PROTEIN_TOKENS = {
+      chicken: ['chicken'],
+      beef: ['beef', 'cattle'],
+      fish: ['fish', 'salmon', 'tuna', 'sardine', 'anchovy', 'herring', 'cod', 'tilapia', 'whitefish', 'pollock', 'rockfish', 'menhaden', 'haddock', 'redfish', 'trout', 'mackerel', 'catfish'],
+      lamb: ['lamb'],
+      turkey: ['turkey'],
+      duck: ['duck'],
+      other: ['poultry', 'bison', 'venison', 'pork', 'boar', 'rabbit', 'goat'],
+    };
     const activeInclusions = Object.entries(ingredientInclusions)
-      .filter(([_, include]) => include)
+      .filter(([ingredient, include]) => include && ingredient !== 'grains')
       .map(([ingredient]) => ingredient);
-    const proteinInclusions = activeInclusions.filter((key) => MAIN_PROTEINS.has(key));
-    const otherInclusions = activeInclusions.filter((key) => !MAIN_PROTEINS.has(key));
+    const proteinInclusions = activeInclusions.filter((key) => PROTEIN_TOKENS[key]);
+    const otherInclusions = activeInclusions.filter((key) => !PROTEIN_TOKENS[key]);
 
     const firstThreeIngredientClauses = () => ([
       `LOWER(SUBSTRING_INDEX(p.raw_ingredients_text, ',', 1)) LIKE ?`,
@@ -406,27 +438,16 @@ class ProductService {
       }
     }
 
-    let nameMatchSql = '';
-    let nameMatchParams = [];
+    // Foods whose first listed protein is the one asked for rank above foods
+    // that merely contain it later (chicken before chicken,turkey).
+    let firstTokenSql = '';
+    let firstTokenParams = [];
     if (proteinInclusions.length > 0) {
-      const nameClauses = [];
-      const ingredientClauses = [];
-      const ingredientParams = [];
-      for (const ingredient of proteinInclusions) {
-        if (!ingredientKeywords[ingredient]) continue;
-        for (const keyword of ingredientKeywords[ingredient]) {
-          const like = `%${keyword}%`;
-          nameClauses.push('LOWER(p.name) LIKE ?');
-          nameMatchParams.push(like);
-          ingredientClauses.push(...firstThreeIngredientClauses());
-          ingredientParams.push(like, like, like);
-        }
-      }
-      if (nameClauses.length > 0) {
-        nameMatchSql = `(${nameClauses.join(' OR ')})`;
-        where.push(`(${nameMatchSql} OR ${ingredientClauses.join(' OR ')})`);
-        params.push(...nameMatchParams, ...ingredientParams);
-      }
+      const tokens = [...new Set(proteinInclusions.flatMap((key) => PROTEIN_TOKENS[key]))];
+      where.push(`(${tokens.map(() => 'FIND_IN_SET(?, p.primary_proteins)').join(' OR ')})`);
+      params.push(...tokens);
+      firstTokenSql = `SUBSTRING_INDEX(p.primary_proteins, ',', 1) IN (${tokens.map(() => '?').join(', ')})`;
+      firstTokenParams = tokens;
     }
 
     // Text search
@@ -450,12 +471,22 @@ class ProductService {
     const countResult = await query(countSql, [...params]);
     const total = countResult[0]?.total ?? 0;
 
-    // ── 3. One row per recipe. Protein-in-name rows first, then page. ──
-    let orderSql = 'p.name ASC';
-    if (nameMatchSql) {
-      orderSql = `${nameMatchSql} DESC, p.name ASC`;
-      params.push(...nameMatchParams);
+    // ── 3. One row per recipe. Foods made for the stage first, then foods
+    //       whose first protein is the one asked for, then page. Params must be
+    //       pushed in the same order their placeholders appear in ORDER BY.
+    const orderParts = [];
+    if (lifeStage) {
+      // The filter keeps 'all' alongside the chosen stage, but a food formulated
+      // for that stage answers the question better than an all-stages one.
+      orderParts.push('(p.target_life_stage = ?) DESC');
+      params.push(lifeStage);
     }
+    if (firstTokenSql) {
+      orderParts.push(`${firstTokenSql} DESC`);
+      params.push(...firstTokenParams);
+    }
+    orderParts.push('p.name ASC');
+    const orderSql = orderParts.join(', ');
     params.push(limit, offset);
     const sql = `
       SELECT p.* FROM products p
@@ -495,7 +526,7 @@ class ProductService {
       breedSize: productData.breedSize,
       dietTags: productData.dietTags,
     });
-    
+
     try {
       await query(
         `INSERT INTO products 

@@ -29,6 +29,12 @@ function titleCaseSource(source) {
     .join(' ');
 }
 
+/** ["a", "b", "c"] -> "a, b and c" */
+function joinPhrases(parts) {
+  if (parts.length <= 1) return parts.join('');
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
 /**
  * Split foods into a worse-off group and a better-off group for one symptom.
  * @param {Array} foods - food stats
@@ -1135,26 +1141,57 @@ router.get('/:id/insights', async (req, res, next) => {
       food.positions = sourcePositions;
     }
 
-    const insights = [];
+    // Every symptom that clears its threshold becomes a candidate finding.
+    const candidates = [];
 
     const itchSplit = splitFoodsBySymptom(foodStats, f => f.itchRate, ITCH_SPREAD, true);
-    const itchInsight = buildInsight(foodStats, itchSplit, 'itch_correlation',
-      label => `${label} may be linked to increased itching`);
-    if (itchInsight) insights.push(itchInsight);
+    if (itchSplit) {
+      candidates.push({ split: itchSplit, type: 'itch_correlation', phrase: 'increased itching' });
+    }
 
     const vomitSplit = splitFoodsBySymptom(foodStats, f => f.vomitRate, VOMIT_SPREAD, true);
-    const vomitInsight = buildInsight(foodStats, vomitSplit, 'vomit_correlation',
-      label => `${label} may be linked to more vomiting`);
-    if (vomitInsight) insights.push(vomitInsight);
+    if (vomitSplit) {
+      candidates.push({ split: vomitSplit, type: 'vomit_correlation', phrase: 'more vomiting' });
+    }
 
-    // One stool card only — the worse-side and better-side suspects are two
+    // One stool finding only — the worse-side and better-side suspects are two
     // readings of the same split, so prefer the actionable one.
     const stoolSplit = splitFoodsBySymptom(foodStats, f => f.avgStool, STOOL_SPREAD, false);
-    const stoolInsight = buildInsight(foodStats, stoolSplit, 'stool_negative',
-      label => `${label} may be linked to worse stool quality`)
-      || (stoolSplit && buildInsight(foodStats, { worse: stoolSplit.better, better: stoolSplit.worse },
-        'stool_positive', label => `${label} appears to improve stool quality`));
-    if (stoolInsight) insights.push(stoolInsight);
+    if (stoolSplit) {
+      if (ingredientsUniqueTo(stoolSplit.worse, stoolSplit.better).length > 0) {
+        candidates.push({ split: stoolSplit, type: 'stool_negative', phrase: 'worse stool quality' });
+      } else {
+        candidates.push({
+          split: { worse: stoolSplit.better, better: stoolSplit.worse },
+          type: 'stool_positive',
+          phrase: 'better stool quality',
+        });
+      }
+    }
+
+    // Symptoms that divide the foods the same way are one finding described
+    // three times, not three findings. With only two foods every split is the
+    // same division, so they always collapse into a single card. An improvement
+    // stays on its own card so one summary never has to claim an ingredient
+    // both harms and helps.
+    const groups = new Map();
+    for (const candidate of candidates) {
+      const sameDivision = candidate.split.worse.map(f => f.foodId).sort().join('|');
+      const key = candidate.type === 'stool_positive' ? `improves:${sameDivision}` : sameDivision;
+      if (groups.has(key)) groups.get(key).push(candidate);
+      else groups.set(key, [candidate]);
+    }
+
+    const insights = [];
+    for (const group of groups.values()) {
+      const phrases = joinPhrases(group.map(c => c.phrase));
+      const type = group.length > 1 ? 'mixed' : group[0].type;
+      const insight = buildInsight(foodStats, group[0].split, type,
+        label => (group[0].type === 'stool_positive'
+          ? `${label} appears to be linked to ${phrases}`
+          : `${label} may be linked to ${phrases}`));
+      if (insight) insights.push(insight);
+    }
 
     res.json({ insights });
   } catch (error) {
