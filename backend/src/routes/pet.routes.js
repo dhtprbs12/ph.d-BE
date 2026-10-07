@@ -510,8 +510,6 @@ router.post('/:id/current-food', async (req, res, next) => {
       [foodId, req.params.id, productId || null, scanId || null, productName, today]
     );
 
-    console.log(`🍽️  [Pet Food] Set current food for pet=${req.params.id}: "${productName}" (food_id=${foodId})`);
-
     res.status(201).json({
       currentFood: {
         id: foodId,
@@ -559,8 +557,6 @@ router.put('/:id/current-food', async (req, res, next) => {
        VALUES (?, ?, ?, ?, ?, TRUE, ?)`,
       [foodId, req.params.id, productId || null, scanId || null, productName, today]
     );
-
-    console.log(`🍽️  [Pet Food] Changed food for pet=${req.params.id}: "${productName}" (food_id=${foodId})`);
 
     res.status(200).json({
       currentFood: {
@@ -753,8 +749,6 @@ router.post('/:id/checkins', async (req, res, next) => {
         [userId]
       );
 
-      console.log(`📝 [CheckIn] updated pet=${petId} stool=${stoolScore} appetite=${appetite}`);
-
       return res.json({
         checkin: {
           id: existingCheckin.id,
@@ -858,8 +852,6 @@ router.post('/:id/checkins', async (req, res, next) => {
 
       streakInfo = { currentStreak: newStreak, longestStreak: newLongest, streakBonus };
     }
-
-    console.log(`📝 [CheckIn] pet=${petId} stool=${stoolScore} appetite=${appetite} streak=${streakInfo.currentStreak}`);
 
     res.status(201).json({
       checkin: {

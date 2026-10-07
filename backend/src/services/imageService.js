@@ -60,16 +60,8 @@ class ImageService {
       };
       if (pathStyle) s3Config.forcePathStyle = true;
       this.r2Client = new S3Client(s3Config);
-      console.log(
-        '☁️  [R2] configured | pathStyle=%s | lens account=%d access=%d secret=%d bucket=%s',
-        String(pathStyle),
-        accountId.length,
-        accessKeyId.length,
-        secretAccessKey.length,
-        this.r2BucketName || '(empty)',
-      );
     } else {
-      console.log('⚠️  [R2] Cloudflare R2 not configured — images will be saved locally');
+      console.warn('[R2] Cloudflare R2 not configured — images will be saved locally');
     }
   }
 
@@ -86,7 +78,7 @@ class ImageService {
     if (this.googleApiKey && this.searchEngineId) {
       return this.searchViaGoogle(productName, brand);
     }
-    console.log('⚠️ No image search API configured (set SERPAPI_KEY or GOOGLE_SEARCH_API_KEY)');
+    console.warn('No image search API configured (set SERPAPI_KEY or GOOGLE_SEARCH_API_KEY)');
     return null;
   }
 
@@ -108,7 +100,6 @@ class ImageService {
         `num=3`;
 
       try {
-        console.log(`🔍 [SerpAPI] Searching: "${searchQuery}"`);
         const response = await fetch(url, {
           signal: AbortSignal.timeout(10000)
         });
@@ -126,12 +117,9 @@ class ImageService {
             r.original && !r.original.includes('placeholder') && !r.original.includes('no-image')
           ) || data.images_results[0];
           if (best?.original) {
-            console.log(`✅ [SerpAPI] Found: ${best.original}`);
             return best.original;
           }
         }
-
-        console.log(`⚠️ [SerpAPI] No results for: "${searchQuery}"`);
       } catch (error) {
         console.error(`❌ [SerpAPI] Error:`, error.message);
       }
@@ -155,17 +143,13 @@ class ImageService {
       `safe=active`;
 
     try {
-      console.log(`🔍 [Google Image Search] Searching: "${searchQuery}"`);
       const response = await fetch(url);
       const data = await response.json();
 
       if (data.items && data.items.length > 0) {
-        const imageUrl = data.items[0].link;
-        console.log(`✅ [Google Image Search] Found: ${imageUrl}`);
-        return imageUrl;
+        return data.items[0].link;
       }
 
-      console.log(`⚠️ [Google Image Search] No results for: "${searchQuery}"`);
       return null;
     } catch (error) {
       console.error(`❌ [Google Image Search] Error:`, error.message);
@@ -181,7 +165,6 @@ class ImageService {
    */
   async downloadAndSave(imageUrl, productId) {
     try {
-      console.log(`📥 [Image] Downloading: ${imageUrl}`);
       const response = await fetch(imageUrl, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; PetFoodAnalyzer/1.0)',
@@ -190,7 +173,7 @@ class ImageService {
       });
 
       if (!response.ok) {
-        console.log(`⚠️ [Image] HTTP ${response.status} for: ${imageUrl}`);
+        console.warn('[Image] HTTP', response.status, 'for', imageUrl);
         return null;
       }
 
@@ -204,7 +187,7 @@ class ImageService {
 
       // Validate it's actually an image
       if (buffer.length < 100) {
-        console.log(`⚠️ [Image] File too small (${buffer.length} bytes), skipping`);
+        console.warn('[Image] File too small (', buffer.length, 'bytes), skipping');
         return null;
       }
 
@@ -251,7 +234,6 @@ class ImageService {
       }));
 
       const publicUrl = `${this.r2PublicUrl}/${key}`;
-      console.log(`☁️  [R2] Uploaded: ${publicUrl} (${(uploadBuffer.length / 1024).toFixed(1)}KB)`);
 
       if (!skipThumb) {
         await this._generateThumb(uploadBuffer, key);
@@ -278,7 +260,6 @@ class ImageService {
       Body: thumbBuffer,
       ContentType: 'image/jpeg',
     }));
-    console.log(`🖼  [R2] Thumb: ${thumbKey} (${(thumbBuffer.length / 1024).toFixed(1)}KB)`);
   }
 
   /**
@@ -291,7 +272,6 @@ class ImageService {
     }
     const filepath = path.join(dir, filename);
     fs.writeFileSync(filepath, buffer);
-    console.log(`💾 [Local] Saved: ${filename} (${(buffer.length / 1024).toFixed(1)}KB)`);
     return `/images/products/${filename}`;
   }
 
@@ -342,9 +322,6 @@ class ImageService {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       localAbs = path.join(dir, filename);
       fs.writeFileSync(localAbs, buffer);
-      console.log(
-        `🗂️  [Panorama] local ${localAbs} (${(buffer.length / 1024).toFixed(1)}KB)`
-      );
     } catch (e) {
       console.warn(`[Panorama] local write skipped: ${e.message}`);
     }
@@ -366,10 +343,7 @@ class ImageService {
   async fetchAndSaveProductImage(productId, productName, brand) {
     // Check if image already exists
     const existingUrl = await this.getExistingImageUrl(productId);
-    if (existingUrl) {
-      console.log(`⚡ [Image] Already have image for product ${productId}`);
-      return existingUrl;
-    }
+    if (existingUrl) return existingUrl;
 
     // Search for image
     const sourceUrl = await this.searchProductImage(productName, brand);
@@ -408,7 +382,6 @@ class ImageService {
         'UPDATE products SET image_url = ? WHERE id = ?',
         [imageUrl, productId]
       );
-      console.log(`✅ [Image DB] Updated image_url for product ${productId}`);
     } catch (error) {
       console.error(`❌ [Image DB] Error updating:`, error.message);
     }

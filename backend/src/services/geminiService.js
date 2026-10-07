@@ -63,7 +63,6 @@ class GeminiService {
     this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     this.initialized = true;
-    console.log('✅ Gemini AI initialized');
   }
 
   /**
@@ -85,7 +84,6 @@ class GeminiService {
 
     const cached = await this.checkCache(imageHash);
     if (cached) {
-      console.log('📦 Using cached OCR result');
       return cached;
     }
 
@@ -98,7 +96,6 @@ class GeminiService {
         extracted = await this._extractFromImageGeminiLegacy(imageBuffer, mimeType);
       }
     } else {
-      console.log('ℹ️ GOOGLE_CLOUD_VISION_API_KEY not set — Gemini-only OCR');
       extracted = await this._extractFromImageGeminiLegacy(imageBuffer, mimeType);
     }
 
@@ -138,7 +135,6 @@ class GeminiService {
    */
   async _extractFromImageHybrid(imageBuffer, mimeType) {
     const ocrFullText = await visionService.detectDocumentText(imageBuffer);
-    console.log(`👁️ [Vision OCR] ${ocrFullText.length} chars`);
 
     const metadata = await this._extractLabelMetadataFromImage(
       imageBuffer,
@@ -488,7 +484,6 @@ INGREDIENT LIST EXTRACTION RULES (very important):
       throw new Error(`OCR extraction failed: ${error.message}`);
     }
   }
-
 
   /**
    * Normalize and parse ingredient text
@@ -1346,12 +1341,10 @@ Return VALID JSON (no + prefix on numbers, use -5 or 5, not +5):
 Use standard nutritional assessment for a healthy ${petType}. Explanations describe the ingredient itself, not a specific sick pet.`;
 
     try {
-      console.log('🤖 [AI PROMPT] Ingredient assessment: universal healthy-pet baseline (no condition personalization)');
       
       const result = await this.model.generateContent(prompt);
       const text = result.response.text();
       
-      console.log(`🤖 [AI RAW RESPONSE]:\n${text.substring(0, 500)}...`);
       
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -1362,7 +1355,6 @@ Use standard nutritional assessment for a healthy ${petType}. Explanations descr
         
         // Log each assessment
         for (const [ingName, assessment] of Object.entries(assessments)) {
-          console.log(`🤖 [AI RESULT] ${ingName}: score=${assessment.riskScore}, level=${assessment.riskScore > 30 ? 'danger' : assessment.riskScore > 15 ? 'high' : assessment.riskScore > 0 ? 'moderate' : 'safe'}`);
         }
         
         return assessments;
@@ -1885,11 +1877,8 @@ Return VALID JSON (no + prefix on numbers):
 }`;
 
     try {
-      console.log(`🚀 [MERGED AI] Single call for ${totalIngredients} ingredients + holistic (${conditionsText})`);
       const result = await this.model.generateContent(prompt);
       const text = result.response.text();
-
-      console.log(`🤖 [MERGED AI RAW]:\n${text.substring(0, 500)}...`);
 
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -1910,8 +1899,6 @@ Return VALID JSON (no + prefix on numbers):
           positives: Array.isArray(holistic.positives) ? holistic.positives : [],
           aiSummary: holistic.aiSummary || ''
         };
-
-        console.log(`✅ [MERGED AI] Got ${Object.keys(assessments).length} ingredient assessments + holistic score=${normalizedHolistic.finalScore} grade=${normalizedHolistic.grade}`);
 
         return { assessments, holistic: normalizedHolistic };
       }
@@ -2093,7 +2080,6 @@ Examples:
     }
 
     try {
-      console.log(`🔍 [Food Safety] Assessing "${foodName}" for ${petType}`);
 
       const result = await this.model.generateContent(prompt);
       const text = result.response.text();
@@ -2102,7 +2088,6 @@ Examples:
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         
-        console.log(`✅ [Food Safety] "${foodName}" = ${parsed.safetyLevel}`);
 
         return {
           safetyLevel: parsed.safetyLevel || 'unknown',

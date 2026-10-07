@@ -19,7 +19,6 @@ async function grantTokens(userId, amount, type, description, referenceId = null
     'UPDATE user_tokens SET balance = balance + ?, total_earned = total_earned + ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?',
     [amount, amount, userId]
   );
-  console.log(`🦴 [Token] +${amount} to user=${userId} type=${type} desc="${description}"`);
   return txId;
 }
 
@@ -109,7 +108,6 @@ async function recordScanAndCheckLevel(userId) {
         await grantTokens(userId, nextDef.reward, 'scan_level', `Scan Level ${nextDef.level} reached! 🦴×${nextDef.reward}`, `level_${nextDef.level}`);
       }
 
-      console.log(`🎯 [ScanLevel] user=${userId} leveled up to Lv.${nextDef.level} (scans=${total_scans}, reward=${nextDef.reward})`);
       return { leveled: true, newLevel: nextDef.level, reward: nextDef.reward, totalScans: total_scans };
     }
 

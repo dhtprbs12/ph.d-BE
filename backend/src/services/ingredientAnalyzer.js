@@ -322,7 +322,6 @@ class IngredientAnalyzer {
 
     // FIRST: Check AI assessment cache — always use "healthy" baseline
     // Condition-specific warnings are handled separately via generateConditionWarnings()
-    console.log(`🔍 [AI Cache] Looking up: "${normalizedName}" for pet_type="${pet.pet_type}"`);
     try {
       const cached = await this.cacheLookup(normalizedName, null, pet.pet_type, {
         sql: `conditions_hash LIKE 'healthy_%'`,
@@ -349,17 +348,14 @@ class IngredientAnalyzer {
         result.isAllergenMatch = false;
         result.isHealthConcern = riskLevel === 'high' || riskLevel === 'danger';
         
-        console.log(`✅ [AI Cache] HIT "${name}": risk=${riskScore}, level=${riskLevel}`);
         return result;
       }
-      console.log(`🔍 [AI Cache] MISS for "${normalizedName}"`);
     } catch (err) {
-      console.log(`❌ [AI Cache] Error: ${err.message}`);
+      console.warn('[AI Cache]', normalizedName, err.message);
     }
 
     // Not in AI cache - mark for AI assessment
     // The caller will call AI to get personalized assessment
-    console.log(`⚠️ "${normalizedName}" not in AI cache - needs AI assessment`);
     result.baseRiskScore = 0;
     result.adjustedRiskScore = 0;
     result.riskLevel = 'safe';  // Default until AI assesses
@@ -716,10 +712,6 @@ class IngredientAnalyzer {
       return { filledFromAi: 0, neutralFallbacks: 0 };
     }
 
-    console.log(
-      `🧱 [CACHE-FILL] ${uncached.length} ingredient(s) miss ${conditionHash}/${petType} — AI assess + DB upsert`
-    );
-
     const singleConditionList = condition === 'healthy' ? [] : [{ condition_type: condition }];
     let aiAssessments = {};
 
@@ -806,9 +798,6 @@ class IngredientAnalyzer {
            VALUES ${placeholders}
            ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), category = COALESCE(VALUES(category), category), ingredient_source = COALESCE(VALUES(ingredient_source), ingredient_source), hit_count = hit_count + 1`,
           ingCacheInserts.flat()
-        );
-        console.log(
-          `💾 [CACHE-FILL] Upserted ${ingCacheInserts.length} row(s) for ${conditionHash} (AI-matched: ${matchedNorm.size}, neutral: ${neutralFallbacks})`
         );
       } catch (err) {
         console.warn('[CACHE-FILL] ai_assessment_cache batch failed:', err.message);
@@ -1082,7 +1071,6 @@ class IngredientAnalyzer {
     if (hyphenated !== normalizedName) {
       cached = await tryExact(hyphenated);
       if (cached.length > 0) {
-        console.log(`🔄 [Cache] Hyphen match: "${normalizedName}" → "${hyphenated}"`);
         return cached;
       }
     }
@@ -1093,7 +1081,6 @@ class IngredientAnalyzer {
     if (singular !== normalizedName) {
       cached = await tryExact(singular);
       if (cached.length > 0) {
-        console.log(`🔄 [Cache] Deplural match: "${normalizedName}" → "${singular}"`);
         return cached;
       }
     }
@@ -1568,29 +1555,18 @@ class IngredientAnalyzer {
 
     let best = candidates[0].slice;
     let bestScore = this._scoreIngredientNarrativeSlice(best);
-    let bestLabel = candidates[0].label;
 
     for (let i = 1; i < candidates.length; i++) {
       const score = this._scoreIngredientNarrativeSlice(candidates[i].slice);
       if (score > bestScore) {
         bestScore = score;
         best = candidates[i].slice;
-        bestLabel = candidates[i].label;
       }
     }
 
-    best = this.normalizeOcrIngredientSpacing(
+    return this.normalizeOcrIngredientSpacing(
       this._repairOrphanVitaminsAfterPremixClose(best.trim())
     );
-    bestScore = this._scoreIngredientNarrativeSlice(best);
-
-    if (bestScore >= 0 && (headerStarts.length > 0 || bestScore > 0)) {
-      console.log(
-        `🔧 [Ingredients] Narrative slice: ${bestLabel}, commas=${this._countTopLevelCommas(best)}, periods=${this._countTopLevelIngredientPeriods(best)}, len=${best.length}, score=${bestScore}`
-      );
-    }
-
-    return best;
   }
 
   /**
@@ -2076,13 +2052,6 @@ class IngredientAnalyzer {
 
     for (let j = 0; j < L.length; j++) {
       if (!usedL.has(j)) out.push(L[j]);
-    }
-
-    const added = out.length - L.length;
-    if (added > 0) {
-      console.log(
-        `🔧 [Ingredients] Filled ${added} missing from raw (${L.length} → ${out.length})`
-      );
     }
 
     return out.length > 0 ? out : ingredientsList;

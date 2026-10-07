@@ -108,9 +108,6 @@ async function saveScanHistoryEntry(entry) {
           `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, ocr_extracted_text = ?, analysis_json = ?, scan_type = ?, pet_name = ?, pet_type = ?, pet_id = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,
           [finalScore, grade, rec, ocrExtractedText, analysisJson, scanType, petNameKey, petTypeKey, petId, existing[0].id]
         );
-        console.log(
-          `📜 [scan_history] UPDATED existing id=${existing[0].id} for product=${productLabel} pet=${petNameKey} (${petTypeKey})`
-        );
       } else {
         await query(
           `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, pet_id, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
@@ -125,9 +122,6 @@ async function saveScanHistoryEntry(entry) {
         [scanId, userId, deviceId || null, petName, petType, petId, productId, scanType, finalScore, grade, rec, ocrExtractedText, analysisJson]
       );
     }
-    console.log(
-      `📜 [scan_history] OK id=${scanId} type=${scanType} product=${productLabel} user=${userId || deviceLabel} grade=${grade} score=${finalScore} rec=${rec}`
-    );
 
     // Update scan level (gamification)
     if (userId) {
@@ -300,7 +294,6 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
     const petName = String(req.query.petName || '');
     const petId = req.query.petId || null;
     const userId = req.user.id;
-    console.log(`[QuickScan] barcode received: "${barcode}"`);
     if (!barcode) return res.status(400).json({ error: 'barcode is required' });
 
     // Normalize: try original, then with leading 0 (UPC-A→EAN-13), then without leading 0
@@ -311,7 +304,6 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
     if (!product && barcode.length === 13 && barcode.startsWith('0')) {
       product = await productService.findByBarcode(barcode.slice(1));
     }
-    console.log(`[QuickScan] DB lookup result:`, product ? `found id=${product.id} name="${product.name}"` : 'NOT FOUND');
     if (!product) {
       return res.status(404).json({ error: 'Product not found for this barcode' });
     }
@@ -343,7 +335,6 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
     // If no cached analysis, run it now
     if (!analysis && product.raw_ingredients_text) {
       try {
-        console.log(`[QuickScan] No cache found, running analysis on the fly...`);
         const ingredientsList = product.raw_ingredients_text.split(',').map(s => s.trim()).filter(Boolean);
         const productType = (product.product_type === 'treats' || product.product_type === 'treat') ? 'treats' : 'food';
         const review = await geminiService.reviewProductHolistically({
@@ -372,7 +363,6 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
           ]
         );
         analysis = review;
-        console.log(`[QuickScan] Analysis done & cached: score=${review.finalScore}`);
       } catch (err) {
         console.error(`[QuickScan] On-the-fly analysis failed:`, err.message);
       }
@@ -427,7 +417,6 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
               fullAnalysis ? JSON.stringify(fullAnalysis) : null,
             ]
           );
-          console.log(`📜 [QuickScan] scan_history recorded for product=${product.id} user=${userId}`);
           recordScanAndCheckLevel(userId).catch(e =>
             console.warn('[QuickScan] scan-level update failed:', e.message)
           );
@@ -536,7 +525,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     });
     
     // Analyze ingredients (rule-based) - now parallelized
-    console.log('🧪 [BG] Analyzing', ingredientsList.length, 'ingredients for', pet.name);
     let analysis = await ingredientAnalyzer.analyzeIngredients(ingredientsList, pet);
     
     // UNIVERSAL SCORING — always score as "healthy" baseline
@@ -550,7 +538,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     // Always evaluate as "healthy" — one universal score per product
     const conditionsToEvaluate = ['healthy'];
     
-    console.log(`🏥 [BG] Universal scoring (healthy baseline)${hasConditions ? ` + ${healthConditions.length} condition warning(s)` : ''}`);
     
     // Update progress
     analysisStore.set(scanId, {
@@ -603,7 +590,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
       const cacheHitIds = [];
       
       // STEP 1: Check cache for ALL conditions x ALL ingredients in PARALLEL
-      console.log(`🔍 [BG] Checking ingredient cache for ${ingredientsToAssess.length} ingredients x ${conditionsToEvaluate.length} conditions...`);
       
       const allCacheLookups = [];
       for (const condition of conditionsToEvaluate) {
@@ -667,14 +653,12 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
           progress: `Analyzing ${totalAICalls} condition(s)...`
         });
         
-        console.log(`🚀 [BG] ${mergedConditions.length} merged calls + ${ingredientOnlyConditions.length} ingredient-only calls`);
         
         const allAIPromises = [];
         
         // MERGED calls: get ingredients + holistic in one shot
         for (const [condition, { conditionHash, ingredients }] of mergedConditions) {
           allAIPromises.push((async () => {
-            console.log(`🤖 [BG-MERGED] ${ingredients.length}/${ingredientsList.length} ingredients + holistic for: ${condition}`);
             try {
               const singleCondition = condition === 'healthy' ? [] : [{ condition_type: condition }];
               const { assessments, holistic } = await geminiService.assessAndReviewProduct({
@@ -696,7 +680,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
         // INGREDIENT-ONLY calls: holistic already cached
         for (const [condition, { conditionHash, ingredients }] of ingredientOnlyConditions) {
           allAIPromises.push((async () => {
-            console.log(`🤖 [BG-ING] ${ingredients.length} ingredients for: ${condition}`);
             try {
               const singleCondition = condition === 'healthy' ? [] : [{ condition_type: condition }];
               const aiAssessments = await geminiService.assessIngredientsForPet(
@@ -763,10 +746,8 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
             uncachedHolisticConditions.delete(condition);
           }
         }
-      } else {
-        console.log(`⚡ [BG] All ingredient assessments served from cache!`);
       }
-      
+
       // Batch update hit counts
       if (cacheHitIds.length > 0) {
         try {
@@ -832,7 +813,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
              ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), category = COALESCE(VALUES(category), category), ingredient_source = COALESCE(VALUES(ingredient_source), ingredient_source), hit_count = hit_count + 1`,
             allCacheInserts.flat()
           );
-          console.log(`💾 [BG] Batch cached: ${allCacheInserts.length} ingredient-condition pairs`);
         } catch (err) {}
       }
     }
@@ -855,7 +835,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     for (const [condition, data] of Object.entries(holisticCacheResults)) {
       if (data.fromMerged && data.review) {
         conditionReviews[condition] = { ...data.review, fromCache: false };
-        console.log(`🤖 [BG-MERGED] Holistic for ${condition}: score=${data.review.finalScore}, grade=${data.review.grade}`);
         productCacheInserts.push({
           ingredientHash,
           conditionHash: data.conditionHash,
@@ -877,7 +856,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
           fromCache: true
         };
         productCacheHitIds.push(data.cached.id);
-        console.log(`⚡ [BG] Holistic cache hit for ${condition}: score=${data.cached.final_score}`);
       }
     }
     
@@ -885,7 +863,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     const afterMergeUncached = conditionsToEvaluate.filter(c => !conditionReviews[c]);
     
     if (afterMergeUncached.length > 0) {
-      console.log(`🧮 [BG-T2] Attempting compute-from-cache for ${afterMergeUncached.length} conditions: ${afterMergeUncached.join(', ')}`);
       
       for (const condition of afterMergeUncached) {
         const conditionHash = getSingleConditionHash(condition, productType);
@@ -902,7 +879,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
           
           if (computed.allCached && computed.finalScore !== undefined) {
             conditionReviews[condition] = { ...computed, fromCache: false };
-            console.log(`🧮 [BG-T2] Computed from ingredients: ${condition} = ${computed.finalScore} (${ingredientsList.length}/${ingredientsList.length} cached)`);
             productCacheInserts.push({
               ingredientHash,
               conditionHash,
@@ -921,7 +897,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     const stillUncachedConditions = conditionsToEvaluate.filter(c => !conditionReviews[c]);
     
     if (stillUncachedConditions.length > 0) {
-      console.log(`🚀 [BG-T3] AI holistic fallback for ${stillUncachedConditions.length} remaining conditions: ${stillUncachedConditions.join(', ')}`);
       
       const aiReviewPromises = stillUncachedConditions.map(async (condition) => {
         const conditionHash = getSingleConditionHash(condition, productType);
@@ -946,7 +921,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
       for (const { condition, conditionHash, review, success } of aiResults) {
         if (success && review) {
           conditionReviews[condition] = { ...review, fromCache: false };
-          console.log(`🤖 [BG-T3] AI review for ${condition}: score=${review.finalScore}, grade=${review.grade}`);
           productCacheInserts.push({
             ingredientHash,
             conditionHash,
@@ -956,10 +930,8 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
           });
         }
       }
-    } else {
-      console.log(`⚡ [BG] All ${conditionsToEvaluate.length} condition reviews resolved (cache + T2 compute)!`);
     }
-    
+
     // Batch update hit counts for product cache
     if (productCacheHitIds.length > 0) {
       try {
@@ -1004,7 +976,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
             insert.review.primaryIngredientType
           ]
         );
-        console.log(`💾 [BG] Cached product review for condition: ${insert.conditionHash}`);
       } catch (err) {
         console.warn(`[BG] Failed to cache product review:`, err.message);
       }
@@ -1059,7 +1030,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
         positives: [...new Set(allPositives)]  // Dedupe
       };
       
-      console.log(`📊 [BG] Combined review: score=${worstScore}, grade=${numberToGrade(worstGradeNum)} (worst of ${reviewValues.length} conditions)`);
     } else {
       // Fallback if no reviews (shouldn't happen)
       console.error('[BG] No condition reviews available, using fallback');
@@ -1107,7 +1077,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
             holisticReview.primaryIngredientType
           ]
         );
-        console.log('💾 [BG] Cached holistic review (fallback)');
       } catch (cacheErr) {
         console.warn('[BG] Failed to cache holistic review:', cacheErr.message);
       }
@@ -1157,14 +1126,10 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     const summaryEmoji = analysis.grade === 'A' ? '✅' : analysis.grade === 'B' ? '👍' : analysis.grade === 'C' ? '⚠️' : '❌';
     analysis.summary = holisticReview.aiSummary || `${summaryEmoji} ${['A', 'B'].includes(analysis.grade) ? 'Good' : analysis.grade === 'C' ? 'Acceptable' : 'Concerning'} choice for ${pet.name}. Score: ${analysis.finalScore}/100.`;
     
-    console.log(`✅ [BG] Analysis complete: score=${analysis.finalScore}, grade=${analysis.grade}`);
     
     // Generate condition warnings (rule-based, no AI)
     const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, healthConditions);
-    if (conditionWarnings.length > 0) {
-      console.log(`⚠️ [BG] ${conditionWarnings.length} condition warning(s) for ${pet.name}`);
-    }
-    
+
     // Build aiInsights from holistic review (no extra AI call needed)
     const aiInsights = {
       topBenefits: holisticReview.positives || [],
@@ -1190,7 +1155,6 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
     });
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`✅ [BG] Complete in ${duration}s`);
     
     // Re-fetch product so `image_url` includes any image saved while analysis was running (async download / upload)
     let productForResult = product;
@@ -1279,7 +1243,6 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     });
 
     // Extract info from front label
-    console.log('📸 [FRONT] Processing front label...');
     const extracted = await geminiService.extractFromImage(optimizedBuffer, 'image/jpeg');
     
     // Validate it's actually a front label (use OCR raw paragraph, not JSON array)
@@ -1343,10 +1306,6 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     if (dbCandidates.length > 0) {
       const top = dbCandidates[0];
       const matchLabel = top.matchType === 'exact' ? 'exact' : 'fuzzy';
-      console.log(
-        `✅ [FRONT] DB candidates (${matchLabel}): ${dbCandidates.length} ` +
-        `(top: "${top.product.brand} ${top.product.name}")`
-      );
     }
 
     const resolvedProductName = displayName || normalizedName || extracted.productName;
@@ -1377,11 +1336,6 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
       createdAt: Date.now()
     });
 
-    console.log(
-      `✅ [FRONT] Captured: "${extracted.brand || ''} ${resolvedProductName}" ` +
-      `(line="${slots.lineName || '-'}", pendingId: ${pendingScanId})`
-    );
-
     const mapProductResponse = (p) => ({
       id: p.id,
       name: p.name,
@@ -1393,9 +1347,6 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
     });
 
     if (exactCandidate) {
-      console.log(
-        `⚡ [FRONT] Exact match_key — auto analyze "${exactCandidate.product.brand} ${exactCandidate.product.name}"`
-      );
 
       if (extracted.productName || extracted.brand) {
         (async () => {
@@ -1418,7 +1369,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
               }
             }
           } catch (err) {
-            console.log('⚠️ [FRONT] Image lookup failed:', err.message);
+            console.warn('[FRONT] Image lookup failed:', err.message);
           }
         })();
       }
@@ -1478,10 +1429,6 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
         const nameTerm = (resolvedProductName || extracted.productName || '').trim();
         const productType = (extracted.productType || '').trim();
         const targetPet = (extracted.targetPet || '').trim();
-
-        console.log(
-          `🔍 [FRONT] Searching candidates: brand="${brandTerm}", name="${nameTerm}", type="${productType}"`
-        );
 
         // Stopwords are tokens that appear in nearly every product name
         // and would inflate scores without adding signal. We KEEP life-
@@ -1583,13 +1530,8 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
           lifeStage: r.target_life_stage || null,
         }));
 
-        console.log(
-          `🔍 [FRONT] Pool ${candidateRows.length} → ${passing.length} above score ${MIN_SCORE} ` +
-          `[brand=${hasBrand ? 'hard-filter' : 'no-brand-fallback'}; ` +
-          `top: ${passing.slice(0, 3).map(p => `${p.score}`).join(',') || 'none'}]`
-        );
       } catch (err) {
-        console.log('⚠️ [FRONT] Candidate search failed:', err.message);
+        console.warn('[FRONT] Candidate search failed:', err.message);
       }
     }
 
@@ -1657,7 +1599,6 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
 
           if (existing.length > 0 && existing[0].image_url) {
             pending.imageUrl = existing[0].image_url;
-            console.log(`⚡ [FRONT] Reused DB image for "${imgBrand} ${imgName}"`);
           } else {
             const searchName = [imgName, imgType ? imgType.replace(/_/g, ' ') : '']
               .filter(Boolean).join(' ');
@@ -1667,7 +1608,7 @@ router.post('/front', upload.single('image'), async (req, res, next) => {
             }
           }
         } catch (err) {
-          console.log('⚠️ [FRONT] Image lookup failed:', err.message);
+          console.warn('[FRONT] Image lookup failed:', err.message);
         }
       })();
     }
@@ -1760,7 +1701,6 @@ router.post('/back/:pendingScanId', authenticateToken, upload.single('image'), a
     });
 
     // Extract ingredients from back label
-    console.log('📸 [BACK] Processing back label...');
     const extracted = await geminiService.extractFromImage(optimizedBuffer, 'image/jpeg');
     
     const ingredientsList = ingredientsListFromOcrText(extracted.rawIngredientsText);
@@ -1793,8 +1733,6 @@ router.post('/back/:pendingScanId', authenticateToken, upload.single('image'), a
       breedSize: frontData.breedSize || extracted.breedSize,
       dietTags: frontData.dietTags || extracted.dietTags,
     };
-
-    console.log(`✅ [BACK] Merged: "${mergedExtracted.brand || ''} ${mergedExtracted.productName || ''}" with ${ingredientsList.length} ingredients`);
 
     // Grab image data from front label scan
     const existingLocalImage = frontData.imageUrl || null; // Already in our DB (local path)
@@ -1984,7 +1922,6 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
     if (barcode && product && !product.barcode) {
       await query('UPDATE products SET barcode = ? WHERE id = ?', [barcode, product.id]);
       product.barcode = barcode;
-      console.log(`📊 [CONFIRM] Barcode saved: ${barcode} for product ${product.id}`);
     }
 
     // Handle product image (non-blocking)
@@ -1997,10 +1934,9 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
           .then(async (localUrl) => {
             if (localUrl) {
               await imageService.updateProductImageUrl(product.id, localUrl);
-              console.log(`🖼️ [CONFIRM] Downloaded & saved image: ${localUrl}`);
             }
           })
-          .catch(err => console.log('⚠️ [CONFIRM] Image download failed:', err.message));
+          .catch(err => console.warn('[CONFIRM] Image download failed:', err.message));
       }
     }
 
@@ -2015,8 +1951,6 @@ router.post('/confirm-ingredients', authenticateToken, async (req, res, next) =>
     });
 
     await query('UPDATE products SET scan_count = scan_count + 1 WHERE id = ?', [product.id]);
-
-    console.log(`✅ [CONFIRM] Confirmed ${ingredientsList.length} ingredients for "${brand || ''} ${productName}" → analysis started`);
 
     processAnalysisInBackground(scanId, ingredientsList, pet, extracted, product, deviceId || 'unknown', userId);
 
@@ -2167,8 +2101,6 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
             analysisJson: JSON.stringify({ ...analysis, aiInsights })
           });
 
-          console.log(`⚡ [QUICK] Instant cache hit for "${product.brand || ''} ${product.name}" → score=${row.final_score}`);
-
           return res.json({
             scanId,
             status: 'complete',
@@ -2226,8 +2158,6 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
     });
 
     await query('UPDATE products SET scan_count = scan_count + 1 WHERE id = ?', [product.id]);
-
-    console.log(`⚡ [QUICK] Cache miss — full analysis for "${product.brand || ''} ${product.name}" (${ingredientsList.length} ingredients) for ${pet.name}`);
 
     processAnalysisInBackground(scanId, ingredientsList, pet, extracted, product, deviceId || 'unknown', userId);
 
@@ -2331,14 +2261,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
     const extracted = await geminiService.extractFromImage(processedImage, 'image/jpeg');
 
     // Debug logging
-    console.log('📸 OCR Result:', {
-      imageType: extracted.imageType,
-      productName: extracted.productName,
-      brand: extracted.brand,
-      ingredientsCount: ingredientsListFromOcrText(extracted.rawIngredientsText).length,
-      confidence: extracted.confidence,
-      notes: extracted.notes
-    });
 
     let ingredientsList = ingredientsListFromOcrText(extracted.rawIngredientsText);
     let product = null;
@@ -2349,7 +2271,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
       (ingredientsList.length === 0 && (extracted.productName || extracted.brand));
 
     // SMART DETECTION: Handle front label vs ingredients label
-    console.log('🔍 Front label check:', { ingredientsCount: ingredientsList.length, isFrontLabel });
     
     if (ingredientsList.length === 0 && isFrontLabel) {
       // Front label detected - try to find product in database using SMART SEARCH
@@ -2357,13 +2278,11 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
         const extractedBrand = extracted.brand || '';
         const extractedName = extracted.productName || '';
         
-        console.log('🔍 Smart search - Brand:', extractedBrand, 'Name:', extractedName);
         
         // Strategy 1: Search by brand first (most reliable)
         let searchResults = [];
         if (extractedBrand) {
           searchResults = await productService.search(extractedBrand, { limit: 10 });
-          console.log('🔍 Brand search results:', searchResults.length);
         }
         
         // Strategy 2: If no brand results, search by name words
@@ -2376,7 +2295,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
           }
           // Remove duplicates
           searchResults = [...new Map(searchResults.map(r => [r.id, r])).values()];
-          console.log('🔍 Name word search results:', searchResults.length);
         }
         
         // Rank results by similarity - require BOTH brand AND name match for safety
@@ -2421,13 +2339,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
             })
             .sort((a, b) => b.totalScore - a.totalScore); // Best match first
           
-          console.log('🏆 Ranked results:', rankedResults.map(r => ({ 
-            name: r.name, 
-            brand: r.brand, 
-            brandScore: r.brandScore,
-            nameScore: r.nameScore,
-            total: r.totalScore 
-          })));
           
           // SAFETY: Only use if we have BOTH brand match AND some name similarity
           // Brand match alone is NOT enough (same brand can have many different products)
@@ -2436,15 +2347,11 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
             product = bestMatch;
             ingredientsList = ingredientsListFromOcrText(product.raw_ingredients_text);
             usedStoredIngredients = true;
-            console.log('✅ Confident match:', product.name, '(brand:', bestMatch.brandScore, 'name:', bestMatch.nameScore, ')');
-          } else if (bestMatch) {
-            console.log('⚠️ Weak match - brand OK but name mismatch. Asking for back label.');
           }
         }
         
         if (!usedStoredIngredients) {
           // Product not found in database - prompt user to scan ingredients
-          console.log('📸 Returning front_label_detected error');
           return res.status(422).json({
             error: 'front_label_detected',
             message: 'We detected the front of the package. Please scan the ingredients list on the back for analysis.',
@@ -2538,7 +2445,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
 
     if (asyncMode) {
     const scanId = uuidv4();
-      console.log(`⚡ [ASYNC] Returning immediately, processing in background (scanId: ${scanId})`);
       
       // Store initial state
       analysisStore.set(scanId, {
@@ -2579,7 +2485,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
     // ============================================
 
     // Analyze ingredients (rule-based)
-    console.log('🧪 Analyzing', ingredientsList.length, 'ingredients for', pet.name);
     let analysis = await ingredientAnalyzer.analyzeIngredients(ingredientsList, pet);
     
     // UNIVERSAL SCORING — always score as "healthy" baseline
@@ -2592,7 +2497,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
     // Always evaluate as "healthy" — universal score
     const conditionsToEvaluateSync = ['healthy'];
     
-    console.log(`🏥 [SYNC] Universal scoring${hasConditions ? ` + ${healthConditions.length} condition warning(s)` : ''}`);
     
     // Determine which ingredients need AI assessment (only uncached)
     let ingredientsToAssess = analysis.ingredients.filter(i => i.needsAIAssessment || !i.found);
@@ -2632,7 +2536,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
             benefit: cached[0].benefit
           };
           cacheHitIds.push(cached[0].id);
-          console.log(`💾 Cache hit: ${ing.name}`);
         } else {
           uncachedIngredients.push(ing);
         }
@@ -2654,7 +2557,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
       // Get AI assessments for uncached ingredients
       let aiAssessments = {};
       if (uncachedIngredients.length > 0) {
-        console.log('🤖 AI assessing', uncachedIngredients.length, 'ingredients (type:', productType, ', conditions:', syncConditionsHash, ')...');
         try {
           aiAssessments = await geminiService.assessIngredientsForPet(
             uncachedIngredients,
@@ -2666,7 +2568,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
               fullIngredientLines: ingredientsList.map((s) => String(s || '').trim()).filter(Boolean),
             }
           );
-          console.log('🤖 AI returned assessments for:', Object.keys(aiAssessments));
         } catch (aiError) {
           console.error('AI assessment error:', aiError.message);
         }
@@ -2689,7 +2590,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
                 key.toLowerCase().includes(lowerName) ||
                 lowerName.includes(key.toLowerCase())) {
               assessment = value;
-              console.log(`🔗 Matched "${ing.name}" to AI key "${key}"`);
               break;
             }
           }
@@ -2756,13 +2656,11 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
                updated_at = CURRENT_TIMESTAMP`,
             flatParams
           );
-          console.log(`💾 Batch cached: ${cacheInserts.length} ingredients`);
         } catch (cacheError) {
           console.warn('Batch cache failed:', cacheError.message);
         }
       }
       
-      console.log('✅ AI assessments applied');
     }
     
     // =============================================
@@ -2808,7 +2706,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
           hasArtificialAdditives: !!cached[0].has_artificial_additives,
           primaryIngredientType: cached[0].primary_ingredient_type
         };
-        console.log(`⚡ Using cached holistic review: score=${holisticReview.finalScore}`);
         
         // Update hit count
         await query(
@@ -2822,7 +2719,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
     
     // If not cached, get AI holistic review (universal — no conditions)
     if (!holisticReview) {
-      console.log('🤖 Getting AI holistic review (universal)...');
       holisticReview = await geminiService.reviewProductHolistically({
         ingredients: ingredientsList,
         petType: pet.pet_type,
@@ -2831,9 +2727,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
         petName: pet.name
       });
       
-      console.log(`🤖 AI holistic review: score=${holisticReview.finalScore}, grade=${holisticReview.grade}`);
-      console.log(`   Key issues: ${holisticReview.keyIssues.join(', ') || 'None'}`);
-      console.log(`   Positives: ${holisticReview.positives.join(', ') || 'None'}`);
       
       // Cache the holistic review for future (deterministic) results
       try {
@@ -2867,7 +2760,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
             holisticReview.primaryIngredientType
           ]
         );
-        console.log('💾 [SYNC] Cached holistic review');
       } catch (cacheErr) {
         console.warn('Failed to cache holistic review:', cacheErr.message);
       }
@@ -2904,14 +2796,9 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
     const summaryEmoji = analysis.grade === 'A' ? '✅' : analysis.grade === 'B' ? '👍' : analysis.grade === 'C' ? '⚠️' : '❌';
     analysis.summary = holisticReview.aiSummary || `${summaryEmoji} ${['A', 'B'].includes(analysis.grade) ? 'Good' : analysis.grade === 'C' ? 'Acceptable' : 'Concerning'} choice for ${pet.name}. Score: ${analysis.finalScore}/100.`;
     
-    console.log(`✅ [SYNC] Analysis complete: score=${analysis.finalScore}, grade=${analysis.grade}`);
 
     // Generate condition warnings (rule-based, no AI)
     const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, healthConditions);
-    if (conditionWarnings.length > 0) {
-      console.log(`⚠️ [SYNC] ${conditionWarnings.length} condition warning(s) for ${pet.name}`);
-    }
-
     const aiInsights = {
       topBenefits: holisticReview.positives || [],
       topConcerns: holisticReview.keyIssues || [],
@@ -2963,7 +2850,6 @@ router.post('/label', authenticateToken, upload.single('image'), async (req, res
       }
     };
     
-    console.log('📤 Sending response:', JSON.stringify(response, null, 2));
     res.json(response);
 
   } catch (error) {
@@ -3138,8 +3024,6 @@ router.post('/food-check', authenticateToken, upload.single('image'), async (req
     const foodType = identificationResult.foodType || 'simple';
     const isPreparedDish = foodType === 'prepared' || identificationResult.category === 'PreparedDish';
     
-    console.log(`🔍 [Food Check] Identified: "${identificationResult.foodName}" (${foodType}) for ${petType}`);
-    console.log(`🏥 [Food Check] Universal scoring${hasConditions ? ` + ${healthConditions.length} condition warning(s)` : ''}`);
 
     // STEP 2: Check cache for EACH condition (per-single-condition pattern)
     const cachedResults = {};
@@ -3154,7 +3038,6 @@ router.post('/food-check', authenticateToken, upload.single('image'), async (req
         );
 
         if (cached) {
-          console.log(`📦 [Food Check] CACHE HIT: "${foodNormalized}" + ${condition}`);
           cachedResults[condition] = {
             safetyLevel: cached.safety_level,
             category: cached.category,
@@ -3173,7 +3056,6 @@ router.post('/food-check', authenticateToken, upload.single('image'), async (req
 
     // STEP 3: Call AI for uncached conditions (in parallel)
     if (conditionsNeedingAI.length > 0) {
-      console.log(`🤖 [Food Check] CACHE MISS for conditions: ${conditionsNeedingAI.join(', ')}`);
       
       const aiPromises = conditionsNeedingAI.map(async (condition) => {
         const conditionList = condition === 'healthy' ? [] : [{ condition_type: condition }];
@@ -3207,9 +3089,8 @@ router.post('/food-check', authenticateToken, upload.single('image'), async (req
               aiResult.tip
             ]
           );
-          console.log(`💾 [Food Check] Cached: "${foodNormalized}" + ${condition}`);
         } catch (dbError) {
-          console.log('Cache save skipped:', dbError.message);
+          console.warn('[Food Check] Cache save skipped:', dbError.message);
         }
 
         return { condition, result: aiResult };
@@ -3285,8 +3166,6 @@ router.post('/food-check', authenticateToken, upload.single('image'), async (req
       tip: tips.length > 0 ? tips[0] : null // Use first tip (most relevant to worst condition)
     };
 
-    console.log(`✅ [Food Check] Final: ${finalResult.safetyLevel} (${concerns.length} concerns from ${conditionsToEvaluate.length} conditions)`);
-
     res.json(finalResult);
   } catch (error) {
     console.error('Food check error:', error);
@@ -3356,12 +3235,6 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
       productType = 'food';
     }
 
-    console.log(
-      `🏷️ [Manual] productType=${productType}${
-        req.body.productType || req.body.product_type ? ' (client)' : ' (default)'
-      }`
-    );
-
     // Analyze ingredients (basic per-ingredient assessment)
     let analysis = await ingredientAnalyzer.analyzeIngredients(ingredientsList, pet);
 
@@ -3375,7 +3248,6 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
     // Universal scoring — always evaluate as "healthy"
     const conditionsToEvaluate = ['healthy'];
     
-    console.log(`🏥 [Manual] Universal scoring${hasConditions ? ` + ${healthConditions.length} condition warning(s)` : ''}`);
     
     // Get AI assessments for ingredients (per condition)
     const allConditionAssessments = {}; // { ingredientName: { condition: assessment } }
@@ -3412,7 +3284,6 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
       
       // Get AI assessments for uncached ingredients
       if (uncachedIngredients.length > 0) {
-        console.log(`🤖 [Manual] AI assessing ${uncachedIngredients.length} ingredients for condition: ${condition}`);
         try {
           const singleCondition = condition === 'healthy' ? [] : [{ condition_type: condition }];
           const aiAssessments = await geminiService.assessIngredientsForPet(
@@ -3547,7 +3418,6 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
             primaryIngredientType: cached[0].primary_ingredient_type,
             fromCache: true
           };
-          console.log(`⚡ [Manual] Cache hit for ${condition}: score=${cached[0].final_score}`);
           
           await query('UPDATE product_review_cache SET hit_count = hit_count + 1 WHERE id = ?', [cached[0].id]);
         }
@@ -3557,7 +3427,6 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
       
       // If not cached, get AI holistic review for this condition
       if (!conditionReviews[condition]) {
-        console.log(`🤖 [Manual] Getting AI holistic review for condition: ${condition}`);
         const singleConditionList = condition === 'healthy' ? [] : [condition];
         
         try {
@@ -3570,7 +3439,6 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
           });
           
           conditionReviews[condition] = { ...review, fromCache: false };
-          console.log(`🤖 [Manual] AI review for ${condition}: score=${review.finalScore}, grade=${review.grade}`);
           
           // Prepare cache insert
           productCacheInserts.push({
@@ -3603,7 +3471,6 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
             insert.review.hasArtificialAdditives ? 1 : 0, insert.review.primaryIngredientType
           ]
         );
-        console.log(`💾 [Manual] Cached review for condition: ${insert.conditionHash}`);
       } catch (cacheErr) {
         console.warn('[Manual] Failed to cache:', cacheErr.message);
       }
@@ -3652,7 +3519,6 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
         positives: [...new Set(allPositives)]
       };
       
-      console.log(`📊 [Manual] Combined review: score=${worstScore}, grade=${numberToGrade(worstGradeNum)} (worst of ${reviewValues.length} conditions)`);
     } else {
       // Fallback
       console.error('[Manual] No condition reviews available, using fallback');
@@ -3708,10 +3574,6 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
 
     // Generate condition warnings (rule-based, no AI)
     const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(ingredientsList, healthConditions);
-    if (conditionWarnings.length > 0) {
-      console.log(`⚠️ [Manual] ${conditionWarnings.length} condition warning(s) for ${pet.name}`);
-    }
-
     const aiInsights = {
       topBenefits: holisticReview.positives || [],
       topConcerns: holisticReview.keyIssues || [],
@@ -3764,7 +3626,6 @@ router.post('/manual', authenticateToken, async (req, res, next) => {
       }
     };
     
-    console.log('📤 [Manual] Response:', JSON.stringify(response, null, 2));
     res.json(response);
 
   } catch (error) {
@@ -3810,7 +3671,6 @@ router.get('/history', authenticateToken, async (req, res, next) => {
     next(error);
   }
 });
-
 
 /**
  * GET /api/scan/:id

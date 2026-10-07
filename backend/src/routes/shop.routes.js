@@ -67,8 +67,6 @@ router.post('/items/:id/purchase', async (req, res, next) => {
     const userId = req.user.id;
     const itemId = req.params.id;
     
-    console.log(`🛒 [Shop] Purchase attempt: userId=${userId}, itemId=${itemId}`);
-    
     // Get item
     const [item] = await query('SELECT * FROM shop_items WHERE id = ?', [itemId]);
     if (!item) return res.status(404).json({ error: 'Item not found' });
@@ -211,8 +209,6 @@ router.put('/character/:petId/equip', async (req, res, next) => {
       `UPDATE pet_equipped SET ${column} = ?, updated_at = CURRENT_TIMESTAMP WHERE pet_id = ?`,
       [itemId || null, petId]
     );
-    
-    console.log(`👔 [Equip] pet=${petId} slot=${slot} item=${itemId || 'none'}`);
     
     res.json({ success: true, slot, itemId: itemId || null });
   } catch (error) {

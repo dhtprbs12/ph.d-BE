@@ -248,7 +248,6 @@ class ProductService {
     return await query(sql, params);
   }
 
-
   /**
    * Filter products by multiple criteria
    * Used for product discovery feature
@@ -497,10 +496,7 @@ class ProductService {
       LIMIT ? OFFSET ?
     `;
 
-    console.log('🔍 Filter SQL:', sql);
-
     const results = await query(sql, params);
-    console.log(`🔍 Filter results: ${results.length} products (total: ${total})`);
     
     return { products: results, total };
   }
@@ -571,13 +567,10 @@ class ProductService {
    * Get product with full analysis for a specific pet
    */
   async getProductAnalysis(productId, pet) {
-    console.log('🔍 [getProductAnalysis] Looking for product ID:', productId);
     const product = await this.findById(productId);
     if (!product) {
-      console.log('❌ [getProductAnalysis] Product not found!');
       throw new Error('Product not found');
     }
-    console.log('✅ [getProductAnalysis] Found product:', product.name);
 
     // Parse ingredients
     const ingredientsList = ingredientAnalyzer.parseIngredientText(product.raw_ingredients_text);
@@ -621,13 +614,6 @@ class ProductService {
     const sourceIngredients = ingredientAnalyzer.parseIngredientText(product.raw_ingredients_text || '');
     const { k1, k2 } = ingredientMatch.deriveSourceKeywords(sourceIngredients);
     const hasSimilarityFilter = !!(k1 || k2);
-
-    if (hasSimilarityFilter) {
-      console.log(
-        `🎯 [ALT-K] Source K1=${k1 ? `${k1.category || 'raw'}:${k1.keywords.join('|')}` : '∅'} ` +
-        `K2=${k2 ? `${k2.category || 'raw'}:${k2.keywords.join('|')}` : '∅'}`
-      );
-    }
 
     let allergenFilter = '';
     const params = [productId, product.product_type, petType, productId, productId];
@@ -676,8 +662,6 @@ class ProductService {
         filtered.push(row);
       }
     }
-
-    console.log(`🎯 [ALT-K] Pool ${rows.length} → matched ${filtered.length} (no slice — route ranks by score)`);
 
     return { product, candidates: filtered };
   }
@@ -958,16 +942,12 @@ class ProductService {
         exact = await this.ensureProductMatchFields(exact.id, slots);
       }
       if (exact) {
-        console.log(
-          `✅ [MATCH] Exact hit: "${exact.brand} ${exact.name}" (key: ${exact.match_key || lookupKey})`
-        );
         return {
           slots,
           displayName,
           candidates: [{ product: exact, score: 1.0, matchType: 'exact' }],
         };
       }
-      console.log(`⚠️ [MATCH] No exact hit for key: ${lookupKey}`);
     }
 
     const lifeStageFilter =

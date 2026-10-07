@@ -86,17 +86,9 @@ const PORT = process.env.PORT || 3000;
 const startServer = async () => {
   try {
     await connectDB();
-    
-    // Check AI cache count at startup
-    const { query } = require('./database/connection');
-    const countResult = await query('SELECT COUNT(*) as count FROM ai_assessment_cache');
-    console.log(`🧠 AI assessments cached: ${countResult[0]?.count || 0}`);
-    
+
     app.listen(PORT, '0.0.0.0', () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🌐 Accessible at http://localhost:${PORT} (simulator)`);
-      console.log(`📱 For real device, use your Mac's IP: http://<your-ip>:${PORT}`);
-      console.log(`📊 Environment: ${process.env.NODE_ENV}`);
+      console.log(`Server running on port ${PORT}`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);

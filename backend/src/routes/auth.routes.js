@@ -276,8 +276,6 @@ router.post('/register-nickname', [
       { expiresIn: process.env.JWT_EXPIRES_IN || '365d' }
     );
 
-    console.log(`📱 New nickname user: ${nickname} (id=${userId})`);
-
     res.status(201).json({
       user: { id: userId, nickname, name: nickname },
       token,
@@ -338,8 +336,6 @@ router.post('/login-nickname', [
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '365d' }
     );
-
-    console.log(`🔑 Nickname login: ${user.nickname} (id=${user.id})`);
 
     res.json({
       user: { id: user.id, nickname: user.nickname, name: user.name },
@@ -466,8 +462,6 @@ router.put('/upgrade', authenticateToken, [
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
-
-    console.log(`🔑 Device user upgraded: ${req.user.email} → ${email}`);
 
     res.json({
       message: 'Account upgraded successfully',

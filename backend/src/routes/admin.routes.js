@@ -64,7 +64,6 @@ router.delete('/cache/poisoned', async (req, res, next) => {
           OR ai_summary LIKE 'Analysis could not be completed%'`
     );
     const deleted = result?.affectedRows ?? 0;
-    console.log(`🧹 [Admin] Purged ${deleted} poisoned product_review_cache row(s)`);
     res.json({ deleted });
   } catch (error) {
     console.error('[Admin] cache/poisoned error:', error);

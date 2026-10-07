@@ -35,12 +35,6 @@ function toHistoryRecommendation(grade, rec) {
   return fromGrade[grade] || 'acceptable';
 }
 
-// Debug middleware to log all product route requests
-router.use((req, res, next) => {
-  console.log(`📦 [Products] ${req.method} ${req.originalUrl}`);
-  next();
-});
-
 /**
  * GET /api/products/search
  * Search products with optional text query
@@ -92,8 +86,6 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
       offset = 0
     } = req.query;
 
-    console.log('🔍 Filter request:', { petType, productType, lifeStage, q, limit });
-
     // Used for SQL disease/allergy filtering only (not for scoring on this route)
     let healthConditions = [];
     try {
@@ -125,8 +117,6 @@ router.get('/filter', optionalAuth, async (req, res, next) => {
     });
 
     const { products, total: totalCount } = filterResult;
-
-    console.log(`✅ [FILTER] ${products.length} products (order: DB name ASC, no scores)`);
 
     res.json({ 
       products,
@@ -176,7 +166,7 @@ router.get('/:id/image', async (req, res, next) => {
         return res.json({ imageUrl });
       }
     } catch (err) {
-      console.log('⚠️ [Image] Fetch failed for', product.name, err.message);
+      console.warn('[Image] Fetch failed for', product.name, err.message);
     }
 
     // No image found
@@ -201,7 +191,6 @@ router.post('/batch-scores', optionalAuth, async (req, res, next) => {
     
     const pet_type = petType || 'dog';
     
-    console.log(`🔍 [BATCH] Universal scores for ${productIds.length} products, pet: ${pet_type}`);
     
     const placeholders = productIds.map(() => '?').join(',');
     const products = await query(
@@ -257,7 +246,6 @@ router.post('/batch-scores', optionalAuth, async (req, res, next) => {
       }
     }
     
-    console.log(`✅ [BATCH] Found ${Object.keys(scores).length}/${productIds.length} universal scores`);
     
     res.json({ scores });
   } catch (error) {
@@ -297,7 +285,6 @@ router.get('/:id', optionalAuth, async (req, res, next) => {
  */
 router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
   try {
-    console.log('🔍 [ANALYZE] Product ID:', req.params.id);
     
     const { 
       petId,
@@ -321,14 +308,12 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
       healthConditions: safeJsonParse(healthConditions, [])
     };
     
-    console.log('🐕 [ANALYZE] Pet:', pet.name, pet.pet_type);
 
     // Get product from database
     const product = await productService.findById(req.params.id);
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
-    console.log('✅ [ANALYZE] Found product:', product.name);
 
     // Parse ingredients — if the product was created via user-confirmed scan,
     // raw_ingredients_text is already clean comma-separated; use simple split
@@ -338,7 +323,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
     if (!ingredientsList || ingredientsList.length === 0) {
       return res.status(400).json({ error: 'Product has no ingredients to analyze' });
     }
-    console.log(`📝 [ANALYZE] ${ingredientsList.length} ingredients found`);
 
     // Use DB-stored hash if available, otherwise generate
     const ingredientHash = product.ingredient_hash || productService.generateIngredientHash(ingredientsList);
@@ -351,21 +335,18 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
     const hasConditions = pet.healthConditions && pet.healthConditions.length > 0;
     const conditionsToEvaluate = ['healthy'];
     
-    console.log(`🏥 [ANALYZE] Universal scoring${hasConditions ? ` + ${pet.healthConditions.length} condition warning(s)` : ''}`);
 
     // =============================================
     // PHASE 1: PER-INGREDIENT AI ASSESSMENT
     // Run FIRST so ai_assessment_cache is fully populated
     // before Tier 2 holistic scoring tries to compute from it
     // =============================================
-    console.log('🧪 [ANALYZE] Running ingredient-level analysis...');
     const ingredientAnalysis = await ingredientAnalyzer.analyzeIngredients(ingredientsList, pet);
 
     const ingredientsToAssess = ingredientAnalysis.ingredients.filter(i => i.needsAIAssessment);
     const allConditionAssessments = {}; // { ingredientName: { condition: assessment } }
     
     if (ingredientsToAssess.length > 0) {
-      console.log(`🤖 [ANALYZE] Checking cache for ${ingredientsToAssess.length} ingredients x ${conditionsToEvaluate.length} conditions...`);
         
         const uncachedByCondition = {}; // { condition: { conditionHash, ingredients: [] } }
         const ingCacheInserts = [];
@@ -389,7 +370,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
                   benefit: cached[0].benefit,
                   fromCache: true
                 };
-                console.log(`💾 [ANALYZE] Cache hit: ${ing.name} + ${condition}`);
               } else {
                 uncachedByCondition[condition].ingredients.push(ing);
               }
@@ -403,7 +383,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
         const conditionsNeedingAI = Object.entries(uncachedByCondition).filter(([_, data]) => data.ingredients.length > 0);
         
         if (conditionsNeedingAI.length > 0) {
-          console.log(`🚀 [ANALYZE] AI assessing ${conditionsNeedingAI.length} condition(s)...`);
           
           const aiPromises = conditionsNeedingAI.map(async ([condition, { conditionHash, ingredients }]) => {
             const singleCondition = condition === 'healthy' ? [] : [{ condition_type: condition }];
@@ -478,7 +457,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
                  ON DUPLICATE KEY UPDATE risk_score = VALUES(risk_score), explanation = VALUES(explanation), benefit = VALUES(benefit), category = COALESCE(VALUES(category), category), ingredient_source = COALESCE(VALUES(ingredient_source), ingredient_source), hit_count = hit_count + 1`,
                 ingCacheInserts.flat()
               );
-              console.log(`💾 [ANALYZE] Cached ${ingCacheInserts.length} ingredient assessments`);
             } catch (err) {
               console.warn('[ANALYZE] Cache save failed:', err.message);
             }
@@ -518,7 +496,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
               else ing.riskLevel = 'danger';
             }
 
-            console.log(`🎯 [ANALYZE] ${ing.name}: score=${worstScore}, level=${ing.riskLevel}`);
           }
         }
     }
@@ -569,7 +546,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
             primaryIngredientType: cached[0].primary_ingredient_type,
             fromCache: true
           };
-          console.log(`⚡ [ANALYZE] Cache hit for ${condition}: score=${cached[0].final_score}`);
         }
       } catch (err) {
         console.warn(`[ANALYZE] Cache check failed for ${condition}:`, err.message);
@@ -610,10 +586,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
         };
         conditionReviews[condition] = merged;
         const prev = productCacheHit?.finalScore;
-        console.log(
-          `🧮 [ANALYZE-T2] Deterministic score for ${condition}: ${computed.finalScore}` +
-            (prev !== undefined && prev !== computed.finalScore ? ` (overrides cache ${prev})` : '')
-        );
         cacheInserts.push({
           ingredientHash,
           conditionHash,
@@ -636,7 +608,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
 
       // ── Tier 3: AI holistic fallback (last resort) ──
       if (!conditionReviews[condition]) {
-        console.log(`🤖 [ANALYZE-T3] AI fallback for condition: ${condition}`);
         const singleConditionList = condition === 'healthy' ? [] : [condition];
         
         try {
@@ -649,7 +620,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
           });
           
           conditionReviews[condition] = { ...review, fromCache: false };
-          console.log(`🤖 [ANALYZE-T3] AI review for ${condition}: score=${review.finalScore}, grade=${review.grade}`);
           
           cacheInserts.push({
             ingredientHash,
@@ -701,7 +671,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
             insert.review.primaryIngredientType || 'unknown'
           ]
         );
-        console.log(`💾 [ANALYZE] Cached review for condition: ${insert.conditionHash}`);
       } catch (cacheErr) {
         console.warn('[ANALYZE] Failed to cache review:', cacheErr.message);
       }
@@ -752,7 +721,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
         positives: [...new Set(allPositives)]
       };
       
-      console.log(`📊 [ANALYZE] Combined review: score=${worstScore}, grade=${numberToGrade(worstGradeNum)} (worst of ${reviewValues.length} conditions)`);
     } else {
       console.error('[ANALYZE] No condition reviews available');
       return res.status(500).json({ error: 'Analysis failed' });
@@ -801,10 +769,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
     const conditionWarnings = ingredientAnalyzer.generateConditionWarnings(
       ingredientsList, pet.healthConditions || []
     );
-    if (conditionWarnings.length > 0) {
-      console.log(`⚠️ [ANALYZE] ${conditionWarnings.length} condition warning(s) for ${pet.name}`);
-    }
-
     const aiInsights = {
       topBenefits: holisticReview.positives || [],
       topConcerns: holisticReview.keyIssues || [],
@@ -820,7 +784,7 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
           product.image_url = imageUrl;
         }
       } catch (err) {
-        console.log('⚠️ [Image] Fetch failed:', err.message);
+        console.warn('[Image] Fetch failed:', err.message);
       }
     }
 
@@ -846,7 +810,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
             `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, analysis_json = ?, pet_name = ?, pet_type = ?, pet_id = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,
             [analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights }), petNameKey, petTypeKey, petIdKey, existing[0].id]
           );
-          console.log(`📜 [ANALYZE] Scan history updated: ${existing[0].id} pet=${petNameKey} (${petTypeKey})`);
         } else {
           const scanId = uuidv4();
           await query(
@@ -854,7 +817,6 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
              VALUES (?, ?, ?, ?, ?, ?, ?, 'product_search', ?, ?, ?, NULL, ?)`,
             [scanId, userId, deviceId, petNameKey, petTypeKey, petIdKey, product.id, analysis.finalScore, analysis.grade, recForHistory, JSON.stringify({ ...analysis, aiInsights })]
           );
-          console.log('📜 [ANALYZE] Scan history saved:', scanId);
         }
       } catch (historyErr) {
         console.error('[ANALYZE] Failed to save scan history:', historyErr.message);
@@ -995,26 +957,18 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
     const { petType = 'dog', healthConditions = [], petName = 'your pet', limit = 5 } = req.body;
     const productId = req.params.id;
 
-    console.log(`🔄 [ALTERNATIVES] Finding alternatives for product ${productId}, pet: ${petType}, conditions: ${healthConditions.map(c => c.condition_type || c).join(', ') || 'healthy'}`);
-
     // Extract allergen keywords from conditions (e.g., allergy_chicken → chicken, allergy_beef → beef)
     const allergens = healthConditions
       .map(c => (c.condition_type || c))
       .filter(c => c.startsWith('allergy_'))
       .map(c => c.replace('allergy_', ''));
     
-    if (allergens.length > 0) {
-      console.log(`🚫 [ALTERNATIVES] Excluding products containing: ${allergens.join(', ')}`);
-    }
-
     // Step 1: Get candidate products (bigger pool + allergen filtering)
     const { product: sourceProduct, candidates } = await productService.getCandidateAlternatives(productId, petType, Math.max(limit * 4, 30), allergens);
     
     if (!sourceProduct || candidates.length === 0) {
       return res.json({ alternatives: [] });
     }
-
-    console.log(`📦 [ALTERNATIVES] Found ${candidates.length} candidates`);
 
     // Universal scoring — always evaluate as "healthy"
     const hasConditions = healthConditions && healthConditions.length > 0;
@@ -1062,7 +1016,6 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
                 grade: cached[0].grade,
                 recommendation: cached[0].recommendation
               };
-              console.log(`⚡ [ALT-T1] Product cache hit: ${candidate.name} / ${condition} = ${review.finalScore}`);
               await query('UPDATE product_review_cache SET hit_count = hit_count + 1 WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ?', 
                 [ingredientHash, conditionHash, petType]);
             }
@@ -1090,7 +1043,6 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
                   recommendation: computed.recommendation
                 };
                 const tier = computed.allCached ? 'T2-full' : 'T2-partial';
-                console.log(`🧮 [ALT-${tier}] Computed from ingredients: ${candidate.name} / ${condition} = ${review.finalScore} (${ingredientsList.length - (computed.missingIngredients?.length || 0)}/${ingredientsList.length} cached)`);
 
                 // Save computed score to product_review_cache for future Tier 1 hits
                 try {
@@ -1116,7 +1068,6 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
                       computed.primaryIngredientType || null
                     ]
                   );
-                  console.log(`💾 [ALT-T2] Saved to product cache: ${candidate.name} / ${condition} = ${computed.finalScore}`);
                 } catch (err) {
                   console.warn(`[ALT-T2] Cache save failed:`, err.message);
                 }
@@ -1128,7 +1079,6 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
 
           // ── Tier 3: AI fallback (last resort) ──
           if (!review) {
-            console.log(`🤖 [ALT-T3] AI fallback: ${candidate.name} / ${condition}`);
             const singleConditionList = condition === 'healthy' ? [] : [condition];
 
             try {
@@ -1170,7 +1120,6 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
                     aiReview.primaryIngredientType || null
                   ]
                 );
-                console.log(`💾 [ALT-T3] Cached: ${candidate.name} / ${condition} = ${aiReview.finalScore}`);
               } catch (err) {
                 console.warn(`[ALT-T3] Cache save failed:`, err.message);
               }
@@ -1210,17 +1159,11 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
     // If none pass 80, show the best available above 60
     if (result.length === 0) {
       result = sorted.filter(a => a.score >= 60).slice(0, limit);
-      if (result.length > 0) {
-        console.log(`⚠️ [ALTERNATIVES] No alternatives ≥80, showing best ≥60`);
-      }
     }
     
     // Last resort: show top alternatives above 50
     if (result.length === 0) {
       result = sorted.filter(a => a.score >= 50).slice(0, limit);
-      if (result.length > 0) {
-        console.log(`⚠️ [ALTERNATIVES] No alternatives ≥60, showing best ≥50`);
-      }
     }
 
     // Fetch images for alternatives that don't have one (await before responding)
@@ -1231,22 +1174,19 @@ router.post('/:id/alternatives', optionalAuth, async (req, res, next) => {
           const url = await imageService.fetchAndSaveProductImage(alt.product.id, alt.product.name, alt.product.brand);
           if (url) {
             alt.product.image_url = url;
-            console.log(`📸 [ALT] Image ready: ${alt.product.name}`);
           }
         } catch (err) {
-          console.log(`⚠️ [ALT Image] ${alt.product.name}: ${err.message}`);
+          console.warn('[ALT Image]', alt.product.name, err.message);
         }
       });
 
     if (imageFetches.length > 0) {
-      console.log(`📸 [ALT] Fetching images for ${imageFetches.length} products...`);
       await Promise.race([
         Promise.allSettled(imageFetches),
         new Promise(resolve => setTimeout(resolve, 12000))
       ]);
     }
 
-    console.log(`✅ [ALTERNATIVES] Returning ${result.length} alternatives (scores: ${result.map(a => a.score).join(', ')})`);
     res.json({ alternatives: result });
   } catch (error) {
     console.error('[ALTERNATIVES] Error:', error);
@@ -1371,11 +1311,6 @@ router.delete('/:id', async (req, res, next) => {
 
     result.scanHistoryRowsDeleted = scanHistoryDeleted;
 
-    console.log(
-      `🗑️  [DELETE product] ${product.brand || '?'} / ${product.name} (id=${id}) ` +
-      `→ purged + ${result.reviewCacheRowsDeleted} review_cache + ${scanHistoryDeleted} scan_history row(s)`
-    );
-
     res.json({ success: true, deleted: result });
   } catch (error) {
     console.error('[DELETE product] Error:', error);
@@ -1468,8 +1403,6 @@ router.post('/register',
       await tokenService.grantTokens(userId, 20, 'product_register', 'New product registered 🦴×20', productId);
 
       const tokenInfo = await tokenService.getTokenInfo(userId);
-
-      console.log(`📦 [Register] New product registered: ${productName || 'Unknown'} (id=${productId}) by user=${userId}`);
 
       res.status(201).json({
         success: true,
