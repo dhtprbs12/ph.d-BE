@@ -1190,7 +1190,8 @@ async function processAnalysisInBackground(scanId, ingredientsList, pet, extract
               name: productForResult.name,
               brand: productForResult.brand,
               image_url: productForResult.image_url,
-              product_type: productForResult.product_type
+              product_type: productForResult.product_type,
+              diet_tags: productForResult.diet_tags,
             }
           : null,
         analysis,
@@ -2072,7 +2073,8 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
               manufacturer: product.manufacturer,
               brand: product.brand,
               image_url: product.image_url,
-              product_type: product.product_type
+              product_type: product.product_type,
+              diet_tags: product.diet_tags,
             },
             analysis,
             aiInsights,
@@ -2119,7 +2121,8 @@ router.post('/quick-analyze', authenticateToken, async (req, res, next) => {
               manufacturer: product.manufacturer,
               brand: product.brand,
               image_url: product.image_url,
-              product_type: product.product_type
+              product_type: product.product_type,
+              diet_tags: product.diet_tags,
             },
             analysis,
             aiInsights,
@@ -2895,6 +2898,7 @@ function buildPollCompleteFromHistoryRow(row) {
           brand: row.product_brand,
           image_url: row.product_image,
           product_type: row.product_type,
+          diet_tags: row.diet_tags,
         }
       : null,
     analysis,
@@ -2942,7 +2946,7 @@ router.get('/:scanId/result', async (req, res, next) => {
 
     const rows = await query(
       `SELECT sh.*, p.name AS product_name, p.brand AS product_brand,
-              p.image_url AS product_image, p.product_type
+              p.image_url AS product_image, p.product_type, p.diet_tags
        FROM scan_history sh
        LEFT JOIN products p ON sh.product_id = p.id
        WHERE sh.id = ?`,

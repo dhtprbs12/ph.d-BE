@@ -908,6 +908,7 @@ async function reviewFromProductCache(product, petName, petTypeQuery, parsedCond
       image_url: product.image_url,
       product_type: product.product_type,
       target_life_stage: product.target_life_stage,
+      diet_tags: product.diet_tags,
     },
     analysis,
     aiInsights: {
