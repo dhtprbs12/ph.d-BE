@@ -94,25 +94,26 @@ async function saveScanHistoryEntry(entry) {
         ]
       );
     } else if (userId && productId) {
-      // Upsert: same user + same product + same pet → update existing row
+      // Upsert: same user + same product + same pet id → update existing row
       const petNameKey = String(petName || '').trim();
       const petTypeKey = petType === 'cat' ? 'cat' : 'dog';
+      const petIdKey = petId && petId !== 'local' ? petId : null;
       const existing = await query(
         `SELECT id FROM scan_history
-         WHERE user_id = ? AND product_id = ? AND pet_name = ? AND pet_type = ?
+         WHERE user_id = ? AND product_id = ? AND pet_id <=> ?
          LIMIT 1`,
-        [userId, productId, petNameKey, petTypeKey]
+        [userId, productId, petIdKey]
       );
       if (existing.length > 0) {
         await query(
           `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, ocr_extracted_text = ?, analysis_json = ?, scan_type = ?, pet_name = ?, pet_type = ?, pet_id = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,
-          [finalScore, grade, rec, ocrExtractedText, analysisJson, scanType, petNameKey, petTypeKey, petId, existing[0].id]
+          [finalScore, grade, rec, ocrExtractedText, analysisJson, scanType, petNameKey, petTypeKey, petIdKey, existing[0].id]
         );
       } else {
         await query(
           `INSERT INTO scan_history (id, user_id, device_id, pet_name, pet_type, pet_id, product_id, scan_type, final_score, grade, recommendation, ocr_extracted_text, analysis_json)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [scanId, userId, deviceId || null, petNameKey, petTypeKey, petId, productId, scanType, finalScore, grade, rec, ocrExtractedText, analysisJson]
+          [scanId, userId, deviceId || null, petNameKey, petTypeKey, petIdKey, productId, scanType, finalScore, grade, rec, ocrExtractedText, analysisJson]
         );
       }
     } else {
@@ -404,8 +405,8 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
       try {
         const today = new Date().toISOString().split('T')[0];
         const [existing] = await query(
-          `SELECT id FROM scan_history WHERE user_id = ? AND product_id = ? AND DATE(created_at) = ? LIMIT 1`,
-          [userId, product.id, today]
+          `SELECT id FROM scan_history WHERE user_id = ? AND product_id = ? AND pet_id <=> ? AND DATE(created_at) = ? LIMIT 1`,
+          [userId, product.id, petId && petId !== 'local' ? petId : null, today]
         );
         if (!existing) {
           await query(

@@ -779,7 +779,7 @@ router.post('/:id/checkins', async (req, res, next) => {
 
     // ── Token + Streak logic ──
 
-    // Once per phone-local day. Match the check-in date, not the server clock
+    // Once per pet per phone-local day. Match the check-in date, not the server clock
     // on token_transactions.created_at (evening local check-ins fall on the next UTC date).
     // Welcome-bonus rows are also type 'checkin' but have no check-in reference, so they do not count.
     let tokensAwarded = 0;
@@ -787,9 +787,9 @@ router.post('/:id/checkins', async (req, res, next) => {
       `SELECT tt.id
        FROM token_transactions tt
        INNER JOIN daily_checkins dc ON dc.id = tt.reference_id
-       WHERE tt.user_id = ? AND tt.type = 'checkin' AND dc.date = ?
+       WHERE tt.user_id = ? AND tt.type = 'checkin' AND dc.date = ? AND dc.pet_id = ?
        LIMIT 1`,
-      [userId, localDate]
+      [userId, localDate, petId]
     );
     if (!existingTx) {
       await grantTokens(userId, 5, 'checkin', 'Health check-in 🦴×5', checkinId);

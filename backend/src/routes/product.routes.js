@@ -793,18 +793,18 @@ router.get('/:id/analyze', authenticateToken, async (req, res, next) => {
     const recForHistory = toHistoryRecommendation(analysis.grade, analysis.recommendation);
     if (userId || deviceId) {
       try {
-        // Upsert: same user + same product + same pet → update
+        // Upsert: same user + same product + same pet id → update
         const petNameKey = String(pet.name || '').trim();
         const petTypeKey = pet.pet_type === 'cat' ? 'cat' : 'dog';
+        const petIdKey = pet.id && pet.id !== 'local' ? pet.id : null;
         const existing = userId && product.id
           ? await query(
               `SELECT id FROM scan_history
-               WHERE user_id = ? AND product_id = ? AND pet_name = ? AND pet_type = ?
+               WHERE user_id = ? AND product_id = ? AND pet_id <=> ?
                LIMIT 1`,
-              [userId, product.id, petNameKey, petTypeKey]
+              [userId, product.id, petIdKey]
             )
           : [];
-        const petIdKey = pet.id && pet.id !== 'local' ? pet.id : null;
         if (existing.length > 0) {
           await query(
             `UPDATE scan_history SET final_score = ?, grade = ?, recommendation = ?, analysis_json = ?, pet_name = ?, pet_type = ?, pet_id = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?`,

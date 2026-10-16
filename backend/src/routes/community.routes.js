@@ -65,6 +65,7 @@ router.get('/feed', optionalAuth, async (req, res, next) => {
     const rows = await query(`
       SELECT 
         sp.id as save_id,
+        sp.user_id,
         sp.saved_at,
         u.nickname,
         pet.photo_url as pet_photo,
@@ -80,19 +81,29 @@ router.get('/feed', optionalAuth, async (req, res, next) => {
       FROM saved_products sp
       JOIN users u ON sp.user_id = u.id
       JOIN products p ON sp.product_id = p.id
-      LEFT JOIN pets pet ON pet.user_id = sp.user_id
+      LEFT JOIN pets pet ON pet.id = (
+        SELECT p2.id FROM pets p2
+        WHERE p2.user_id = sp.user_id
+        ORDER BY p2.is_primary DESC, p2.created_at ASC
+        LIMIT 1
+      )
       WHERE u.nickname IS NOT NULL
         ${excludeId ? 'AND sp.user_id != ?' : ''}
+        AND sp.id = (
+          SELECT sp2.id FROM saved_products sp2
+          WHERE sp2.user_id = sp.user_id
+          ORDER BY sp2.saved_at DESC, sp2.id DESC
+          LIMIT 1
+        )
       ORDER BY sp.saved_at DESC
       LIMIT ? OFFSET ?
     `, excludeId ? [excludeId, limit, offset] : [limit, offset]);
 
-    // Deduplicate: one row per save (pets JOIN may produce duplicates if user has multiple pets)
-    const seen = new Set();
+    const seenUsers = new Set();
     const feed = [];
     for (const row of rows) {
-      if (seen.has(row.save_id)) continue;
-      seen.add(row.save_id);
+      if (seenUsers.has(row.user_id)) continue;
+      seenUsers.add(row.user_id);
       feed.push(row);
     }
 
