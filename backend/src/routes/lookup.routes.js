@@ -1,0 +1,152 @@
+const express = require('express');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const router = express.Router();
+const { query } = require('../database/connection');
+const { authenticateToken } = require('../middleware/auth');
+const lookupService = require('../services/lookupService');
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'));
+  },
+});
+
+function requireUser(req, res) {
+  if (!req.user?.id || req.user.id === 'anonymous') {
+    res.status(401).json({ error: 'Sign in to request an analysis' });
+    return false;
+  }
+  return true;
+}
+
+function sendError(res, error) {
+  const status = error.status || 500;
+  if (status >= 500) console.error('[Lookup]', error);
+  res.status(status).json({ error: error.message || 'Lookup failed' });
+}
+
+router.post('/', authenticateToken, async (req, res) => {
+  try {
+    if (!requireUser(req, res)) return;
+    const pet = req.body.pet || {};
+    const created = await lookupService.createNameLookup({
+      userId: req.user.id,
+      pet: {
+        id: pet.id || req.body.petId || null,
+        name: pet.name || req.body.petName || null,
+        petType: pet.petType || pet.pet_type || req.body.petType || 'dog',
+      },
+      brand: req.body.brand,
+      queryName: req.body.queryName,
+      pastedUrl: req.body.pastedUrl,
+      email: req.body.email,
+      filterHints: req.body.filterHints || null,
+    });
+    res.status(created.reused ? 200 : 201).json(created);
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.get('/', authenticateToken, async (req, res) => {
+  try {
+    if (!requireUser(req, res)) return;
+    if (req.query.barcode) {
+      const found = await lookupService.findReadyByBarcode(req.user.id, String(req.query.barcode));
+      return res.json({ lookup: found });
+    }
+    res.json(await lookupService.listLookups(req.user.id));
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.get('/:id', authenticateToken, async (req, res) => {
+  try {
+    if (!requireUser(req, res)) return;
+    const lookup = await lookupService.getLookup(req.user.id, req.params.id);
+    if (!lookup) return res.status(404).json({ error: 'Lookup not found' });
+    res.json(lookup);
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.post('/:id/choice', authenticateToken, async (req, res) => {
+  try {
+    if (!requireUser(req, res)) return;
+    const result = await lookupService.chooseCandidate(req.user.id, req.params.id, req.body.url);
+    res.json(result);
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.post('/:id/ack', authenticateToken, async (req, res) => {
+  try {
+    if (!requireUser(req, res)) return;
+    await lookupService.ackLookup(req.user.id, req.params.id);
+    res.json({ ok: true });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.post('/photo',
+  authenticateToken,
+  upload.fields([
+    { name: 'frontImage', maxCount: 1 },
+    { name: 'ingredientImage', maxCount: 1 },
+    { name: 'barcodeImage', maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      if (!requireUser(req, res)) return;
+      const front = req.files?.frontImage?.[0];
+      const ingredient = req.files?.ingredientImage?.[0];
+      const barcodeImage = req.files?.barcodeImage?.[0];
+      if (!front || !ingredient || !barcodeImage) {
+        return res.status(400).json({ error: 'Front, ingredient, and barcode photos are required' });
+      }
+      const pet = {
+        id: req.body.petId || null,
+        name: req.body.petName || null,
+        petType: req.body.petType === 'cat' ? 'cat' : 'dog',
+      };
+      await lookupService.assertDailyRoom(req.user.id);
+      const id = uuidv4();
+      const barcode = String(req.body.barcode || '').trim() || null;
+      await query(
+        `INSERT INTO lookup_requests
+          (id, user_id, pet_id, pet_name, pet_type, barcode, status, entry, email_to)
+         VALUES (?, ?, ?, ?, ?, ?, 'queued', 'photo', ?)`,
+        [id, req.user.id, pet.id, pet.name, pet.petType, barcode, lookupService.realEmail(req.body.email)],
+      );
+      setImmediate(() => {
+        lookupService.runPhotoLookup(id, ingredient.buffer, front.buffer)
+          .catch((err) => console.error('[Lookup] async photo failed:', err.message));
+      });
+      res.status(201).json({ id, status: 'queued', reused: false, tokensAwarded: 0 });
+    } catch (error) {
+      sendError(res, error);
+    }
+  },
+);
+
+router.post('/push-token', authenticateToken, async (req, res) => {
+  try {
+    if (!requireUser(req, res)) return;
+    const token = String(req.body.token || '').trim();
+    if (!token) return res.status(400).json({ error: 'token is required' });
+    await query('UPDATE users SET expo_push_token = ? WHERE id = ?', [token.slice(0, 255), req.user.id]);
+    res.json({ ok: true });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+module.exports = router;
