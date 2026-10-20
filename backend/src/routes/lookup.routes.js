@@ -139,10 +139,6 @@ router.post('/photo',
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'photo', ?)`,
         [id, req.user.id, pet.id, pet.name, pet.petType, barcode, frontImageUrl, ingredientImageUrl, barcodeImageUrl, lookupService.realEmail(req.body.email)],
       );
-      setImmediate(() => {
-        lookupService.runPhotoLookup(id, ingredient.buffer, front.buffer)
-          .catch((err) => console.error('[Lookup] async photo failed:', err.message));
-      });
       res.status(201).json({
         id,
         status: 'queued',

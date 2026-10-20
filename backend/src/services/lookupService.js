@@ -379,9 +379,6 @@ async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, emai
       url, realEmail(email),
     ],
   );
-  setImmediate(() => {
-    runNameLookup(id).catch((err) => console.error('[Lookup] async name failed:', err.message));
-  });
   return { id, status: 'queued', reused: false, tokensAwarded: 0 };
 }
 
@@ -400,9 +397,6 @@ async function chooseCandidate(userId, id, url) {
     throw error;
   }
   await query(`UPDATE lookup_requests SET chosen_url = ?, pasted_url = NULL, status = 'queued' WHERE id = ?`, [url, id]);
-  setImmediate(() => {
-    runNameLookup(id).catch((err) => console.error('[Lookup] choice failed:', err.message));
-  });
   return { id, status: 'queued' };
 }
 
