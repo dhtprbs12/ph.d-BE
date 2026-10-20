@@ -52,7 +52,6 @@ router.post('/', authenticateToken, async (req, res) => {
       queryName: req.body.queryName,
       pastedUrl: req.body.pastedUrl,
       email: req.body.email,
-      filterHints: req.body.filterHints || null,
     });
     res.status(created.reused ? 200 : 201).json(created);
   } catch (error) {
@@ -79,16 +78,6 @@ router.get('/:id', authenticateToken, async (req, res) => {
     const lookup = await lookupService.getLookup(req.user.id, req.params.id);
     if (!lookup) return res.status(404).json({ error: 'Lookup not found' });
     res.json(lookup);
-  } catch (error) {
-    sendError(res, error);
-  }
-});
-
-router.post('/:id/choice', authenticateToken, async (req, res) => {
-  try {
-    if (!requireUser(req, res)) return;
-    const result = await lookupService.chooseCandidate(req.user.id, req.params.id, req.body.url);
-    res.json(result);
   } catch (error) {
     sendError(res, error);
   }

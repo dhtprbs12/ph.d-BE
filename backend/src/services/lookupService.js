@@ -241,10 +241,10 @@ async function finishFromExtracted(row, extracted, amount, sourceNote) {
   );
   await query(
     `UPDATE lookup_requests
-     SET status = 'ready', failure_reason = NULL, extracted_json = ?, chosen_url = ?, scan_id = ?,
+     SET status = 'ready', failure_reason = NULL,
          brand = COALESCE(brand, ?), query_name = COALESCE(query_name, ?)
      WHERE id = ?`,
-    [JSON.stringify(extracted), extracted.sourceUrl || null, scanId, extracted.brand, extracted.productName, row.id],
+    [extracted.brand, extracted.productName, row.id],
   );
   try {
     await awardOnce(row, amount);
@@ -260,15 +260,12 @@ async function runNameLookup(id) {
   if (!row || row.status === 'ready') return;
   await query(`UPDATE lookup_requests SET status = 'searching' WHERE id = ?`, [id]);
   try {
-    const hints = row.filter_hints_json
-      ? (typeof row.filter_hints_json === 'string' ? JSON.parse(row.filter_hints_json) : row.filter_hints_json)
-      : null;
     const found = await findLabel({
       brand: row.brand,
       name: row.query_name,
-      url: row.chosen_url || row.pasted_url,
-      hints,
-      strict: Boolean(row.chosen_url),
+      url: row.pasted_url,
+      hints: null,
+      strict: false,
     });
     if (found.extracted) {
       const note = `Source: ${found.extracted.domain}. Read from the published page. This report is only on your account.`;
@@ -276,10 +273,7 @@ async function runNameLookup(id) {
       return;
     }
     if (found.candidates.length >= 2) {
-      await query(
-        `UPDATE lookup_requests SET status = 'needs_choice', candidates_json = ?, failure_reason = NULL WHERE id = ?`,
-        [JSON.stringify(found.candidates), id],
-      );
+      await query(`UPDATE lookup_requests SET status = 'queued', failure_reason = NULL WHERE id = ?`, [id]);
       return;
     }
     const name = row.query_name || 'this food';
@@ -343,7 +337,7 @@ async function assertDailyRoom(userId) {
   }
 }
 
-async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, email, filterHints }) {
+async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, email }) {
   const brandNorm = norm(brand);
   const nameNorm = norm(queryName);
   if (!brandNorm || !nameNorm) {
@@ -370,64 +364,21 @@ async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, emai
   await query(
     `INSERT INTO lookup_requests
       (id, user_id, pet_id, pet_name, pet_type, brand, query_name, brand_norm, query_name_norm,
-       filter_hints_json, pasted_url, status, entry, email_to)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'name', ?)`,
+       pasted_url, status, entry, email_to)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'name', ?)`,
     [
       id, userId, pet.id || null, pet.name || null, pet.petType === 'cat' ? 'cat' : 'dog',
       brand.trim(), queryName.trim(), brandNorm, nameNorm,
-      filterHints ? JSON.stringify(filterHints) : null,
       url, realEmail(email),
     ],
   );
   return { id, status: 'queued', reused: false, tokensAwarded: 0 };
 }
 
-async function chooseCandidate(userId, id, url) {
-  const [row] = await query('SELECT * FROM lookup_requests WHERE id = ? AND user_id = ?', [id, userId]);
-  if (!row) {
-    const error = new Error('Lookup not found');
-    error.status = 404;
-    throw error;
-  }
-  const candidates = typeof row.candidates_json === 'string' ? JSON.parse(row.candidates_json) : (row.candidates_json || []);
-  const match = candidates.find((item) => item.url === url);
-  if (!match) {
-    const error = new Error('That page is not one of the choices');
-    error.status = 400;
-    throw error;
-  }
-  await query(`UPDATE lookup_requests SET chosen_url = ?, pasted_url = NULL, status = 'queued' WHERE id = ?`, [url, id]);
-  return { id, status: 'queued' };
-}
-
-function scanResultFrom(row, analysisJson) {
-  const analysis = typeof analysisJson === 'string' ? JSON.parse(analysisJson) : analysisJson;
-  const { sourceNote, sourceUrl, productName, brand, ...rest } = analysis || {};
-  return {
-    scanId: row.scan_id,
-    scanType: 'on_demand_lookup',
-    product: {
-      name: productName || row.query_name || 'Pet food',
-      brand: brand || row.brand || null,
-      manufacturer: brand || row.brand || null,
-    },
-    analysis: rest,
-    pet: { name: row.pet_name || 'your pet', petType: row.pet_type },
-    sourceNote: sourceNote || (sourceUrl ? `Source: ${sourceUrl}` : null),
-  };
-}
-
 async function getLookup(userId, id) {
   const [row] = await query('SELECT * FROM lookup_requests WHERE id = ? AND user_id = ?', [id, userId]);
   if (!row) return null;
-  let scanResult = null;
-  if (row.status === 'ready' && row.scan_id) {
-    const [scan] = await query('SELECT analysis_json FROM scan_history WHERE id = ? AND user_id = ?', [row.scan_id, userId]);
-    if (scan?.analysis_json) scanResult = scanResultFrom(row, scan.analysis_json);
-  }
-  const candidates = row.candidates_json
-    ? (typeof row.candidates_json === 'string' ? JSON.parse(row.candidates_json) : row.candidates_json)
-    : [];
+  const scanResult = null;
   return {
     id: row.id,
     status: row.status,
@@ -438,7 +389,7 @@ async function getLookup(userId, id) {
     frontImageUrl: row.front_image_url || null,
     ingredientImageUrl: row.ingredient_image_url || null,
     barcodeImageUrl: row.barcode_image_url || null,
-    candidates: row.status === 'needs_choice' ? candidates : [],
+    productId: row.product_id || null,
     scanResult,
     tokensAwarded: row.tokens_awarded,
     createdAt: row.created_at,
@@ -485,7 +436,6 @@ async function findReadyByBarcode(userId, barcode) {
 module.exports = {
   realEmail,
   createNameLookup,
-  chooseCandidate,
   getLookup,
   listLookups,
   ackLookup,
