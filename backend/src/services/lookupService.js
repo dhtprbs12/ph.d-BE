@@ -181,7 +181,7 @@ async function awardOnce(row, amount) {
   await tokenService.grantTokens(
     row.user_id,
     amount,
-    'on_demand_lookup',
+    'product_register',
     amount === 20 ? 'Food photos analyzed 🦴×20' : 'Food lookup ready 🦴×10',
     row.id,
   );
