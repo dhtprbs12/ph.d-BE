@@ -5,6 +5,7 @@ const router = express.Router();
 const { query } = require('../database/connection');
 const { authenticateToken } = require('../middleware/auth');
 const lookupService = require('../services/lookupService');
+const imageService = require('../services/imageService');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -27,6 +28,13 @@ function sendError(res, error) {
   const status = error.status || 500;
   if (status >= 500) console.error('[Lookup]', error);
   res.status(status).json({ error: error.message || 'Lookup failed' });
+}
+
+async function storeLookupPhoto(buffer, key) {
+  if (imageService.r2Client) {
+    return imageService.uploadToR2(buffer, key, 'image/jpeg', { skipResize: true, skipThumb: true });
+  }
+  return imageService.saveLocally(buffer, key.replace(/\//g, '_'));
 }
 
 router.post('/', authenticateToken, async (req, res) => {
@@ -120,17 +128,30 @@ router.post('/photo',
       await lookupService.assertDailyRoom(req.user.id);
       const id = uuidv4();
       const barcode = String(req.body.barcode || '').trim() || null;
+      const [frontImageUrl, ingredientImageUrl, barcodeImageUrl] = await Promise.all([
+        storeLookupPhoto(front.buffer, `lookups/${id}_front.jpg`),
+        storeLookupPhoto(ingredient.buffer, `lookups/${id}_ingredients.jpg`),
+        storeLookupPhoto(barcodeImage.buffer, `lookups/${id}_barcode.jpg`),
+      ]);
       await query(
         `INSERT INTO lookup_requests
-          (id, user_id, pet_id, pet_name, pet_type, barcode, status, entry, email_to)
-         VALUES (?, ?, ?, ?, ?, ?, 'queued', 'photo', ?)`,
-        [id, req.user.id, pet.id, pet.name, pet.petType, barcode, lookupService.realEmail(req.body.email)],
+          (id, user_id, pet_id, pet_name, pet_type, barcode, front_image_url, ingredient_image_url, barcode_image_url, status, entry, email_to)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'photo', ?)`,
+        [id, req.user.id, pet.id, pet.name, pet.petType, barcode, frontImageUrl, ingredientImageUrl, barcodeImageUrl, lookupService.realEmail(req.body.email)],
       );
       setImmediate(() => {
         lookupService.runPhotoLookup(id, ingredient.buffer, front.buffer)
           .catch((err) => console.error('[Lookup] async photo failed:', err.message));
       });
-      res.status(201).json({ id, status: 'queued', reused: false, tokensAwarded: 0 });
+      res.status(201).json({
+        id,
+        status: 'queued',
+        reused: false,
+        tokensAwarded: 0,
+        frontImageUrl,
+        ingredientImageUrl,
+        barcodeImageUrl,
+      });
     } catch (error) {
       sendError(res, error);
     }
