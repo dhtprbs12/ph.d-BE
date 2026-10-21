@@ -16,6 +16,63 @@ const ITCH_SPREAD = 15;   // percentage points of flagged check-ins
 const VOMIT_SPREAD = 15;
 const STOOL_SPREAD = 0.5; // average 1-5 stool score
 
+const MEAL_SLOTS = new Set(['morning', 'lunch', 'evening', 'snack']);
+const APPETITES = new Set(['low', 'normal', 'high']);
+const ITCH_VALUES = new Set(['scratching', 'licking', 'none']);
+const VOMIT_VALUES = new Set(['food', 'yellow', 'none']);
+
+function calendarDate(value) {
+  if (!value) return null;
+  if (typeof value === 'string') return value.slice(0, 10);
+  if (value instanceof Date) {
+    const y = value.getUTCFullYear();
+    const m = String(value.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(value.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(value).slice(0, 10);
+}
+
+function previousDate(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  return dt.toISOString().slice(0, 10);
+}
+
+function mapLog(row) {
+  return {
+    id: row.id,
+    date: calendarDate(row.date),
+    loggedAt: row.logged_at instanceof Date ? row.logged_at.toISOString() : (row.logged_at || null),
+    logType: row.log_type || 'health',
+    mealSlot: row.meal_slot || null,
+    stoolScore: row.stool_score == null ? null : Number(row.stool_score),
+    appetite: row.appetite || null,
+    vomiting: row.vomiting || null,
+    itching: row.itching || null,
+    notes: row.notes || null,
+    foodName: row.food_name || null,
+    foodImageUrl: row.food_image_url || null,
+  };
+}
+
+function summarizeHealth(rows) {
+  const health = rows.filter(row => (row.log_type || 'health') === 'health');
+  const scored = health.filter(row => row.stool_score != null && Number(row.stool_score) > 0);
+  const avgStool = scored.length
+    ? Math.round((scored.reduce((sum, row) => sum + Number(row.stool_score), 0) / scored.length) * 10) / 10
+    : null;
+  const itchDays = new Set(
+    health.filter(row => row.itching === 'scratching' || row.itching === 'licking').map(row => calendarDate(row.date))
+  ).size;
+  const vomitDays = new Set(
+    health.filter(row => row.vomiting === 'food' || row.vomiting === 'yellow').map(row => calendarDate(row.date))
+  ).size;
+  const dayCount = new Set(health.map(row => calendarDate(row.date))).size;
+  return { count: health.length, avgStool, itchDays, vomitDays, dayCount };
+}
+
 // Two foods can differ in a dozen ingredients. Naming all of them is noise, so
 // keep the ones listed earliest (ingredient lists are ordered by weight).
 const MAX_SUSPECTS = 3;
@@ -76,7 +133,11 @@ function groupAverages(foods) {
     foods: foods.map(f => ({ name: f.productName, isCurrent: f.isCurrent })),
     avgItchRate: Math.round(avg(f => f.itchRate)),
     avgVomitRate: Math.round(avg(f => f.vomitRate)),
-    avgStoolScore: Math.round(avg(f => f.avgStool) * 10) / 10,
+    avgStoolScore: (() => {
+      const scored = foods.filter(food => food.avgStool != null);
+      if (!scored.length) return null;
+      return Math.round(scored.reduce((sum, food) => sum + food.avgStool, 0) / scored.length * 10) / 10;
+    })(),
   };
 }
 
@@ -495,20 +556,18 @@ router.post('/:id/current-food', async (req, res, next) => {
       return res.status(400).json({ error: 'productName is required' });
     }
 
-    // End any current food
     await query(
-      'UPDATE pet_foods SET is_current = FALSE, ended_at = CURDATE(), updated_at = CURRENT_TIMESTAMP WHERE pet_id = ? AND is_current = TRUE',
+      'UPDATE pet_foods SET is_current = FALSE, ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE pet_id = ? AND is_current = TRUE',
       [req.params.id]
     );
 
-    // Insert new current food
     const foodId = uuidv4();
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
     await query(
       `INSERT INTO pet_foods (id, pet_id, product_id, scan_id, product_name, is_current, started_at)
-       VALUES (?, ?, ?, ?, ?, TRUE, ?)`,
-      [foodId, req.params.id, productId || null, scanId || null, productName, today]
+       VALUES (?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP)`,
+      [foodId, req.params.id, productId || null, scanId || null, productName]
     );
+    const [savedFood] = await query('SELECT started_at FROM pet_foods WHERE id = ?', [foodId]);
 
     res.status(201).json({
       currentFood: {
@@ -517,7 +576,7 @@ router.post('/:id/current-food', async (req, res, next) => {
         scanId: scanId || null,
         productName,
         brand: brand || null,
-        startedAt: today,
+        startedAt: savedFood?.started_at || null,
         daysOnFood: 1,
       },
     });
@@ -543,20 +602,18 @@ router.put('/:id/current-food', async (req, res, next) => {
       return res.status(400).json({ error: 'productName is required' });
     }
 
-    // End current food
     await query(
-      'UPDATE pet_foods SET is_current = FALSE, ended_at = CURDATE(), updated_at = CURRENT_TIMESTAMP WHERE pet_id = ? AND is_current = TRUE',
+      'UPDATE pet_foods SET is_current = FALSE, ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE pet_id = ? AND is_current = TRUE',
       [req.params.id]
     );
 
-    // Insert new
     const foodId = uuidv4();
-    const today = new Date().toISOString().split('T')[0];
     await query(
       `INSERT INTO pet_foods (id, pet_id, product_id, scan_id, product_name, is_current, started_at)
-       VALUES (?, ?, ?, ?, ?, TRUE, ?)`,
-      [foodId, req.params.id, productId || null, scanId || null, productName, today]
+       VALUES (?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP)`,
+      [foodId, req.params.id, productId || null, scanId || null, productName]
     );
+    const [savedFood] = await query('SELECT started_at FROM pet_foods WHERE id = ?', [foodId]);
 
     res.status(200).json({
       currentFood: {
@@ -565,7 +622,7 @@ router.put('/:id/current-food', async (req, res, next) => {
         scanId: scanId || null,
         productName,
         brand: brand || null,
-        startedAt: today,
+        startedAt: savedFood?.started_at || null,
         daysOnFood: 1,
       },
     });
@@ -637,27 +694,24 @@ router.get('/:id/checkins/summary', async (req, res, next) => {
     const fromDate = sevenDaysAgo.toISOString().split('T')[0];
 
     const checkins = await query(
-      'SELECT stool_score, appetite, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND date >= ?',
+      'SELECT date, log_type, stool_score, appetite, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND date >= ?',
       [req.params.id, fromDate]
     );
+    const health = summarizeHealth(checkins);
 
-    if (checkins.length === 0) {
+    if (health.count === 0) {
       return res.json({ summary: null, checkinCount: 0 });
     }
 
-    const avgStool = checkins.reduce((sum, c) => sum + (c.stool_score || 0), 0) / checkins.length;
-    const vomitCount = checkins.filter(c => c.vomiting).length;
-    const itchCount = checkins.filter(c => c.itching).length;
-
     res.json({
       summary: {
-        avgStoolScore: Math.round(avgStool * 10) / 10,
-        vomitCount,
-        itchCount,
-        totalCheckins: checkins.length,
+        avgStoolScore: health.avgStool,
+        vomitCount: health.vomitDays,
+        itchCount: health.itchDays,
+        totalCheckins: health.count,
         period: '7d',
       },
-      checkinCount: checkins.length,
+      checkinCount: health.count,
     });
   } catch (error) {
     next(error);
@@ -673,34 +727,36 @@ router.get('/:id/checkins', async (req, res, next) => {
     const existing = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
     if (existing.length === 0) return res.status(404).json({ error: 'Pet not found' });
 
-    const to = req.query.to || new Date().toISOString().split('T')[0];
-    const fromDefault = new Date();
-    fromDefault.setDate(fromDefault.getDate() - 30);
-    const from = req.query.from || fromDefault.toISOString().split('T')[0];
+    const recent = Math.min(Math.max(parseInt(req.query.recent, 10) || 0, 0), 20);
+    let checkins;
+    if (recent) {
+      checkins = await query(
+        `SELECT dc.*, pf.product_name as food_name, p.image_url as food_image_url
+         FROM daily_checkins dc
+         LEFT JOIN pet_foods pf ON dc.pet_food_id = pf.id
+         LEFT JOIN products p ON pf.product_id = p.id
+         WHERE dc.pet_id = ?
+         ORDER BY dc.logged_at DESC
+         LIMIT ${recent}`,
+        [req.params.id]
+      );
+    } else {
+      const to = req.query.to || new Date().toISOString().split('T')[0];
+      const fromDefault = new Date();
+      fromDefault.setDate(fromDefault.getDate() - 30);
+      const from = req.query.from || fromDefault.toISOString().split('T')[0];
+      checkins = await query(
+        `SELECT dc.*, pf.product_name as food_name, p.image_url as food_image_url
+         FROM daily_checkins dc
+         LEFT JOIN pet_foods pf ON dc.pet_food_id = pf.id
+         LEFT JOIN products p ON pf.product_id = p.id
+         WHERE dc.pet_id = ? AND dc.date BETWEEN ? AND ?
+         ORDER BY dc.logged_at ASC`,
+        [req.params.id, from, to]
+      );
+    }
 
-    const checkins = await query(
-      `SELECT dc.*, pf.product_name as food_name, p.image_url as food_image_url
-       FROM daily_checkins dc
-       LEFT JOIN pet_foods pf ON dc.pet_food_id = pf.id
-       LEFT JOIN products p ON pf.product_id = p.id
-       WHERE dc.pet_id = ? AND dc.date BETWEEN ? AND ?
-       ORDER BY dc.date DESC`,
-      [req.params.id, from, to]
-    );
-
-    res.json({
-      checkins: checkins.map(c => ({
-        id: c.id,
-        date: c.date,
-        stoolScore: c.stool_score,
-        appetite: c.appetite,
-        vomiting: !!c.vomiting,
-        itching: !!c.itching,
-        notes: c.notes,
-        foodName: c.food_name,
-        foodImageUrl: c.food_image_url || null,
-      })),
-    });
+    res.json({ checkins: checkins.map(mapLog) });
   } catch (error) {
     next(error);
   }
@@ -719,62 +775,65 @@ router.post('/:id/checkins', async (req, res, next) => {
     const [pet] = await query('SELECT id, name FROM pets WHERE id = ? AND user_id = ?', [petId, userId]);
     if (!pet) return res.status(404).json({ error: 'Pet not found' });
 
-    const { stoolScore, appetite, vomiting, itching, notes, localDate } = req.body;
-    if (!localDate) return res.status(400).json({ error: 'localDate is required' });
-    if (!stoolScore || stoolScore < 1 || stoolScore > 5) {
-      return res.status(400).json({ error: 'stoolScore (1-5) is required' });
+    const { localDate, logType } = req.body;
+    if (!localDate || !/^\d{4}-\d{2}-\d{2}$/.test(localDate)) {
+      return res.status(400).json({ error: 'localDate is required' });
+    }
+    if (logType !== 'meal' && logType !== 'health') {
+      return res.status(400).json({ error: 'logType must be meal or health' });
     }
 
-    // Get current food if any (for linking)
     const [currentFood] = await query(
-      'SELECT id FROM pet_foods WHERE pet_id = ? AND is_current = TRUE LIMIT 1',
+      'SELECT id, product_name FROM pet_foods WHERE pet_id = ? AND is_current = TRUE LIMIT 1',
       [petId]
     );
+    if (!currentFood) return res.status(400).json({ error: 'Set a current food first' });
 
-    const [existingCheckin] = await query(
-      'SELECT id FROM daily_checkins WHERE pet_id = ? AND date = ? LIMIT 1',
-      [petId, localDate]
-    );
+    let mealSlot = null;
+    let appetite = null;
+    let stoolScore = null;
+    let itching = null;
+    let vomiting = null;
+    let notes = null;
 
-    if (existingCheckin) {
-      await query(
-        `UPDATE daily_checkins
-         SET pet_food_id = ?, stool_score = ?, appetite = ?, vomiting = ?, itching = ?, notes = ?
-         WHERE id = ?`,
-        [currentFood?.id || null, stoolScore, appetite || 'normal', vomiting ? 1 : 0, itching ? 1 : 0, notes || null, existingCheckin.id]
-      );
-
-      const [streakRow] = await query(
-        'SELECT current_streak, longest_streak FROM user_streaks WHERE user_id = ?',
-        [userId]
-      );
-
-      return res.json({
-        checkin: {
-          id: existingCheckin.id,
-          petId,
-          date: localDate,
-          stoolScore,
-          appetite: appetite || 'normal',
-          vomiting: !!vomiting,
-          itching: !!itching,
-          notes: notes || null,
-        },
-        tokensAwarded: 0,
-        streakInfo: {
-          currentStreak: streakRow?.current_streak || 0,
-          longestStreak: streakRow?.longest_streak || 0,
-          streakBonus: 0,
-        },
-        updated: true,
-      });
+    if (logType === 'meal') {
+      if (req.body.mealSlot) {
+        if (!MEAL_SLOTS.has(req.body.mealSlot)) return res.status(400).json({ error: 'Invalid meal slot' });
+        mealSlot = req.body.mealSlot;
+      }
+      if (req.body.appetite) {
+        if (!APPETITES.has(req.body.appetite)) return res.status(400).json({ error: 'Invalid appetite' });
+        appetite = req.body.appetite;
+      }
+    } else {
+      if (req.body.stoolScore != null && req.body.stoolScore !== '') {
+        const score = Number(req.body.stoolScore);
+        if (!Number.isInteger(score) || score < 1 || score > 5) {
+          return res.status(400).json({ error: 'stoolScore must be 1-5' });
+        }
+        stoolScore = score;
+      }
+      if (req.body.itching) {
+        if (!ITCH_VALUES.has(req.body.itching)) return res.status(400).json({ error: 'Invalid itching' });
+        itching = req.body.itching;
+      }
+      if (req.body.vomiting) {
+        if (!VOMIT_VALUES.has(req.body.vomiting)) return res.status(400).json({ error: 'Invalid vomiting' });
+        vomiting = req.body.vomiting;
+      }
+      notes = req.body.notes ? String(req.body.notes).trim().slice(0, 500) : null;
+      const hasSymptom = (itching && itching !== 'none') || (vomiting && vomiting !== 'none');
+      if (stoolScore == null && !hasSymptom && !notes) {
+        return res.status(400).json({ error: 'Add a stool score, symptom, or note' });
+      }
     }
 
     const checkinId = uuidv4();
     await query(
-      `INSERT INTO daily_checkins (id, pet_id, pet_food_id, date, stool_score, appetite, vomiting, itching, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [checkinId, petId, currentFood?.id || null, localDate, stoolScore, appetite || 'normal', vomiting ? 1 : 0, itching ? 1 : 0, notes || null]
+      `INSERT INTO daily_checkins
+        (id, pet_id, pet_food_id, date, logged_at, log_type, meal_slot, stool_score, appetite, vomiting, itching, notes)
+       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?)`,
+      [checkinId, petId, currentFood.id, localDate, logType, mealSlot, stoolScore, appetite, vomiting, itching, notes]
     );
 
     // ── Token + Streak logic ──
@@ -792,7 +851,7 @@ router.post('/:id/checkins', async (req, res, next) => {
       [userId, localDate, petId]
     );
     if (!existingTx) {
-      await grantTokens(userId, 5, 'checkin', 'Health check-in 🦴×5', checkinId);
+      await grantTokens(userId, 5, 'checkin', 'Daily log 🦴×5', checkinId);
       tokensAwarded = 5;
     }
 
@@ -801,18 +860,15 @@ router.post('/:id/checkins', async (req, res, next) => {
     const [streakRow] = await query('SELECT current_streak, longest_streak, last_checkin_date FROM user_streaks WHERE user_id = ?', [userId]);
 
     if (streakRow) {
-      const lastDate = streakRow.last_checkin_date ? new Date(streakRow.last_checkin_date).toISOString().split('T')[0] : null;
-      const localDateStr = localDate; // YYYY-MM-DD from client
+      const lastDate = calendarDate(streakRow.last_checkin_date);
+      const localDateStr = localDate;
 
       let newStreak = streakRow.current_streak;
 
       if (lastDate === localDateStr) {
-        // Same day — no change
+        // Same phone day — no change
       } else {
-        // Check if yesterday
-        const yesterday = new Date(localDateStr);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayStr = yesterday.toISOString().split('T')[0];
+        const yesterdayStr = previousDate(localDateStr);
 
         if (lastDate === yesterdayStr) {
           newStreak = streakRow.current_streak + 1;
@@ -853,17 +909,17 @@ router.post('/:id/checkins', async (req, res, next) => {
       streakInfo = { currentStreak: newStreak, longestStreak: newLongest, streakBonus };
     }
 
+    const [saved] = await query(
+      `SELECT dc.*, pf.product_name as food_name, p.image_url as food_image_url
+       FROM daily_checkins dc
+       LEFT JOIN pet_foods pf ON dc.pet_food_id = pf.id
+       LEFT JOIN products p ON pf.product_id = p.id
+       WHERE dc.id = ?`,
+      [checkinId]
+    );
+
     res.status(201).json({
-      checkin: {
-        id: checkinId,
-        petId,
-        date: localDate,
-        stoolScore,
-        appetite: appetite || 'normal',
-        vomiting: !!vomiting,
-        itching: !!itching,
-        notes: notes || null,
-      },
+      checkin: mapLog(saved),
       tokensAwarded,
       streakInfo,
     });
@@ -988,17 +1044,12 @@ router.get('/:id/passport', async (req, res, next) => {
     for (const food of foods) {
       const fromDate = food.started_at;
       const toDate = food.ended_at || new Date().toISOString().split('T')[0];
-      
+
       const checkins = await query(
-        'SELECT stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND pet_food_id = ?',
+        'SELECT date, log_type, stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND pet_food_id = ?',
         [req.params.id, food.id]
       );
-      
-      const avgStool = checkins.length > 0
-        ? Math.round((checkins.reduce((s, c) => s + (c.stool_score || 0), 0) / checkins.length) * 10) / 10
-        : null;
-      const vomitCount = checkins.filter(c => c.vomiting).length;
-      const itchCount = checkins.filter(c => c.itching).length;
+      const health = summarizeHealth(checkins);
 
       timeline.push({
         id: food.id,
@@ -1010,10 +1061,10 @@ router.get('/:id/passport', async (req, res, next) => {
         endedAt: food.ended_at,
         daysOnFood: Math.max(1, Math.floor((new Date(toDate) - new Date(fromDate)) / (1000 * 60 * 60 * 24)) + 1),
         stats: {
-          checkinCount: checkins.length,
-          avgStoolScore: avgStool,
-          vomitCount,
-          itchCount,
+          checkinCount: health.count,
+          avgStoolScore: health.avgStool,
+          vomitCount: health.vomitDays,
+          itchCount: health.itchDays,
         },
         hasIngredients: !!food.raw_ingredients_text,
       });
@@ -1054,11 +1105,11 @@ router.get('/:id/insights', async (req, res, next) => {
     const allNames = new Set();
     for (const food of foods) {
       const checkins = await query(
-        'SELECT stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND pet_food_id = ?',
+        'SELECT date, log_type, stool_score, vomiting, itching FROM daily_checkins WHERE pet_id = ? AND pet_food_id = ?',
         [req.params.id, food.id]
       );
-
-      if (checkins.length < 3) continue;
+      const health = summarizeHealth(checkins);
+      if (health.count < 3) continue;
 
       let parsed = [];
       try {
@@ -1075,19 +1126,16 @@ router.get('/:id/insights', async (req, res, next) => {
       });
       if (positions.size === 0) continue;
 
-      const avgStool = checkins.reduce((s, c) => s + (c.stool_score || 0), 0) / checkins.length;
-      const itchRate = checkins.filter(c => c.itching).length / checkins.length;
-      const vomitRate = checkins.filter(c => c.vomiting).length / checkins.length;
-
+      const dayCount = health.dayCount || 1;
       foodStats.push({
         foodId: food.id,
         productName: food.product_name,
         isCurrent: !!food.is_current,
         brand: food.brand,
-        checkinCount: checkins.length,
-        avgStool: Math.round(avgStool * 10) / 10,
-        itchRate: Math.round(itchRate * 100),
-        vomitRate: Math.round(vomitRate * 100),
+        checkinCount: health.count,
+        avgStool: health.avgStool,
+        itchRate: Math.round((health.itchDays / dayCount) * 100),
+        vomitRate: Math.round((health.vomitDays / dayCount) * 100),
         positions,
       });
     }
@@ -1148,7 +1196,10 @@ router.get('/:id/insights', async (req, res, next) => {
 
     // One stool finding only — the worse-side and better-side suspects are two
     // readings of the same split, so prefer the actionable one.
-    const stoolSplit = splitFoodsBySymptom(foodStats, f => f.avgStool, STOOL_SPREAD, false);
+    const stoolFoods = foodStats.filter(food => food.avgStool != null);
+    const stoolSplit = stoolFoods.length >= 2
+      ? splitFoodsBySymptom(stoolFoods, f => f.avgStool, STOOL_SPREAD, false)
+      : null;
     if (stoolSplit) {
       if (ingredientsUniqueTo(stoolSplit.worse, stoolSplit.better).length > 0) {
         candidates.push({ split: stoolSplit, type: 'stool_negative', phrase: 'worse stool quality' });

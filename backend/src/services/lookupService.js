@@ -5,7 +5,6 @@ const ingredientAnalyzer = require('./ingredientAnalyzer');
 const tokenService = require('./tokenService');
 const { notifyLookup } = require('./lookupNotify');
 
-const DAILY_LIMIT = 10;
 const BANNED_HOSTS = ['reddit.com', 'facebook.com', 'instagram.com', 'youtube.com', 'youtu.be', 'quora.com', 'tiktok.com', 'pinterest.com', 'x.com', 'twitter.com'];
 const VALID_RECS = new Set(['highly_recommended', 'recommended', 'acceptable', 'caution', 'not_recommended']);
 
@@ -325,18 +324,6 @@ function realEmail(value) {
   return email;
 }
 
-async function assertDailyRoom(userId) {
-  const [row] = await query(
-    `SELECT COUNT(*) AS c FROM lookup_requests WHERE user_id = ? AND created_at >= CURDATE()`,
-    [userId],
-  );
-  if (Number(row?.c || 0) >= DAILY_LIMIT) {
-    const error = new Error('You can request 10 food lookups a day.');
-    error.status = 429;
-    throw error;
-  }
-}
-
 async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, email }) {
   const brandNorm = norm(brand);
   const nameNorm = norm(queryName);
@@ -353,7 +340,6 @@ async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, emai
   );
   if (existing) return { id: existing.id, status: 'ready', reused: true, tokensAwarded: 0 };
 
-  await assertDailyRoom(userId);
   const id = uuidv4();
   const url = pastedUrl ? stripUrl(pastedUrl) : null;
   if (pastedUrl && !url) {
@@ -441,5 +427,4 @@ module.exports = {
   ackLookup,
   findReadyByBarcode,
   runPhotoLookup,
-  assertDailyRoom,
 };

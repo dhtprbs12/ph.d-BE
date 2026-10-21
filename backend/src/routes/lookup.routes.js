@@ -114,7 +114,6 @@ router.post('/photo',
         name: req.body.petName || null,
         petType: req.body.petType === 'cat' ? 'cat' : 'dog',
       };
-      await lookupService.assertDailyRoom(req.user.id);
       const id = uuidv4();
       const barcode = String(req.body.barcode || '').trim() || null;
       const [frontImageUrl, ingredientImageUrl, barcodeImageUrl] = await Promise.all([
