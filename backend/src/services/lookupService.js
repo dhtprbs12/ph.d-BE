@@ -424,6 +424,7 @@ async function getLookup(userId, id) {
     brand: row.brand,
     queryName: row.query_name,
     entry: row.entry,
+    petName: row.pet_name || null,
     frontImageUrl: row.front_image_url || null,
     ingredientImageUrl: row.ingredient_image_url || null,
     barcodeImageUrl: row.barcode_image_url || null,
@@ -436,7 +437,7 @@ async function getLookup(userId, id) {
 
 async function listLookups(userId) {
   const rows = await query(
-    `SELECT id, status, brand, query_name, entry, failure_reason, created_at
+    `SELECT id, status, brand, query_name, pet_name, entry, failure_reason, created_at
      FROM lookup_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 50`,
     [userId],
   );
@@ -449,6 +450,7 @@ async function listLookups(userId) {
       brand: row.brand,
       queryName: row.query_name,
       entry: row.entry,
+      petName: row.pet_name || null,
       failureReason: row.failure_reason,
       createdAt: row.created_at,
     })),
