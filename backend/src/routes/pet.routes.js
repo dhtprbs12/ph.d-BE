@@ -520,6 +520,13 @@ router.get('/:id/current-food', async (req, res, next) => {
     const now = new Date();
     const daysOnFood = Math.floor((now - startedAt) / (1000 * 60 * 60 * 24)) + 1;
 
+    const [pendingLookup] = await query(
+      `SELECT id FROM lookup_requests
+       WHERE pet_food_id = ? AND status IN ('queued', 'searching', 'needs_choice')
+       LIMIT 1`,
+      [food.id],
+    );
+
     res.json({
       currentFood: {
         id: food.id,
@@ -532,6 +539,7 @@ router.get('/:id/current-food', async (req, res, next) => {
         barcode: food.barcode || null,
         startedAt: food.started_at,
         daysOnFood,
+        analysisPending: !!pendingLookup,
       },
     });
   } catch (error) {
