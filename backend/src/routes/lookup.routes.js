@@ -52,6 +52,7 @@ router.post('/', authenticateToken, async (req, res) => {
       queryName: req.body.queryName,
       pastedUrl: req.body.pastedUrl,
       email: req.body.email,
+      setAsCurrentFood: req.body.setAsCurrentFood === true,
     });
     res.status(created.reused ? 200 : 201).json(created);
   } catch (error) {
@@ -106,8 +107,9 @@ router.post('/photo',
       const front = req.files?.frontImage?.[0];
       const ingredient = req.files?.ingredientImage?.[0];
       const barcodeImage = req.files?.barcodeImage?.[0];
-      if (!front || !ingredient || !barcodeImage) {
-        return res.status(400).json({ error: 'Front, ingredient, and barcode photos are required' });
+      const barcode = String(req.body.barcode || '').trim() || null;
+      if (!front || !ingredient || (!barcodeImage && !barcode)) {
+        return res.status(400).json({ error: 'Front and ingredient photos are required' });
       }
       const pet = {
         id: req.body.petId || null,
@@ -115,17 +117,25 @@ router.post('/photo',
         petType: req.body.petType === 'cat' ? 'cat' : 'dog',
       };
       const id = uuidv4();
-      const barcode = String(req.body.barcode || '').trim() || null;
+      const setAsCurrentFood = req.body.setAsCurrentFood === '1' || req.body.setAsCurrentFood === 'true';
       const [frontImageUrl, ingredientImageUrl, barcodeImageUrl] = await Promise.all([
         storeLookupPhoto(front.buffer, `lookups/${id}_front.jpg`),
         storeLookupPhoto(ingredient.buffer, `lookups/${id}_ingredients.jpg`),
-        storeLookupPhoto(barcodeImage.buffer, `lookups/${id}_barcode.jpg`),
+        barcodeImage ? storeLookupPhoto(barcodeImage.buffer, `lookups/${id}_barcode.jpg`) : Promise.resolve(null),
       ]);
+      let petFoodId = null;
+      if (setAsCurrentFood) {
+        petFoodId = await lookupService.ensureCurrentFood(
+          req.user.id,
+          pet,
+          String(req.body.productName || barcode || 'Scanned food'),
+        );
+      }
       await query(
         `INSERT INTO lookup_requests
-          (id, user_id, pet_id, pet_name, pet_type, barcode, front_image_url, ingredient_image_url, barcode_image_url, status, entry, email_to)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'photo', ?)`,
-        [id, req.user.id, pet.id, pet.name, pet.petType, barcode, frontImageUrl, ingredientImageUrl, barcodeImageUrl, lookupService.realEmail(req.body.email)],
+          (id, user_id, pet_id, pet_food_id, pet_name, pet_type, barcode, front_image_url, ingredient_image_url, barcode_image_url, status, entry, email_to)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'photo', ?)`,
+        [id, req.user.id, pet.id, petFoodId, pet.name, pet.petType, barcode, frontImageUrl, ingredientImageUrl, barcodeImageUrl, lookupService.realEmail(req.body.email)],
       );
       res.status(201).json({
         id,

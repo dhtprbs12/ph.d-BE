@@ -250,8 +250,7 @@ async function finishFromExtracted(row, extracted, amount, sourceNote) {
   } catch (err) {
     console.warn('[Lookup] token grant failed:', err.message);
   }
-  const food = extracted.productName || row.query_name || 'your food';
-  await notifyLookup(row, `${petName}'s analysis for ${food} is ready.`, { lookupId: row.id, scanId });
+  await notifyLookup(row, `${petName}'s analysis request is ready.`, { lookupId: row.id, scanId });
 }
 
 async function runNameLookup(id) {
@@ -324,7 +323,43 @@ function realEmail(value) {
   return email;
 }
 
-async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, email }) {
+async function ensureCurrentFood(userId, pet, productName) {
+  if (!pet?.id) {
+    const error = new Error('Pet is required');
+    error.status = 400;
+    throw error;
+  }
+  const owned = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [pet.id, userId]);
+  if (!owned.length) {
+    const error = new Error('Pet not found');
+    error.status = 404;
+    throw error;
+  }
+  const [current] = await query(
+    'SELECT id FROM pet_foods WHERE pet_id = ? AND is_current = TRUE LIMIT 1',
+    [pet.id],
+  );
+  if (current) {
+    const error = new Error('This pet already has a current food');
+    error.status = 409;
+    throw error;
+  }
+  const name = String(productName || '').trim().slice(0, 300);
+  if (!name) {
+    const error = new Error('Product name is required');
+    error.status = 400;
+    throw error;
+  }
+  const foodId = uuidv4();
+  await query(
+    `INSERT INTO pet_foods (id, pet_id, product_id, scan_id, product_name, is_current, started_at)
+     VALUES (?, ?, NULL, NULL, ?, TRUE, CURRENT_TIMESTAMP)`,
+    [foodId, pet.id, name],
+  );
+  return foodId;
+}
+
+async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, email, setAsCurrentFood }) {
   const brandNorm = norm(brand);
   const nameNorm = norm(queryName);
   if (!brandNorm || !nameNorm) {
@@ -332,28 +367,45 @@ async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, emai
     error.status = 400;
     throw error;
   }
-  const [existing] = await query(
-    `SELECT id FROM lookup_requests
-     WHERE user_id = ? AND pet_id <=> ? AND brand_norm = ? AND query_name_norm = ? AND status = 'ready'
-     LIMIT 1`,
-    [userId, pet.id || null, brandNorm, nameNorm],
-  );
-  if (existing) return { id: existing.id, status: 'ready', reused: true, tokensAwarded: 0 };
-
-  const id = uuidv4();
   const url = pastedUrl ? stripUrl(pastedUrl) : null;
   if (pastedUrl && !url) {
     const error = new Error('Purchase link must be an http(s) URL');
     error.status = 400;
     throw error;
   }
+
+  const [existing] = await query(
+    `SELECT id, status, product_id, pet_food_id FROM lookup_requests
+     WHERE user_id = ? AND pet_id <=> ? AND brand_norm = ? AND query_name_norm = ?
+       AND status IN ('queued', 'searching', 'ready')
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [userId, pet.id || null, brandNorm, nameNorm],
+  );
+  if (existing) {
+    if (setAsCurrentFood && !existing.pet_food_id) {
+      const foodId = await ensureCurrentFood(userId, pet, queryName.trim());
+      if (existing.product_id) {
+        await query('UPDATE pet_foods SET product_id = ?, product_name = ? WHERE id = ?', [existing.product_id, queryName.trim().slice(0, 300), foodId]);
+      }
+      await query('UPDATE lookup_requests SET pet_food_id = ? WHERE id = ? AND pet_food_id IS NULL', [foodId, existing.id]);
+    }
+    return { id: existing.id, status: existing.status, reused: true, tokensAwarded: 0, productId: existing.product_id || null };
+  }
+
+  let petFoodId = null;
+  if (setAsCurrentFood) {
+    petFoodId = await ensureCurrentFood(userId, pet, queryName.trim());
+  }
+
+  const id = uuidv4();
   await query(
     `INSERT INTO lookup_requests
-      (id, user_id, pet_id, pet_name, pet_type, brand, query_name, brand_norm, query_name_norm,
+      (id, user_id, pet_id, pet_food_id, pet_name, pet_type, brand, query_name, brand_norm, query_name_norm,
        pasted_url, status, entry, email_to)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'name', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'name', ?)`,
     [
-      id, userId, pet.id || null, pet.name || null, pet.petType === 'cat' ? 'cat' : 'dog',
+      id, userId, pet.id || null, petFoodId, pet.name || null, pet.petType === 'cat' ? 'cat' : 'dog',
       brand.trim(), queryName.trim(), brandNorm, nameNorm,
       url, realEmail(email),
     ],
@@ -421,6 +473,7 @@ async function findReadyByBarcode(userId, barcode) {
 
 module.exports = {
   realEmail,
+  ensureCurrentFood,
   createNameLookup,
   getLookup,
   listLookups,
