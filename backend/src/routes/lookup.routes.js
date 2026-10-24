@@ -53,6 +53,7 @@ router.post('/', authenticateToken, async (req, res) => {
       pastedUrl: req.body.pastedUrl,
       email: req.body.email,
       setAsCurrentFood: req.body.setAsCurrentFood === true,
+      replaceCurrentFood: req.body.replaceCurrentFood === true,
     });
     res.status(created.reused ? 200 : 201).json(created);
   } catch (error) {
@@ -118,6 +119,7 @@ router.post('/photo',
       };
       const id = uuidv4();
       const setAsCurrentFood = req.body.setAsCurrentFood === '1' || req.body.setAsCurrentFood === 'true';
+      const replaceCurrentFood = req.body.replaceCurrentFood === '1' || req.body.replaceCurrentFood === 'true';
       const [frontImageUrl, ingredientImageUrl, barcodeImageUrl] = await Promise.all([
         storeLookupPhoto(front.buffer, `lookups/${id}_front.jpg`),
         storeLookupPhoto(ingredient.buffer, `lookups/${id}_ingredients.jpg`),
@@ -129,6 +131,7 @@ router.post('/photo',
           req.user.id,
           pet,
           String(req.body.productName || barcode || 'Scanned food'),
+          replaceCurrentFood,
         );
       }
       await query(

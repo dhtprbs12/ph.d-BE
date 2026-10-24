@@ -323,7 +323,7 @@ function realEmail(value) {
   return email;
 }
 
-async function ensureCurrentFood(userId, pet, productName) {
+async function ensureCurrentFood(userId, pet, productName, replace = false) {
   if (!pet?.id) {
     const error = new Error('Pet is required');
     error.status = 400;
@@ -339,10 +339,16 @@ async function ensureCurrentFood(userId, pet, productName) {
     'SELECT id FROM pet_foods WHERE pet_id = ? AND is_current = TRUE LIMIT 1',
     [pet.id],
   );
-  if (current) {
+  if (current && !replace) {
     const error = new Error('This pet already has a current food');
     error.status = 409;
     throw error;
+  }
+  if (current && replace) {
+    await query(
+      'UPDATE pet_foods SET is_current = FALSE, ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [current.id],
+    );
   }
   const name = String(productName || '').trim().slice(0, 300);
   if (!name) {
@@ -359,7 +365,7 @@ async function ensureCurrentFood(userId, pet, productName) {
   return foodId;
 }
 
-async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, email, setAsCurrentFood }) {
+async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, email, setAsCurrentFood, replaceCurrentFood }) {
   const brandNorm = norm(brand);
   const nameNorm = norm(queryName);
   if (!brandNorm || !nameNorm) {
@@ -384,7 +390,7 @@ async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, emai
   );
   if (existing) {
     if (setAsCurrentFood && !existing.pet_food_id) {
-      const foodId = await ensureCurrentFood(userId, pet, queryName.trim());
+      const foodId = await ensureCurrentFood(userId, pet, queryName.trim(), replaceCurrentFood === true);
       if (existing.product_id) {
         await query('UPDATE pet_foods SET product_id = ?, product_name = ? WHERE id = ?', [existing.product_id, queryName.trim().slice(0, 300), foodId]);
       }
@@ -395,7 +401,7 @@ async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, emai
 
   let petFoodId = null;
   if (setAsCurrentFood) {
-    petFoodId = await ensureCurrentFood(userId, pet, queryName.trim());
+    petFoodId = await ensureCurrentFood(userId, pet, queryName.trim(), replaceCurrentFood === true);
   }
 
   const id = uuidv4();
