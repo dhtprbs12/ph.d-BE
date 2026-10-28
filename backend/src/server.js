@@ -15,6 +15,7 @@ const communityRoutes = require('./routes/community.routes');
 const gamificationRoutes = require('./routes/gamification.routes');
 const shopRoutes = require('./routes/shop.routes');
 const lookupRoutes = require('./routes/lookup.routes');
+const billingRoutes = require('./routes/billing.routes');
 
 const errorHandler = require('./middleware/errorHandler');
 const { connectDB } = require('./database/connection');
@@ -74,6 +75,7 @@ app.use('/api/community', communityRoutes);
 app.use('/api/gamification', gamificationRoutes);
 app.use('/api/shop', shopRoutes);
 app.use('/api/lookups', lookupRoutes);
+app.use('/api/billing', billingRoutes);
 
 // Error handling
 app.use(errorHandler);

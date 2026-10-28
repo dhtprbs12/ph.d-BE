@@ -52,6 +52,7 @@ function mapLog(row) {
     vomiting: row.vomiting || null,
     itching: row.itching || null,
     notes: row.notes || null,
+    petFoodId: row.pet_food_id || null,
     foodName: row.food_name || null,
     foodImageUrl: row.food_image_url || null,
   };
@@ -1244,7 +1245,18 @@ router.get('/:id/insights', async (req, res, next) => {
       if (insight) insights.push(insight);
     }
 
-    res.json({ insights });
+    // Strip detail numbers for non-Plus users so the response never leaks them
+    const { isPlus } = require('../services/billingService');
+    const [userRow] = await query('SELECT plus_expires_at FROM users WHERE id = ?', [req.user.id]);
+    const userIsPlus = userRow && isPlus(userRow);
+
+    const safeInsights = insights.map(ins => {
+      if (userIsPlus) return ins;
+      const { data, ...rest } = ins;
+      return rest;
+    });
+
+    res.json({ insights: safeInsights, plus: !!userIsPlus });
   } catch (error) {
     next(error);
   }

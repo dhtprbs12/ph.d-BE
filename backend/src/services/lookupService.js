@@ -111,7 +111,22 @@ async function grounded(prompt) {
   return parts.map((part) => part.text || '').join('\n');
 }
 
-function searchPrompt({ brand, name, url, hints, officialOnly }) {
+function foodSearchLine({ brand, name, protein, lifeStage, foodForm, url }) {
+  const details = [
+    brand ? `brand "${brand}"` : '',
+    name ? `product "${name}"` : '',
+    protein ? `protein "${protein}"` : '',
+    lifeStage ? `life stage "${lifeStage}"` : '',
+    foodForm ? `${foodForm} food` : '',
+  ].filter(Boolean).join(', ');
+  if (url) {
+    return `- Read only this URL: ${url}
+- It must be this food: ${details}. If the page is a different protein, life stage, or dry/wet form, extracted must be null.`;
+  }
+  return `- Find pages for this food only: ${details}. Do not use a different protein, life stage, or dry/wet form.`;
+}
+
+function searchPrompt({ brand, name, protein, lifeStage, foodForm, url, hints, officialOnly }) {
   const hintText = hints ? JSON.stringify(hints) : 'none';
   return `You look up one US pet food from pages that publish the label as text.
 Return ONLY JSON, no markdown:
@@ -132,13 +147,13 @@ Rules:
 - Prefer the brand's official product page over a store page.
 - Filter hints are preferences only. If the page disagrees, follow the page. Hints: ${hintText}
 ${officialOnly ? '- Search only the brand official website.' : ''}
-${url ? `- Read only this URL: ${url}` : `- Find pages for brand "${brand}" and product "${name}".`}
+${foodSearchLine({ brand, name, protein, lifeStage, foodForm, url })}
 If several different recipes match, return up to 3 candidates and extracted null.
 If one page clearly matches and has both lists as text, fill extracted from that page only.`;
 }
 
-async function findLabel({ brand, name, url, hints, strict }) {
-  const first = parseModelJson(await grounded(searchPrompt({ brand, name, url, hints, officialOnly: false })));
+async function findLabel({ brand, name, protein, lifeStage, foodForm, url, hints, strict }) {
+  const first = parseModelJson(await grounded(searchPrompt({ brand, name, protein, lifeStage, foodForm, url, hints, officialOnly: false })));
   const extracted = validateExtracted(first.extracted);
   const candidates = (Array.isArray(first.candidates) ? first.candidates : [])
     .map((item) => {
@@ -160,6 +175,9 @@ async function findLabel({ brand, name, url, hints, strict }) {
     const second = parseModelJson(await grounded(searchPrompt({
       brand,
       name: title,
+      protein,
+      lifeStage,
+      foodForm,
       url: null,
       hints,
       officialOnly: true,
@@ -261,6 +279,9 @@ async function runNameLookup(id) {
     const found = await findLabel({
       brand: row.brand,
       name: row.query_name,
+      protein: row.protein,
+      lifeStage: row.life_stage,
+      foodForm: row.food_form,
       url: row.pasted_url,
       hints: null,
       strict: false,
@@ -365,11 +386,19 @@ async function ensureCurrentFood(userId, pet, productName, replace = false) {
   return foodId;
 }
 
-async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, email, setAsCurrentFood, replaceCurrentFood }) {
+function choice(value, allowed) {
+  const text = norm(value);
+  return allowed.includes(text) ? text : null;
+}
+
+async function createNameLookup({ userId, pet, brand, queryName, protein, lifeStage, foodForm, pastedUrl, email, setAsCurrentFood, replaceCurrentFood }) {
   const brandNorm = norm(brand);
   const nameNorm = norm(queryName);
-  if (!brandNorm || !nameNorm) {
-    const error = new Error('Brand and product name are both required');
+  const proteinNorm = norm(protein);
+  const stage = choice(lifeStage, ['puppy', 'kitten', 'adult', 'senior', 'all']);
+  const form = choice(foodForm, ['dry', 'wet']);
+  if (!brandNorm || !nameNorm || !proteinNorm) {
+    const error = new Error('Brand, product name, and protein are required');
     error.status = 400;
     throw error;
   }
@@ -383,10 +412,11 @@ async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, emai
   const [existing] = await query(
     `SELECT id, status, product_id, pet_food_id FROM lookup_requests
      WHERE user_id = ? AND pet_id <=> ? AND brand_norm = ? AND query_name_norm = ?
+       AND protein_norm <=> ? AND life_stage <=> ? AND food_form <=> ?
        AND status IN ('queued', 'searching', 'ready')
      ORDER BY created_at DESC
      LIMIT 1`,
-    [userId, pet.id || null, brandNorm, nameNorm],
+    [userId, pet.id || null, brandNorm, nameNorm, proteinNorm, stage, form],
   );
   if (existing) {
     if (setAsCurrentFood && !existing.pet_food_id) {
@@ -408,11 +438,12 @@ async function createNameLookup({ userId, pet, brand, queryName, pastedUrl, emai
   await query(
     `INSERT INTO lookup_requests
       (id, user_id, pet_id, pet_food_id, pet_name, pet_type, brand, query_name, brand_norm, query_name_norm,
-       pasted_url, status, entry, email_to)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'name', ?)`,
+       protein, protein_norm, life_stage, food_form, pasted_url, status, entry, email_to)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'name', ?)`,
     [
       id, userId, pet.id || null, petFoodId, pet.name || null, pet.petType === 'cat' ? 'cat' : 'dog',
       brand.trim(), queryName.trim(), brandNorm, nameNorm,
+      protein.trim(), proteinNorm, stage, form,
       url, realEmail(email),
     ],
   );
