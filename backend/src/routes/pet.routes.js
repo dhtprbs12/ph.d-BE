@@ -1294,7 +1294,7 @@ router.get('/:id/insights', async (req, res, next) => {
       })();
 
       return res.json({
-        insights: hasSymptom ? [safeInsight] : [],
+        insights: [],
         singleFoodInsight: safeInsight,
         plus: !!userIsPlus,
         petName: existing[0].name,
