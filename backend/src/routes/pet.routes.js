@@ -1371,10 +1371,37 @@ router.get('/:id/insights', async (req, res, next) => {
   }
 });
 
+function addSuspectName(names, value) {
+  const name = String(value || '').trim().toLowerCase();
+  if (!name) return;
+  names.add(name);
+  const singular = ingredientAnalyzer.depluralize(name);
+  if (singular) names.add(singular);
+}
+
+function textHasIngredient(text, phrase) {
+  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, 'i').test(text);
+}
+
+function productHasSuspect(rawText, sources, suspectNames) {
+  const text = String(rawText || '');
+  if (sources.some(source => textHasIngredient(text, source))) return true;
+  let parsed = [];
+  try { parsed = ingredientAnalyzer.parseIngredientText(text); } catch { return false; }
+  return parsed.some(line => {
+    const name = ingredientAnalyzer.normalizeIngredientName(String(line || ''));
+    if (!name) return false;
+    if (suspectNames.has(name)) return true;
+    const singular = ingredientAnalyzer.depluralize(name);
+    return !!singular && suspectNames.has(singular);
+  });
+}
+
 /**
  * GET /api/pets/:id/insights/alternatives?sources=chicken,peas
- * Top 3 foods for this pet whose ingredient text omits the sources,
- * ordered by the saved analysis score.
+ * Top 3 foods for this pet that omit the suspect sources and the ingredient
+ * names that share those sources, ordered by the saved analysis score.
  */
 router.get('/:id/insights/alternatives', async (req, res, next) => {
   try {
@@ -1411,26 +1438,38 @@ router.get('/:id/insights/alternatives', async (req, res, next) => {
       params.push(...stages);
     }
 
-    const excluded = sources.map(() => 'p.raw_ingredients_text NOT LIKE ?').join(' AND ');
-    const patterns = sources.map(source => `%${source.replace(/[\\%_]/g, '\\$&')}%`);
-    where.push(excluded);
-    params.push(...patterns);
+    const sourcePlaceholders = sources.map(() => '?').join(',');
+    const suspectRows = await query(
+      `SELECT DISTINCT REPLACE(ingredient_normalized, '-', ' ') AS name
+       FROM ai_assessment_cache
+       WHERE LOWER(ingredient_source) IN (${sourcePlaceholders})`,
+      sources
+    );
+    const suspectNames = new Set();
+    for (const source of sources) addSuspectName(suspectNames, source);
+    for (const row of suspectRows) addSuspectName(suspectNames, row.name);
 
     const rows = await query(
-      `SELECT p.id, p.name, p.brand, p.image_url, prc.final_score AS score
+      `SELECT p.id, p.name, p.brand, p.image_url, p.raw_ingredients_text, prc.final_score AS score
        FROM products p
        INNER JOIN product_review_cache prc
          ON prc.ingredient_hash = p.ingredient_hash
         AND prc.pet_type = ?
         AND prc.conditions_hash = 'healthy_food'
        WHERE ${where.join(' AND ')}
-       ORDER BY prc.final_score DESC
-       LIMIT 3`,
+       ORDER BY prc.final_score DESC`,
       params
     );
 
+    const confirmed = [];
+    for (const row of rows) {
+      if (confirmed.length >= 3) break;
+      if (productHasSuspect(row.raw_ingredients_text, sources, suspectNames)) continue;
+      confirmed.push(row);
+    }
+
     res.json({
-      alternatives: rows.map(row => ({
+      alternatives: confirmed.map(row => ({
         id: row.id,
         name: row.name,
         brand: row.brand,
