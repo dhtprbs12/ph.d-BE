@@ -853,20 +853,12 @@ async function reviewFromProductCache(product, petName, petTypeQuery, parsedCond
   const ingredientHash = product.ingredient_hash || productService.generateIngredientHash(ingredientsList);
   if (!ingredientHash) return null;
 
-  const isTreat = product.product_type === 'treats' || product.product_type === 'treat' || product.product_type === 'supplement';
-  const conditionHash = getSingleConditionHash('healthy', isTreat ? 'treats' : 'food');
   const petType = petTypeQuery === 'cat' ? 'cat' : 'dog';
 
-  let rows = await query(
-    `SELECT * FROM product_review_cache WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = ? LIMIT 1`,
-    [ingredientHash, conditionHash, petType]
+  const rows = await query(
+    `SELECT * FROM product_review_cache WHERE ingredient_hash = ? AND product_type LIKE ? LIMIT 1`,
+    [ingredientHash, 'healthy_%']
   );
-  if (!rows.length && petType !== 'dog') {
-    rows = await query(
-      `SELECT * FROM product_review_cache WHERE ingredient_hash = ? AND conditions_hash = ? AND pet_type = 'dog' LIMIT 1`,
-      [ingredientHash, conditionHash]
-    );
-  }
   if (!rows.length) return null;
 
   const row = rows[0];
