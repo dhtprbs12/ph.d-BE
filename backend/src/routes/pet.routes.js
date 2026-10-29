@@ -1384,6 +1384,29 @@ function textHasIngredient(text, phrase) {
   return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, 'i').test(text);
 }
 
+function stripPackSize(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\b\d+(?:\.\d+)?\s*[- ]?(?:lb|lbs|pound|pounds|oz|ounce|ounces|kg|g)\b/g, ' ')
+    .replace(/\b(?:pack|bag|can|case)\s+of\s+\d+\b/g, ' ')
+    .replace(/\b\d+\s*(?:ct|count|pk|pack)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function recipeKey(row) {
+  if (row.match_key) return `match:${row.match_key}`;
+  const grainFree = String(row.diet_tags || '').toLowerCase().includes('grain_free') ? 'gf' : '';
+  return [
+    stripPackSize(row.name),
+    String(row.manufacturer || row.brand || '').trim().toLowerCase(),
+    row.target_life_stage || '',
+    row.product_type || '',
+    grainFree,
+  ].join('|');
+}
+
 function productHasSuspect(rawText, sources, suspectNames) {
   const text = String(rawText || '');
   if (sources.some(source => textHasIngredient(text, source))) return true;
@@ -1450,21 +1473,29 @@ router.get('/:id/insights/alternatives', async (req, res, next) => {
     for (const row of suspectRows) addSuspectName(suspectNames, row.name);
 
     const rows = await query(
-      `SELECT p.id, p.name, p.brand, p.image_url, p.raw_ingredients_text, prc.final_score AS score
+      `SELECT p.id, p.name, p.brand, p.manufacturer, p.image_url, p.raw_ingredients_text,
+              p.match_key, p.diet_tags, p.target_life_stage, p.product_type,
+              prc.final_score AS score
        FROM products p
        INNER JOIN product_review_cache prc
          ON prc.ingredient_hash = p.ingredient_hash
         AND prc.pet_type = ?
         AND prc.conditions_hash = 'healthy_food'
        WHERE ${where.join(' AND ')}
-       ORDER BY prc.final_score DESC`,
+       ORDER BY prc.final_score DESC,
+                (p.image_url IS NOT NULL AND p.image_url <> '') DESC,
+                IFNULL(p.scan_count, 0) DESC`,
       params
     );
 
     const confirmed = [];
+    const seenRecipes = new Set();
     for (const row of rows) {
       if (confirmed.length >= 3) break;
       if (productHasSuspect(row.raw_ingredients_text, sources, suspectNames)) continue;
+      const key = recipeKey(row);
+      if (seenRecipes.has(key)) continue;
+      seenRecipes.add(key);
       confirmed.push(row);
     }
 
@@ -1472,9 +1503,10 @@ router.get('/:id/insights/alternatives', async (req, res, next) => {
       alternatives: confirmed.map(row => ({
         id: row.id,
         name: row.name,
-        brand: row.brand,
+        brand: row.brand || null,
+        manufacturer: row.manufacturer || null,
+        life_stage: row.target_life_stage || null,
         image_url: row.image_url,
-        avoids: 'all',
       })),
     });
   } catch (error) {
