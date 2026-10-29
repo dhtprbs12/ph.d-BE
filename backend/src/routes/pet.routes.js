@@ -67,11 +67,14 @@ function summarizeHealth(rows) {
   const itchDays = new Set(
     health.filter(row => row.itching === 'scratching' || row.itching === 'licking').map(row => calendarDate(row.date))
   ).size;
+  const foodVomitDays = new Set(
+    health.filter(row => row.vomiting === 'food').map(row => calendarDate(row.date))
+  ).size;
   const vomitDays = new Set(
     health.filter(row => row.vomiting === 'food' || row.vomiting === 'yellow').map(row => calendarDate(row.date))
   ).size;
   const dayCount = new Set(health.map(row => calendarDate(row.date))).size;
-  return { count: health.length, avgStool, itchDays, vomitDays, dayCount };
+  return { count: health.length, avgStool, itchDays, foodVomitDays, vomitDays, dayCount };
 }
 
 // Two foods can differ in a dozen ingredients. Naming all of them is noise, so
@@ -164,6 +167,22 @@ function buildInsight(foods, split, type, summaryFor) {
     disclaimer = `These ingredients always appear together in your pet's foods, so we cannot tell them apart yet. ${disclaimer}`;
   }
 
+  const records = [...withGroup, ...withoutGroup]
+    .sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime())
+    .map(food => ({
+      name: food.productName,
+      isCurrent: food.isCurrent,
+      dietTags: food.dietTags || null,
+      lifeStage: food.lifeStage || null,
+      startedAt: food.startedAt,
+      endedAt: food.endedAt,
+      primaryProteins: food.primaryProteins || null,
+      ingredients: food.ingredientsText || null,
+      avgStool: food.avgStool,
+      itchDays: food.itchDays,
+      vomitDays: food.vomitDays,
+    }));
+
   return {
     ingredient: suspects.join(','),
     label,
@@ -172,6 +191,7 @@ function buildInsight(foods, split, type, summaryFor) {
     data: {
       withIngredient: groupAverages(withGroup),
       withoutIngredient: groupAverages(withoutGroup),
+      records,
     },
     disclaimer,
   };
@@ -1091,22 +1111,19 @@ router.get('/:id/passport', async (req, res, next) => {
  */
 router.get('/:id/insights', async (req, res, next) => {
   try {
-    const existing = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    const existing = await query('SELECT id, name, pet_type FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
     if (existing.length === 0) return res.status(404).json({ error: 'Pet not found' });
 
     // Get all foods with ingredients
     const foods = await query(
-      `SELECT pf.id, pf.product_name, pf.started_at, pf.ended_at, pf.is_current, p.raw_ingredients_text, p.brand
+      `SELECT pf.id, pf.product_name, pf.started_at, pf.ended_at, pf.is_current,
+              p.raw_ingredients_text, p.brand, p.diet_tags, p.target_life_stage, p.primary_proteins
        FROM pet_foods pf
        LEFT JOIN products p ON pf.product_id = p.id
        WHERE pf.pet_id = ? AND p.raw_ingredients_text IS NOT NULL
        ORDER BY pf.started_at ASC`,
       [req.params.id]
     );
-
-    if (foods.length < 2) {
-      return res.json({ insights: [], message: 'Need at least 2 food periods with ingredients for insights' });
-    }
 
     // Build food period stats. Ingredient lines are parsed the same way the
     // analysis view parses them, so names match ai_assessment_cache keys.
@@ -1141,16 +1158,22 @@ router.get('/:id/insights', async (req, res, next) => {
         productName: food.product_name,
         isCurrent: !!food.is_current,
         brand: food.brand,
+        dietTags: food.diet_tags,
+        lifeStage: food.target_life_stage,
+        primaryProteins: food.primary_proteins,
+        ingredientsText: food.raw_ingredients_text,
+        startedAt: food.started_at,
+        endedAt: food.ended_at,
         checkinCount: health.count,
         avgStool: health.avgStool,
+        itchDays: health.itchDays,
+        foodVomitDays: health.foodVomitDays,
+        vomitDays: health.vomitDays,
         itchRate: Math.round((health.itchDays / dayCount) * 100),
+        foodVomitRate: Math.round((health.foodVomitDays / dayCount) * 100),
         vomitRate: Math.round((health.vomitDays / dayCount) * 100),
         positions,
       });
-    }
-
-    if (foodStats.length < 2) {
-      return res.json({ insights: [], message: 'Need more check-in data across food periods' });
     }
 
     // Category and source come from ai_assessment_cache and are the same for
@@ -1177,18 +1200,101 @@ router.get('/:id/insights', async (req, res, next) => {
     };
 
     for (const food of foodStats) {
-      // Collapse ingredient names to sources, keeping the earliest position so
-      // the most prominent source still ranks first.
       const sourcePositions = new Map();
+      const sourceMeta = new Map();
       for (const [name, index] of food.positions) {
         const meta = metaOf(name);
         if (!meta || !INSIGHT_CATEGORIES.has(meta.category) || !meta.ingredient_source) continue;
         const seen = sourcePositions.get(meta.ingredient_source);
-        if (seen === undefined || index < seen) sourcePositions.set(meta.ingredient_source, index);
+        if (seen === undefined || index < seen) {
+          sourcePositions.set(meta.ingredient_source, index);
+          sourceMeta.set(meta.ingredient_source, meta.category);
+        }
       }
       food.ingredients = new Set(sourcePositions.keys());
       food.positions = sourcePositions;
+      food.sourceMeta = sourceMeta;
     }
+
+    if (foodStats.length === 0) {
+      return res.json({ insights: [], message: 'Need more check-in data', petName: existing[0].name, petType: existing[0].pet_type });
+    }
+
+    const { isPlus } = require('../services/billingService');
+    const [userRow] = await query('SELECT plus_expires_at FROM users WHERE id = ?', [req.user.id]);
+    const userIsPlus = userRow && isPlus(userRow);
+
+    // ── Single-food insight ──
+    if (foodStats.length === 1) {
+      const food = foodStats[0];
+      const dayCount = food.itchRate > 0 || food.foodVomitRate > 0 || food.avgStool != null ? (food.itchDays + food.foodVomitDays > 0 ? 1 : 0) : 0;
+      const hasItch = food.itchRate >= ITCH_SPREAD;
+      const hasFoodVomit = food.foodVomitRate >= VOMIT_SPREAD;
+      const hasBadStool = food.avgStool != null && food.avgStool < 2.5;
+      const hasSymptom = hasItch || hasFoodVomit || hasBadStool;
+
+      const phrases = [];
+      if (hasItch) phrases.push('itching');
+      if (hasFoodVomit) phrases.push('vomiting');
+      if (hasBadStool) phrases.push('poor stool');
+
+      // Top 3 sources by weight from protein/grain/vegetable/fruit
+      const sorted = [...food.positions.entries()].sort((a, b) => a[1] - b[1]);
+      const topSources = sorted.slice(0, 3).map(([source]) => ({
+        source,
+        category: food.sourceMeta.get(source) || 'other',
+      }));
+
+      const label = topSources.map(s => titleCaseSource(s.source)).join(', ');
+      const symptomPhrase = joinPhrases(phrases);
+      const summary = hasSymptom
+        ? `${label} may be linked to ${symptomPhrase}`
+        : null;
+
+      const singleInsight = {
+        ingredient: topSources.map(s => s.source).join(','),
+        label,
+        type: hasSymptom ? (hasItch ? 'itch_correlation' : hasFoodVomit ? 'vomit_correlation' : 'stool_negative') : 'single_food',
+        summary: summary || `Health record for ${food.productName}`,
+        singleFood: true,
+        data: {
+          food: {
+            name: food.productName,
+            isCurrent: food.isCurrent,
+            dietTags: food.dietTags,
+            lifeStage: food.lifeStage,
+            startedAt: food.startedAt,
+            endedAt: food.endedAt,
+            primaryProteins: food.primaryProteins,
+            ingredients: food.ingredientsText,
+            avgStool: food.avgStool,
+            itchDays: food.itchDays,
+            vomitDays: food.vomitDays,
+            checkinCount: food.checkinCount,
+          },
+          topSources,
+          hasSymptom,
+          suspectSources: hasSymptom ? topSources.map(s => s.source) : [],
+        },
+        disclaimer: 'This is a correlation, not proof of causation. Consult your veterinarian.',
+      };
+
+      const safeInsight = userIsPlus ? singleInsight : (() => {
+        const { data, ...rest } = singleInsight;
+        return rest;
+      })();
+
+      return res.json({
+        insights: hasSymptom ? [safeInsight] : [],
+        singleFoodInsight: safeInsight,
+        plus: !!userIsPlus,
+        petName: existing[0].name,
+        petType: existing[0].pet_type,
+        foodCount: 1,
+      });
+    }
+
+    // ── Multi-food insights ──
 
     // Every symptom that clears its threshold becomes a candidate finding.
     const candidates = [];
@@ -1203,8 +1309,6 @@ router.get('/:id/insights', async (req, res, next) => {
       candidates.push({ split: vomitSplit, type: 'vomit_correlation', phrase: 'more vomiting' });
     }
 
-    // One stool finding only — the worse-side and better-side suspects are two
-    // readings of the same split, so prefer the actionable one.
     const stoolFoods = foodStats.filter(food => food.avgStool != null);
     const stoolSplit = stoolFoods.length >= 2
       ? splitFoodsBySymptom(stoolFoods, f => f.avgStool, STOOL_SPREAD, false)
@@ -1221,11 +1325,6 @@ router.get('/:id/insights', async (req, res, next) => {
       }
     }
 
-    // Symptoms that divide the foods the same way are one finding described
-    // three times, not three findings. With only two foods every split is the
-    // same division, so they always collapse into a single card. An improvement
-    // stays on its own card so one summary never has to claim an ingredient
-    // both harms and helps.
     const groups = new Map();
     for (const candidate of candidates) {
       const sameDivision = candidate.split.worse.map(f => f.foodId).sort().join('|');
@@ -1245,18 +1344,76 @@ router.get('/:id/insights', async (req, res, next) => {
       if (insight) insights.push(insight);
     }
 
-    // Strip detail numbers for non-Plus users so the response never leaks them
-    const { isPlus } = require('../services/billingService');
-    const [userRow] = await query('SELECT plus_expires_at FROM users WHERE id = ?', [req.user.id]);
-    const userIsPlus = userRow && isPlus(userRow);
-
     const safeInsights = insights.map(ins => {
       if (userIsPlus) return ins;
       const { data, ...rest } = ins;
       return rest;
     });
 
-    res.json({ insights: safeInsights, plus: !!userIsPlus });
+    res.json({
+      insights: safeInsights,
+      plus: !!userIsPlus,
+      petName: existing[0].name,
+      petType: existing[0].pet_type,
+      foodCount: foodStats.length,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/pets/:id/insights/alternatives?sources=chicken,peas&petType=dog
+ * Products whose ingredients do not contain any of the given sources.
+ */
+router.get('/:id/insights/alternatives', async (req, res, next) => {
+  try {
+    const existing = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Pet not found' });
+
+    const sources = (req.query.sources || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    if (sources.length === 0) return res.json({ alternatives: [] });
+
+    const rows = await query(
+      `SELECT p.id, p.name, p.brand, p.image_url, p.raw_ingredients_text
+       FROM products p
+       WHERE p.raw_ingredients_text IS NOT NULL
+         AND p.raw_ingredients_text != ''
+       ORDER BY p.scan_count DESC
+       LIMIT 30`
+    );
+
+    // Double-check: parse each product's ingredients and confirm none of the
+    // suspect sources appear.
+    const confirmed = [];
+    for (const row of rows) {
+      if (confirmed.length >= 5) break;
+      const product = await query('SELECT raw_ingredients_text FROM products WHERE id = ?', [row.id]);
+      if (!product[0]?.raw_ingredients_text) continue;
+      let parsed;
+      try { parsed = ingredientAnalyzer.parseIngredientText(product[0].raw_ingredients_text); } catch { continue; }
+      const prodNames = parsed.map(line => ingredientAnalyzer.normalizeIngredientName(String(line || ''))).filter(Boolean);
+      const prodSourcesRows = prodNames.length > 0
+        ? await query(
+            `SELECT DISTINCT ingredient_source FROM ai_assessment_cache WHERE REPLACE(ingredient_normalized, '-', ' ') IN (${prodNames.map(() => '?').join(',')}) AND ingredient_source IS NOT NULL`,
+            prodNames
+          )
+        : [];
+      const prodSources = new Set(prodSourcesRows.map(r => r.ingredient_source));
+      const hasAnySuspect = sources.some(s => prodSources.has(s));
+      if (!hasAnySuspect) {
+        const missing = sources.filter(s => !prodSources.has(s));
+        confirmed.push({
+          id: row.id,
+          name: row.name,
+          brand: row.brand,
+          image_url: row.image_url,
+          avoids: missing.length === sources.length ? 'all' : missing,
+        });
+      }
+    }
+
+    res.json({ alternatives: confirmed });
   } catch (error) {
     next(error);
   }
