@@ -134,7 +134,11 @@ function ingredientsUniqueTo(present, absent) {
 function groupAverages(foods) {
   const avg = (pick) => foods.reduce((sum, f) => sum + pick(f), 0) / foods.length;
   return {
-    foods: foods.map(f => ({ name: f.productName, isCurrent: f.isCurrent })),
+    foods: foods.map(f => ({
+      name: f.productName,
+      isCurrent: f.isCurrent,
+      imageUrl: f.imageUrl || null,
+    })),
     avgItchRate: Math.round(avg(f => f.itchRate)),
     avgVomitRate: Math.round(avg(f => f.vomitRate)),
     avgStoolScore: (() => {
@@ -172,6 +176,7 @@ function buildInsight(foods, split, type, summaryFor) {
     .map(food => ({
       name: food.productName,
       isCurrent: food.isCurrent,
+      imageUrl: food.imageUrl || null,
       dietTags: food.dietTags || null,
       lifeStage: food.lifeStage || null,
       startedAt: food.startedAt,
@@ -1117,7 +1122,7 @@ router.get('/:id/insights', async (req, res, next) => {
     // Get all foods with ingredients
     const foods = await query(
       `SELECT pf.id, pf.product_name, pf.started_at, pf.ended_at, pf.is_current,
-              p.raw_ingredients_text, p.brand, p.diet_tags, p.target_life_stage, p.primary_proteins
+              p.raw_ingredients_text, p.brand, p.diet_tags, p.target_life_stage, p.primary_proteins, p.image_url
        FROM pet_foods pf
        LEFT JOIN products p ON pf.product_id = p.id
        WHERE pf.pet_id = ? AND p.raw_ingredients_text IS NOT NULL
@@ -1157,6 +1162,7 @@ router.get('/:id/insights', async (req, res, next) => {
         foodId: food.id,
         productName: food.product_name,
         isCurrent: !!food.is_current,
+        imageUrl: food.image_url || null,
         brand: food.brand,
         dietTags: food.diet_tags,
         lifeStage: food.target_life_stage,
@@ -1251,6 +1257,21 @@ router.get('/:id/insights', async (req, res, next) => {
         ? `${label} may be linked to ${symptomPhrase}`
         : null;
 
+      const foodRecord = {
+        name: food.productName,
+        isCurrent: food.isCurrent,
+        imageUrl: food.imageUrl || null,
+        dietTags: food.dietTags,
+        lifeStage: food.lifeStage,
+        startedAt: food.startedAt,
+        endedAt: food.endedAt,
+        primaryProteins: food.primaryProteins,
+        ingredients: food.ingredientsText,
+        avgStool: food.avgStool,
+        itchDays: food.itchDays,
+        vomitDays: food.vomitDays,
+        checkinCount: food.checkinCount,
+      };
       const singleInsight = {
         ingredient: topSources.map(s => s.source).join(','),
         label,
@@ -1258,20 +1279,8 @@ router.get('/:id/insights', async (req, res, next) => {
         summary: summary || `Health record for ${food.productName}`,
         singleFood: true,
         data: {
-          food: {
-            name: food.productName,
-            isCurrent: food.isCurrent,
-            dietTags: food.dietTags,
-            lifeStage: food.lifeStage,
-            startedAt: food.startedAt,
-            endedAt: food.endedAt,
-            primaryProteins: food.primaryProteins,
-            ingredients: food.ingredientsText,
-            avgStool: food.avgStool,
-            itchDays: food.itchDays,
-            vomitDays: food.vomitDays,
-            checkinCount: food.checkinCount,
-          },
+          food: foodRecord,
+          records: [foodRecord],
           topSources,
           hasSymptom,
           suspectSources: hasSymptom ? topSources.map(s => s.source) : [],
@@ -1363,57 +1372,73 @@ router.get('/:id/insights', async (req, res, next) => {
 });
 
 /**
- * GET /api/pets/:id/insights/alternatives?sources=chicken,peas&petType=dog
- * Products whose ingredients do not contain any of the given sources.
+ * GET /api/pets/:id/insights/alternatives?sources=chicken,peas
+ * Top 3 products for this pet whose ingredient text does not contain the sources,
+ * ordered by that pet's base score.
  */
 router.get('/:id/insights/alternatives', async (req, res, next) => {
   try {
-    const existing = await query('SELECT id FROM pets WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    const existing = await query(
+      'SELECT id, pet_type, age_months, weight_kg FROM pets WHERE id = ? AND user_id = ?',
+      [req.params.id, req.user.id]
+    );
     if (existing.length === 0) return res.status(404).json({ error: 'Pet not found' });
 
     const sources = (req.query.sources || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     if (sources.length === 0) return res.json({ alternatives: [] });
 
-    const rows = await query(
-      `SELECT p.id, p.name, p.brand, p.image_url, p.raw_ingredients_text
-       FROM products p
-       WHERE p.raw_ingredients_text IS NOT NULL
-         AND p.raw_ingredients_text != ''
-       ORDER BY p.scan_count DESC
-       LIMIT 30`
-    );
+    const pet = existing[0];
+    const petType = pet.pet_type === 'cat' ? 'cat' : 'dog';
+    const scoreColumn = petType === 'cat' ? 'base_cat_score' : 'base_dog_score';
+    const where = [
+      'p.raw_ingredients_text IS NOT NULL',
+      "p.raw_ingredients_text != ''",
+      `p.${scoreColumn} IS NOT NULL`,
+      "p.target_pet_type IN (?, 'both')",
+    ];
+    const params = [petType];
 
-    // Double-check: parse each product's ingredients and confirm none of the
-    // suspect sources appear.
-    const confirmed = [];
-    for (const row of rows) {
-      if (confirmed.length >= 5) break;
-      const product = await query('SELECT raw_ingredients_text FROM products WHERE id = ?', [row.id]);
-      if (!product[0]?.raw_ingredients_text) continue;
-      let parsed;
-      try { parsed = ingredientAnalyzer.parseIngredientText(product[0].raw_ingredients_text); } catch { continue; }
-      const prodNames = parsed.map(line => ingredientAnalyzer.normalizeIngredientName(String(line || ''))).filter(Boolean);
-      const prodSourcesRows = prodNames.length > 0
-        ? await query(
-            `SELECT DISTINCT ingredient_source FROM ai_assessment_cache WHERE REPLACE(ingredient_normalized, '-', ' ') IN (${prodNames.map(() => '?').join(',')}) AND ingredient_source IS NOT NULL`,
-            prodNames
-          )
-        : [];
-      const prodSources = new Set(prodSourcesRows.map(r => r.ingredient_source));
-      const hasAnySuspect = sources.some(s => prodSources.has(s));
-      if (!hasAnySuspect) {
-        const missing = sources.filter(s => !prodSources.has(s));
-        confirmed.push({
-          id: row.id,
-          name: row.name,
-          brand: row.brand,
-          image_url: row.image_url,
-          avoids: missing.length === sources.length ? 'all' : missing,
-        });
-      }
+    if (pet.age_months != null) {
+      const months = Number(pet.age_months);
+      const lifeStage = months < 12
+        ? (petType === 'cat' ? 'kitten' : 'puppy')
+        : months > 84
+          ? 'senior'
+          : 'adult';
+      where.push("p.target_life_stage IN (?, 'all')");
+      params.push(lifeStage);
     }
 
-    res.json({ alternatives: confirmed });
+    if (petType === 'dog' && pet.weight_kg != null) {
+      const kg = Number(pet.weight_kg);
+      if (kg < 10) where.push("p.breed_size IN ('all', 'small_breed')");
+      else if (kg >= 25) where.push("p.breed_size IN ('all', 'large_breed')");
+      else where.push("p.breed_size = 'all'");
+    }
+
+    const excluded = sources.map(() => 'p.raw_ingredients_text NOT LIKE ?').join(' AND ');
+    const patterns = sources.map(source => `%${source.replace(/[\\%_]/g, '\\$&')}%`);
+    where.push(excluded);
+    params.push(...patterns);
+
+    const rows = await query(
+      `SELECT p.id, p.name, p.brand, p.image_url, p.${scoreColumn} AS score
+       FROM products p
+       WHERE ${where.join(' AND ')}
+       ORDER BY p.${scoreColumn} DESC
+       LIMIT 3`,
+      params
+    );
+
+    res.json({
+      alternatives: rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        brand: row.brand,
+        image_url: row.image_url,
+        avoids: 'all',
+      })),
+    });
   } catch (error) {
     next(error);
   }
