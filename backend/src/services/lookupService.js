@@ -386,10 +386,17 @@ async function ensureCurrentFood(userId, pet, productName, replace = false) {
   return foodId;
 }
 
+function choice(value, allowed) {
+  const text = norm(value);
+  return allowed.includes(text) ? text : null;
+}
+
 async function createNameLookup({ userId, pet, brand, queryName, protein, lifeStage, foodForm, pastedUrl, email, setAsCurrentFood, replaceCurrentFood }) {
   const brandNorm = norm(brand);
   const nameNorm = norm(queryName);
   const proteinNorm = norm(protein);
+  const stage = choice(lifeStage, ['puppy', 'kitten', 'adult', 'senior', 'all']);
+  const form = choice(foodForm, ['dry', 'wet']);
   if (!brandNorm || !nameNorm || !proteinNorm) {
     const error = new Error('Brand, product name, and protein are required');
     error.status = 400;
@@ -405,10 +412,11 @@ async function createNameLookup({ userId, pet, brand, queryName, protein, lifeSt
   const [existing] = await query(
     `SELECT id, status, product_id, pet_food_id FROM lookup_requests
      WHERE user_id = ? AND pet_id <=> ? AND brand_norm = ? AND query_name_norm = ?
+       AND protein_norm <=> ? AND life_stage <=> ? AND food_form <=> ?
        AND status IN ('queued', 'searching', 'ready')
      ORDER BY created_at DESC
      LIMIT 1`,
-    [userId, pet.id || null, brandNorm, nameNorm],
+    [userId, pet.id || null, brandNorm, nameNorm, proteinNorm, stage, form],
   );
   if (existing) {
     if (setAsCurrentFood && !existing.pet_food_id) {
@@ -430,11 +438,12 @@ async function createNameLookup({ userId, pet, brand, queryName, protein, lifeSt
   await query(
     `INSERT INTO lookup_requests
       (id, user_id, pet_id, pet_food_id, pet_name, pet_type, brand, query_name, brand_norm, query_name_norm,
-       pasted_url, status, entry, email_to)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'name', ?)`,
+       protein, protein_norm, life_stage, food_form, pasted_url, status, entry, email_to)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'name', ?)`,
     [
       id, userId, pet.id || null, petFoodId, pet.name || null, pet.petType === 'cat' ? 'cat' : 'dog',
       brand.trim(), queryName.trim(), brandNorm, nameNorm,
+      protein.trim(), proteinNorm, stage, form,
       url, realEmail(email),
     ],
   );
