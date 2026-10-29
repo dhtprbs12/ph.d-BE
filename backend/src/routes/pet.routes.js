@@ -1505,8 +1505,8 @@ router.get('/:id/insights/alternatives', async (req, res, next) => {
         name: row.name,
         brand: row.brand || null,
         manufacturer: row.manufacturer || null,
-        lifeStage: row.target_life_stage || null,
-        imageUrl: row.image_url,
+        life_stage: row.target_life_stage || null,
+        image_url: row.image_url,
       })),
     });
   } catch (error) {
