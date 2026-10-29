@@ -1373,13 +1373,13 @@ router.get('/:id/insights', async (req, res, next) => {
 
 /**
  * GET /api/pets/:id/insights/alternatives?sources=chicken,peas
- * Top 3 products for this pet whose ingredient text does not contain the sources,
- * ordered by that pet's base score.
+ * Top 3 foods for this pet whose ingredient text omits the sources,
+ * ordered by the saved analysis score.
  */
 router.get('/:id/insights/alternatives', async (req, res, next) => {
   try {
     const existing = await query(
-      'SELECT id, pet_type, age_months, weight_kg FROM pets WHERE id = ? AND user_id = ?',
+      'SELECT id, pet_type, age_months FROM pets WHERE id = ? AND user_id = ?',
       [req.params.id, req.user.id]
     );
     if (existing.length === 0) return res.status(404).json({ error: 'Pet not found' });
@@ -1389,14 +1389,13 @@ router.get('/:id/insights/alternatives', async (req, res, next) => {
 
     const pet = existing[0];
     const petType = pet.pet_type === 'cat' ? 'cat' : 'dog';
-    const scoreColumn = petType === 'cat' ? 'base_cat_score' : 'base_dog_score';
     const where = [
       'p.raw_ingredients_text IS NOT NULL',
       "p.raw_ingredients_text != ''",
-      `p.${scoreColumn} IS NOT NULL`,
+      "p.product_type IN ('dry_food', 'wet_food')",
       "p.target_pet_type IN (?, 'both')",
     ];
-    const params = [petType];
+    const params = [petType, petType];
 
     if (pet.age_months != null) {
       const months = Number(pet.age_months);
@@ -1405,15 +1404,11 @@ router.get('/:id/insights/alternatives', async (req, res, next) => {
         : months > 84
           ? 'senior'
           : 'adult';
-      where.push("p.target_life_stage IN (?, 'all')");
-      params.push(lifeStage);
-    }
-
-    if (petType === 'dog' && pet.weight_kg != null) {
-      const kg = Number(pet.weight_kg);
-      if (kg < 10) where.push("p.breed_size IN ('all', 'small_breed')");
-      else if (kg >= 25) where.push("p.breed_size IN ('all', 'large_breed')");
-      else where.push("p.breed_size = 'all'");
+      const stages = lifeStage === 'adult' || lifeStage === 'senior'
+        ? [lifeStage, 'all']
+        : [lifeStage, 'puppy_kitten', 'all'];
+      where.push(`p.target_life_stage IN (${stages.map(() => '?').join(', ')})`);
+      params.push(...stages);
     }
 
     const excluded = sources.map(() => 'p.raw_ingredients_text NOT LIKE ?').join(' AND ');
@@ -1422,10 +1417,14 @@ router.get('/:id/insights/alternatives', async (req, res, next) => {
     params.push(...patterns);
 
     const rows = await query(
-      `SELECT p.id, p.name, p.brand, p.image_url, p.${scoreColumn} AS score
+      `SELECT p.id, p.name, p.brand, p.image_url, prc.final_score AS score
        FROM products p
+       INNER JOIN product_review_cache prc
+         ON prc.ingredient_hash = p.ingredient_hash
+        AND prc.pet_type = ?
+        AND prc.conditions_hash = 'healthy_food'
        WHERE ${where.join(' AND ')}
-       ORDER BY p.${scoreColumn} DESC
+       ORDER BY prc.final_score DESC
        LIMIT 3`,
       params
     );
