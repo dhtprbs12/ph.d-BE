@@ -44,6 +44,23 @@ async function handleWebhook(event) {
   const expiresAt = event.expiration_at_ms ? new Date(event.expiration_at_ms) : null;
   const transactionId = event.transaction_id || event.id;
 
+  // TRANSFER: fired when Purchases.logIn() moves anonymous purchases to an
+  // identified user. app_user_id may be undefined; the real target is in
+  // transferred_to[]. Reconcile any bone packs that were bought anonymously.
+  if (eventType === 'TRANSFER') {
+    const targetId = (event.transferred_to || [])[0] || appUserId;
+    if (!targetId || targetId.startsWith('$RCAnonymous')) {
+      console.log(`[Billing] TRANSFER with no identified target, ignoring`);
+      return { handled: false, reason: 'no_target_user' };
+    }
+    const [targetUser] = await query('SELECT id FROM users WHERE id = ?', [targetId]);
+    if (!targetUser) {
+      console.log(`[Billing] TRANSFER target user=${targetId} not found, ignoring`);
+      return { handled: false, reason: 'unknown_target_user' };
+    }
+    return reconcileBonePurchases(targetId, environment);
+  }
+
   if (!ALLOW_SANDBOX && environment === 'SANDBOX') {
     console.log(`[Billing] Ignoring sandbox event for user=${appUserId}`);
     return { handled: false, reason: 'sandbox_blocked' };
@@ -150,6 +167,57 @@ async function handleBonePurchase(userId, productId, transactionId) {
     throw err;
   } finally {
     conn.release();
+  }
+}
+
+/**
+ * After a TRANSFER event, call the RevenueCat REST API to list the
+ * customer's non-subscription (bone pack) purchases and grant any
+ * that are missing from token_transactions.
+ */
+async function reconcileBonePurchases(userId, environment) {
+  const RC_SECRET = process.env.REVENUECAT_SECRET_API_KEY;
+  if (!RC_SECRET) {
+    console.log(`[Billing] REVENUECAT_SECRET_API_KEY not set, cannot reconcile bones for user=${userId}`);
+    return { handled: false, reason: 'no_rc_api_key' };
+  }
+
+  if (!ALLOW_SANDBOX && environment === 'SANDBOX') {
+    console.log(`[Billing] Ignoring sandbox TRANSFER reconciliation for user=${userId}`);
+    return { handled: false, reason: 'sandbox_blocked' };
+  }
+
+  try {
+    const res = await fetch(`https://api.revenuecat.com/v1/subscribers/${userId}`, {
+      headers: {
+        Authorization: `Bearer ${RC_SECRET}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!res.ok) {
+      console.log(`[Billing] RC API ${res.status} for user=${userId}`);
+      return { handled: false, reason: 'rc_api_error' };
+    }
+
+    const data = await res.json();
+    const nonSubs = data.subscriber?.non_subscriptions || {};
+    let granted = 0;
+
+    for (const [productId, purchases] of Object.entries(nonSubs)) {
+      if (!BONE_GRANTS.has(productId)) continue;
+      for (const purchase of purchases) {
+        const txnId = purchase.id || purchase.store_transaction_id;
+        if (!txnId) continue;
+        const result = await handleBonePurchase(userId, productId, txnId);
+        if (result.action === 'bones_granted') granted++;
+      }
+    }
+
+    console.log(`[Billing] TRANSFER reconciled user=${userId}, bones_granted=${granted}`);
+    return { handled: true, action: 'transfer_reconciled', bonesGranted: granted };
+  } catch (err) {
+    console.error(`[Billing] TRANSFER reconciliation failed user=${userId}:`, err);
+    return { handled: false, reason: 'reconciliation_error' };
   }
 }
 
