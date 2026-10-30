@@ -92,8 +92,8 @@ async function handleSubscriptionEvent(eventType, userId, productId, store, expi
     case 'RENEWAL':
     case 'PRODUCT_CHANGE':
     case 'UNCANCELLATION': {
-      // Guard: never overwrite a valid future expiration with an already-expired date
-      if (expiresAt && new Date(expiresAt) < new Date()) {
+      // Guard: never overwrite with an earlier expiration than what's already in the DB
+      if (expiresAt) {
         const [cur] = await query('SELECT plus_expires_at FROM users WHERE id = ?', [userId]);
         if (cur && cur.plus_expires_at && new Date(cur.plus_expires_at) > new Date(expiresAt)) {
           console.log(`[Billing] Skipping stale ${eventType} user=${userId} product=${productId} expires=${expiresAt} (current=${cur.plus_expires_at} is later)`);
