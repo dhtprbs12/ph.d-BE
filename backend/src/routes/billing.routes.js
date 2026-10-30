@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken } = require('../middleware/auth');
-const { getPlusStatus, handleWebhook } = require('../services/billingService');
+const { getPlusStatus, handleWebhook, syncSubscription } = require('../services/billingService');
 
 /**
  * GET /api/billing/status
@@ -14,6 +14,22 @@ router.get('/status', authenticateToken, async (req, res, next) => {
     }
     const status = await getPlusStatus(req.user.id);
     res.json(status);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/billing/sync
+ * Client calls after a successful purchase to force-check RevenueCat.
+ */
+router.post('/sync', authenticateToken, async (req, res, next) => {
+  try {
+    if (!req.user || req.user.id === 'anonymous') {
+      return res.json({ synced: false });
+    }
+    const result = await syncSubscription(req.user.id);
+    res.json(result);
   } catch (error) {
     next(error);
   }

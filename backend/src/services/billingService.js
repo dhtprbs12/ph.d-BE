@@ -91,7 +91,15 @@ async function handleSubscriptionEvent(eventType, userId, productId, store, expi
     case 'INITIAL_PURCHASE':
     case 'RENEWAL':
     case 'PRODUCT_CHANGE':
-    case 'UNCANCELLATION':
+    case 'UNCANCELLATION': {
+      // Guard: never overwrite a valid future expiration with an already-expired date
+      if (expiresAt && new Date(expiresAt) < new Date()) {
+        const [cur] = await query('SELECT plus_expires_at FROM users WHERE id = ?', [userId]);
+        if (cur && cur.plus_expires_at && new Date(cur.plus_expires_at) > new Date(expiresAt)) {
+          console.log(`[Billing] Skipping stale ${eventType} user=${userId} product=${productId} expires=${expiresAt} (current=${cur.plus_expires_at} is later)`);
+          return { handled: true, action: 'stale_skipped' };
+        }
+      }
       await query(
         `UPDATE users
          SET plus_product_id = ?, plus_store = ?, plus_will_renew = 1, plus_expires_at = ?
@@ -100,6 +108,7 @@ async function handleSubscriptionEvent(eventType, userId, productId, store, expi
       );
       console.log(`[Billing] Plus activated user=${userId} product=${productId} expires=${expiresAt}`);
       return { handled: true, action: 'plus_activated' };
+    }
 
     case 'CANCELLATION':
       await query('UPDATE users SET plus_will_renew = 0 WHERE id = ?', [userId]);
@@ -221,4 +230,55 @@ async function reconcileBonePurchases(userId, environment) {
   }
 }
 
-module.exports = { isPlus, getPlusStatus, handleWebhook };
+/**
+ * Client calls this after a successful purchase.
+ * Fetches the subscriber from RevenueCat REST API and updates plus_expires_at.
+ */
+async function syncSubscription(userId) {
+  const RC_SECRET = process.env.REVENUECAT_SECRET_API_KEY;
+  if (!RC_SECRET) {
+    return { synced: false, reason: 'no_rc_api_key' };
+  }
+  try {
+    const res = await fetch(`https://api.revenuecat.com/v1/subscribers/${userId}`, {
+      headers: {
+        Authorization: `Bearer ${RC_SECRET}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!res.ok) {
+      console.log(`[Billing] sync RC API ${res.status} for user=${userId}`);
+      return { synced: false, reason: 'rc_api_error' };
+    }
+    const data = await res.json();
+    const subs = data.subscriber?.subscriptions || {};
+
+    let latestExpires = null;
+    let latestProduct = null;
+    for (const [productId, sub] of Object.entries(subs)) {
+      if (!PLUS_PRODUCT_IDS.includes(productId)) continue;
+      const exp = sub.expires_date ? new Date(sub.expires_date) : null;
+      if (exp && (!latestExpires || exp > latestExpires)) {
+        latestExpires = exp;
+        latestProduct = productId;
+      }
+    }
+
+    if (latestExpires && latestExpires > new Date()) {
+      await query(
+        `UPDATE users SET plus_product_id = ?, plus_will_renew = 1, plus_expires_at = ? WHERE id = ? AND (plus_expires_at IS NULL OR plus_expires_at < ?)`,
+        [latestProduct, latestExpires, userId, latestExpires]
+      );
+      console.log(`[Billing] sync: Plus confirmed user=${userId} product=${latestProduct} expires=${latestExpires}`);
+      return { synced: true, plus: true, expiresAt: latestExpires };
+    }
+
+    console.log(`[Billing] sync: no active Plus for user=${userId}`);
+    return { synced: true, plus: false };
+  } catch (err) {
+    console.error(`[Billing] sync error user=${userId}:`, err);
+    return { synced: false, reason: 'error' };
+  }
+}
+
+module.exports = { isPlus, getPlusStatus, handleWebhook, syncSubscription };
