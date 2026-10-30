@@ -53,7 +53,7 @@
     <p>We use the following third-party services to operate PHD:</p>
     <ul>
       <li><strong>Google Cloud Vision:</strong> Optical character recognition (OCR) for extracting text from label photos. Only the image is sent; no personal data is included.</li>
-      <li><strong>Google Gemini AI:</strong> Ingredient analysis, product metadata extraction, and photos you submit with an analysis request. Routine label scans send ingredient text and product type. An analysis-request photo is also sent so we can identify the product. Pet profile details are not included in these requests.</li>
+      <li><strong>Google Gemini AI:</strong> Ingredient analysis, product metadata extraction, and photos you submit with an analysis request. Label scans send ingredient text, product type, and the pet's name and type (dog or cat). Food Check also sends health conditions you saved on the pet, such as allergies. An analysis-request photo is sent so we can identify the product. These requests do not include your account ID, email, or phone number.</li>
       <li><strong>SerpAPI / Google Images:</strong> Product identification images are sourced from public web searches for display purposes only. These images remain the property of their respective owners.</li>
       <li><strong>Cloudflare R2:</strong> Secure cloud storage for pet profile photos and product images.</li>
       <li><strong>Railway:</strong> Cloud infrastructure hosting our backend services and database.</li>
