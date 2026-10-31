@@ -186,6 +186,8 @@ function buildInsight(foods, split, type, summaryFor) {
       avgStool: food.avgStool,
       itchDays: food.itchDays,
       vomitDays: food.vomitDays,
+      itchRate: food.itchRate,
+      vomitRate: food.vomitRate,
     }));
 
   return {
@@ -197,6 +199,12 @@ function buildInsight(foods, split, type, summaryFor) {
       withIngredient: groupAverages(withGroup),
       withoutIngredient: groupAverages(withoutGroup),
       records,
+      watchSources: suspects.map(source => ({
+        source,
+        category: [...split.worse, ...split.better]
+          .map(food => food.sourceMeta && food.sourceMeta.get(source))
+          .find(Boolean) || 'other',
+      })),
     },
     disclaimer,
   };
