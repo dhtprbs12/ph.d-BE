@@ -1,10 +1,12 @@
 const express = require('express');
+const nodemailer = require('nodemailer');
 const router = express.Router();
 const { query } = require('../database/connection');
 const { authenticateToken } = require('../middleware/auth');
 
 const TOPICS = ['Account', 'PHD Plus', 'A food or scan', 'Something else'];
-const TO = process.env.CONTACT_EMAIL_TO || 'seefarcompany12@gmail.com';
+const GMAIL_USER = 'seefarcompany12@gmail.com';
+const TO = process.env.CONTACT_EMAIL_TO || GMAIL_USER;
 const WINDOW_MS = 60 * 60 * 1000;
 const MAX_SENDS = 5;
 const recentSends = new Map();
@@ -30,13 +32,12 @@ function remember(userId) {
 }
 
 async function sendContactEmail({ topic, message, replyEmail, userId, nickname, accountEmail, appVersion, platform }) {
-  const key = process.env.RESEND_API_KEY;
-  if (!key) {
+  const pass = String(process.env.GMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
+  if (!pass) {
     const error = new Error('Email is not configured');
     error.status = 503;
     throw error;
   }
-  const from = process.env.LOOKUP_EMAIL_FROM || 'PHD <reports@phd.app>';
   const lines = [
     `Topic: ${topic}`,
     '',
@@ -48,20 +49,21 @@ async function sendContactEmail({ topic, message, replyEmail, userId, nickname, 
     nickname ? `Nickname: ${nickname}` : '',
     `App: ${appVersion} · ${platform}`,
   ].filter(line => line !== '');
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${key}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from,
-      to: [TO],
+  const transporter = nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
+    auth: { user: GMAIL_USER, pass },
+  });
+  try {
+    await transporter.sendMail({
+      from: `PHD <${GMAIL_USER}>`,
+      to: TO,
       subject: `PHD contact: ${topic}`,
       text: lines.join('\n'),
-    }),
-  });
-  if (!res.ok) {
+    });
+  } catch (err) {
+    console.error('[Contact] gmail send failed:', err && err.response ? err.response : err.message);
     const error = new Error('Could not send the message');
     error.status = 502;
     throw error;
