@@ -296,6 +296,7 @@ router.get('/barcode-lookup', authenticateToken, async (req, res, next) => {
     const petId = req.query.petId || null;
     const userId = req.user.id;
     if (!barcode) return res.status(400).json({ error: 'barcode is required' });
+    console.log(`[Barcode] scan decoded: ${barcode}`);
 
     // Normalize: try original, then with leading 0 (UPC-A→EAN-13), then without leading 0
     let product = await productService.findByBarcode(barcode);
